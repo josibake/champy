@@ -1,0 +1,47 @@
+# MacOS SDK Extraction
+
+## SDK Extraction
+
+### Step 1: Obtaining `Xcode.app`
+
+A free Apple Developer Account is required to proceed.
+
+Our macOS SDK can be extracted from
+[Xcode_26.1.1_Apple_silicon.xip](https://download.developer.apple.com/Developer_Tools/Xcode_26.1.1/Xcode_26.1.1_Apple_silicon.xip).
+
+Alternatively, after logging in to your account go to 'Downloads', then 'More'
+and search for [`Xcode 26.1.1`](https://developer.apple.com/download/all/?q=Xcode%2026.1.1).
+
+An Apple ID and cookies enabled for the hostname are needed to download this.
+
+The `sha256sum` of the downloaded XIP archive should be `f4c65b01e2807372b61553c71036dbfef492d7c79d4c380a5afb61aa1018e555`.
+
+To extract the `.xip` on Linux:
+
+```bash
+# Install/clone tools needed for extracting Xcode.app
+apt install cpio
+git clone https://github.com/bitcoin-core/apple-sdk-tools.git
+
+# Unpack the .xip and place the resulting Xcode.app in your current
+# working directory
+python3 apple-sdk-tools/extract_xcode.py -f Xcode_26.1.1_Apple_silicon.xip | cpio -d -i
+```
+
+On macOS:
+
+```bash
+xip -x Xcode_26.1.1_Apple_silicon.xip
+```
+
+### Step 2: Generating the SDK tarball from `Xcode.app`
+
+To generate the SDK, run the script [`gen-sdk.py`](./gen-sdk.py) with the
+path to `Xcode.app` (extracted in the previous stage) as the first argument.
+
+```bash
+./contrib/macdeploy/gen-sdk.py '/path/to/Xcode.app'
+```
+
+The generated archive should be: `Xcode-26.1.1-17B100-extracted-SDK-with-libcxx-headers.tar`.
+The `sha256sum` should be `9600fa93644df674ee916b5e2c8a6ba8dacf631996a65dc922d003b98b5ea3b1`.

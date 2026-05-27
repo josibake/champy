@@ -1,0 +1,56 @@
+// Copyright (c) 2021-present The Bitcoin Core developers
+// Distributed under the MIT software license, see the accompanying
+// file COPYING or http://www.opensource.org/licenses/mit-license.php.
+
+#include <init.h>
+#include <interfaces/chain.h>
+#include <interfaces/echo.h>
+#include <interfaces/init.h>
+#include <interfaces/ipc.h>
+#include <interfaces/mining.h>
+#include <interfaces/node.h>
+#include <node/context.h>
+#include <util/check.h>
+
+#include <memory>
+
+using node::NodeContext;
+
+namespace init {
+namespace {
+const char* EXE_NAME = "bitcoind";
+
+class BitcoindInit : public interfaces::Init
+{
+public:
+    BitcoindInit(NodeContext& node, const char* arg0)
+        : m_node(node),
+          m_ipc(interfaces::MakeIpc("bitcoin-node", arg0, *this))
+    {
+        InitContext(m_node);
+        m_node.init = this;
+    }
+    std::unique_ptr<interfaces::Node> makeNode() override { return interfaces::MakeNode(m_node); }
+    std::unique_ptr<interfaces::Chain> makeChain() override { return interfaces::MakeChain(m_node); }
+    std::unique_ptr<interfaces::Mining> makeMining() override { return interfaces::MakeMining(m_node); }
+    std::unique_ptr<interfaces::Echo> makeEcho() override { return interfaces::MakeEcho(); }
+    void stop() override { makeNode()->startShutdown(); }
+    interfaces::Ipc* ipc() override { return m_ipc.get(); }
+    bool canListenIpc() override { return true; }
+    const char* exeName() override { return EXE_NAME; }
+    NodeContext& m_node;
+    std::unique_ptr<interfaces::Ipc> m_ipc;
+};
+} // namespace
+} // namespace init
+
+namespace interfaces {
+std::unique_ptr<Init> MakeNodeInit(NodeContext& node, int argc, char* argv[], int& exit_status)
+{
+    auto init = std::make_unique<init::BitcoindInit>(node, argc > 0 ? argv[0] : "");
+    if (init->m_ipc->startSpawnedProcess(argc, argv, exit_status)) {
+        return nullptr;
+    }
+    return init;
+}
+} // namespace interfaces
