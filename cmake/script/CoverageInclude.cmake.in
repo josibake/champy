@@ -39,7 +39,6 @@ list(APPEND LCOV_FILTER_COMMAND -p "src/crc32c/")
 list(APPEND LCOV_FILTER_COMMAND -p "src/bench/")
 list(APPEND LCOV_FILTER_COMMAND -p "src/crypto/ctaes")
 list(APPEND LCOV_FILTER_COMMAND -p "src/minisketch")
-list(APPEND LCOV_FILTER_COMMAND -p "src/secp256k1")
 
 execute_process(
   COMMAND ${LCOV_COMMAND} --capture --initial --directory src --output-file baseline.info

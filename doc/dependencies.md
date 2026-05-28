@@ -25,6 +25,7 @@ Bitcoin Core requires one of the following compilers.
 | [Boost](https://www.boost.org/) | [link](https://www.boost.org/users/download/) | [1.74.0](https://github.com/bitcoin/bitcoin/pull/34107) |
 | [Cap'n Proto](https://capnproto.org/) ([IPC](multiprocess.md)) | [link](https://capnproto.org/) | [0.7.1](https://github.com/bitcoin/bitcoin/pull/33241) |
 | CMake | [link](https://cmake.org/) | [3.22](https://github.com/bitcoin/bitcoin/pull/30454) |
+| [libsecp256k1](https://github.com/bitcoin-core/secp256k1) | [link](https://github.com/bitcoin-core/secp256k1) | Packaged revision with recovery, extrakeys, schnorrsig, musig, and ellswift modules |
 | [libmultiprocess](https://github.com/bitcoin-core/libmultiprocess) ([IPC](multiprocess.md)) | [link](https://github.com/bitcoin-core/libmultiprocess/tags) | [v7.0-pre1](https://github.com/bitcoin/bitcoin/pull/33517) |
 
 ### Runtime
