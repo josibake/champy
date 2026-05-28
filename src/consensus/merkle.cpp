@@ -4,7 +4,8 @@
 
 #include <consensus/merkle.h>
 #include <hash.h>
-#include <util/check.h>
+
+#include <cassert>
 
 /*     WARNING! If you're reading this because you're learning about crypto
        and/or designing a new system that will use merkle trees, keep in mind
@@ -63,32 +64,44 @@ uint256 ComputeMerkleRoot(std::vector<uint256> hashes, bool* mutated) {
 }
 
 
-uint256 BlockMerkleRoot(const CBlock& block, bool* mutated)
+uint256 BlockMerkleRoot(std::span<const CTransactionRef> transactions, bool* mutated)
 {
     std::vector<uint256> leaves;
-    leaves.reserve((block.vtx.size() + 1) & ~1ULL); // capacity rounded up to even
-    for (size_t s = 0; s < block.vtx.size(); s++) {
-        leaves.push_back(block.vtx[s]->GetHash().ToUint256());
+    leaves.reserve((transactions.size() + 1) & ~1ULL); // capacity rounded up to even
+    for (const auto& tx : transactions) {
+        leaves.push_back(tx->GetHash().ToUint256());
     }
     return ComputeMerkleRoot(std::move(leaves), mutated);
 }
 
-uint256 BlockWitnessMerkleRoot(const CBlock& block)
+uint256 BlockMerkleRoot(const CBlock& block, bool* mutated)
+{
+    return BlockMerkleRoot(block.vtx, mutated);
+}
+
+uint256 BlockWitnessMerkleRoot(std::span<const CTransactionRef> transactions)
 {
     std::vector<uint256> leaves;
-    leaves.reserve((block.vtx.size() + 1) & ~1ULL); // capacity rounded up to even
-    leaves.emplace_back(); // The witness hash of the coinbase is 0.
-    for (size_t s = 1; s < block.vtx.size(); s++) {
-        leaves.push_back(block.vtx[s]->GetWitnessHash().ToUint256());
+    leaves.reserve((transactions.size() + 1) & ~1ULL); // capacity rounded up to even
+    if (!transactions.empty()) {
+        leaves.emplace_back(); // The witness hash of the coinbase is 0.
+        for (size_t s = 1; s < transactions.size(); s++) {
+            leaves.push_back(transactions[s]->GetWitnessHash().ToUint256());
+        }
     }
     return ComputeMerkleRoot(std::move(leaves));
+}
+
+uint256 BlockWitnessMerkleRoot(const CBlock& block)
+{
+    return BlockWitnessMerkleRoot(block.vtx);
 }
 
 /* This implements a constant-space merkle path calculator, limited to 2^32 leaves. */
 static void MerkleComputation(const std::vector<uint256>& leaves, uint32_t leaf_pos, std::vector<uint256>& path)
 {
     path.clear();
-    Assume(leaves.size() <= UINT32_MAX);
+    assert(leaves.size() <= UINT32_MAX);
     if (leaves.size() == 0) {
         return;
     }
@@ -169,12 +182,17 @@ static std::vector<uint256> ComputeMerklePath(const std::vector<uint256>& leaves
     return ret;
 }
 
-std::vector<uint256> TransactionMerklePath(const CBlock& block, uint32_t position)
+std::vector<uint256> TransactionMerklePath(std::span<const CTransactionRef> transactions, uint32_t position)
 {
     std::vector<uint256> leaves;
-    leaves.resize(block.vtx.size());
-    for (size_t s = 0; s < block.vtx.size(); s++) {
-        leaves[s] = block.vtx[s]->GetHash().ToUint256();
+    leaves.resize(transactions.size());
+    for (size_t s = 0; s < transactions.size(); s++) {
+        leaves[s] = transactions[s]->GetHash().ToUint256();
     }
     return ComputeMerklePath(leaves, position);
+}
+
+std::vector<uint256> TransactionMerklePath(const CBlock& block, uint32_t position)
+{
+    return TransactionMerklePath(block.vtx, position);
 }

@@ -2,14 +2,16 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#ifndef BITCOIN_CONSENSUS_TX_VERIFY_H
-#define BITCOIN_CONSENSUS_TX_VERIFY_H
+#ifndef BITCOIN_TX_VERIFY_H
+#define BITCOIN_TX_VERIFY_H
 
 #include <consensus/amount.h>
+#include <consensus/locktime.h>
+#include <consensus/sigops.h>
+#include <sequence_locks_adapters.h>
 #include <script/verify_flags.h>
 
 #include <cstdint>
-#include <vector>
 
 class CBlockIndex;
 class CCoinsViewCache;
@@ -26,16 +28,8 @@ namespace Consensus {
  * Preconditions: tx.IsCoinBase() is false.
  */
 [[nodiscard]] bool CheckTxInputs(const CTransaction& tx, TxValidationState& state, const CCoinsViewCache& inputs, int nSpendHeight, CAmount& txfee);
-} // namespace Consensus
 
 /** Auxiliary functions for transaction validation (ideally should not be exposed) */
-
-/**
- * Count ECDSA signature operations the old-fashioned (pre-0.6) way
- * @return number of sigops this transaction's outputs will produce when spent
- * @see CTransaction::FetchInputs
- */
-unsigned int GetLegacySigOpCount(const CTransaction& tx);
 
 /**
  * Count ECDSA signature operations in pay-to-script-hash inputs.
@@ -54,29 +48,9 @@ unsigned int GetP2SHSigOpCount(const CTransaction& tx, const CCoinsViewCache& ma
  * @return Total signature operation cost of tx
  */
 int64_t GetTransactionSigOpCost(const CTransaction& tx, const CCoinsViewCache& inputs, script_verify_flags flags);
-
-/**
- * Check if transaction is final and can be included in a block with the
- * specified height and time. Consensus critical.
- */
-bool IsFinalTx(const CTransaction &tx, int nBlockHeight, int64_t nBlockTime);
-
-/**
- * Calculates the block height and previous block's median time past at
- * which the transaction will be considered final in the context of BIP 68.
- * For each input that is not sequence locked, the corresponding entries in
- * prevHeights are set to 0 as they do not affect the calculation.
- */
-std::pair<int, int64_t> CalculateSequenceLocks(const CTransaction &tx, int flags, std::vector<int>& prevHeights, const CBlockIndex& block);
-
-bool EvaluateSequenceLocks(const CBlockIndex& block, std::pair<int, int64_t> lockPair);
-/**
- * Check if transaction is final per BIP 68 sequence numbers and can be included in a block.
- * Consensus critical. Takes as input a list of heights at which tx's inputs (in order) confirmed.
- */
-bool SequenceLocks(const CTransaction &tx, int flags, std::vector<int>& prevHeights, const CBlockIndex& block);
+} // namespace Consensus
 
 /** Check if transaction will be final in the next block to be created. */
 bool CheckFinalTxAtTip(const CBlockIndex& active_chain_tip, const CTransaction& tx);
 
-#endif // BITCOIN_CONSENSUS_TX_VERIFY_H
+#endif // BITCOIN_TX_VERIFY_H

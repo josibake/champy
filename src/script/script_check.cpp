@@ -10,13 +10,13 @@
 
 std::optional<std::pair<ScriptError, std::string>> CScriptCheck::operator()()
 {
-    const CScript& scriptSig = ptxTo->vin[nIn].scriptSig;
-    const CScriptWitness* witness = &ptxTo->vin[nIn].scriptWitness;
+    const CScript& scriptSig = m_tx_to->vin[m_input_index].scriptSig;
+    const CScriptWitness* witness = &m_tx_to->vin[m_input_index].scriptWitness;
     ScriptError error{SCRIPT_ERR_UNKNOWN_ERROR};
-    if (VerifyScript(scriptSig, m_tx_out.scriptPubKey, witness, m_flags, CachingTransactionSignatureChecker(ptxTo, nIn, m_tx_out.nValue, cacheStore, *m_signature_cache, *txdata), &error)) {
+    if (VerifyScript(scriptSig, m_tx_out.scriptPubKey, witness, m_flags, CachingTransactionSignatureChecker(m_tx_to, m_input_index, m_tx_out.nValue, m_cache_store, *m_signature_cache, *m_txdata), &error)) {
         return std::nullopt;
     } else {
-        auto debug_str = strprintf("input %i of %s (wtxid %s), spending %s:%i", nIn, ptxTo->GetHash().ToString(), ptxTo->GetWitnessHash().ToString(), ptxTo->vin[nIn].prevout.hash.ToString(), ptxTo->vin[nIn].prevout.n);
+        auto debug_str = strprintf("input %i of %s (wtxid %s), spending %s:%i", m_input_index, m_tx_to->GetHash().ToString(), m_tx_to->GetWitnessHash().ToString(), m_tx_to->vin[m_input_index].prevout.hash.ToString(), m_tx_to->vin[m_input_index].prevout.n);
         return std::make_pair(error, std::move(debug_str));
     }
 }

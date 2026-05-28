@@ -26,4 +26,12 @@ static constexpr CAmount COIN = 100000000;
 static constexpr CAmount MAX_MONEY = 21000000 * COIN;
 inline bool MoneyRange(const CAmount& nValue) { return (nValue >= 0 && nValue <= MAX_MONEY); }
 
+namespace Consensus {
+
+struct Params;
+
+[[nodiscard]] CAmount CalculateBlockSubsidy(int height, const Params& params);
+
+} // namespace Consensus
+
 #endif // BITCOIN_CONSENSUS_AMOUNT_H

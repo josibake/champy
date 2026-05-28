@@ -12,9 +12,24 @@
  * belongs in tx_verify.h/cpp instead.
  */
 
-class CTransaction;
-class TxValidationState;
+#include <consensus/expected.h>
 
-bool CheckTransaction(const CTransaction& tx, TxValidationState& state);
+#include <string>
+
+class CTransaction;
+
+namespace Consensus {
+
+struct TransactionCheckError {
+    std::string reject_reason;
+    std::string debug_message;
+};
+
+template <typename T>
+using TransactionCheckResult = Consensus::Expected<T, TransactionCheckError>;
+
+[[nodiscard]] TransactionCheckResult<void> CheckTransaction(const CTransaction& tx);
+
+} // namespace Consensus
 
 #endif // BITCOIN_CONSENSUS_TX_CHECK_H
