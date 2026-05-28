@@ -183,6 +183,20 @@ target_link_libraries(test_consensus_library_boundary
     "$<LINK_LIBRARY:WHOLE_ARCHIVE,bitcoin_consensus>"
 )
 add_test(NAME consensus_library_boundary COMMAND test_consensus_library_boundary)
+
+# This target is the external-consumer boundary proof. Keep it small: it should
+# link the consensus library and the minimum compile/test support needed to use
+# the public consensus API.
+add_executable(test_consensus_api_consumer
+  consensus_api_consumer_tests.cpp
+)
+target_link_libraries(test_consensus_api_consumer
+  PRIVATE
+    bitcoin_consensus
+    Boost::headers
+)
+add_test(NAME consensus_api_consumer COMMAND test_consensus_api_consumer)
+
 add_test(
   NAME consensus_source_boundary
   COMMAND ${CMAKE_COMMAND}

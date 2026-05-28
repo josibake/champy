@@ -75,6 +75,14 @@ void EncodeBlock(const CBlock& block, ByteSink& sink);
 ### Library Boundary
 
 The internal consensus API should be separable from node orchestration.
+`src/consensus/api.h` is the extraction-facing entry point. It includes the
+headers intended to form the public consensus surface: staged block validation,
+spend-state interfaces, script checking, staged effects, commit interfaces, and
+fixture backends.
+
+Other consensus headers may still exist as support headers for in-tree rule
+implementation and legacy Core callers. They are not part of the extraction
+contract unless they are added to `consensus/api.h` and the public API allowlist.
 
 Example target:
 

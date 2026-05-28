@@ -62,6 +62,8 @@ add_subdirectory(crypto)
 add_subdirectory(util)
 add_subdirectory(ipc)
 
+include(${PROJECT_SOURCE_DIR}/cmake/BitcoinConsensusApi.cmake)
+
 add_library(bitcoin_consensus STATIC EXCLUDE_FROM_ALL
   arith_uint256.cpp
   consensus/amount.cpp
@@ -90,11 +92,38 @@ add_library(bitcoin_consensus STATIC EXCLUDE_FROM_ALL
   script/script_error.cpp
   uint256.cpp
 )
+target_sources(bitcoin_consensus
+  PRIVATE
+    ${BITCOIN_CONSENSUS_PUBLIC_API_HEADERS}
+    ${BITCOIN_CONSENSUS_SUPPORT_HEADERS}
+    ${BITCOIN_CONSENSUS_PUBLIC_PROTOCOL_HEADERS}
+    ${BITCOIN_CONSENSUS_PUBLIC_TRANSITIVE_HEADERS}
+    ${BITCOIN_CONSENSUS_INTERNAL_PROTOCOL_HEADERS}
+)
+target_compile_features(bitcoin_consensus
+  PUBLIC
+    cxx_std_20
+)
+target_include_directories(bitcoin_consensus
+  PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
+)
+# Keep this dependency list explicit. It is the build-level consensus extraction
+# boundary and is checked by CheckConsensusBoundary.cmake.
 target_link_libraries(bitcoin_consensus
   PRIVATE
     core_interface
     bitcoin_crypto
     secp256k1
+)
+set_target_properties(bitcoin_consensus PROPERTIES
+  BITCOIN_CONSENSUS_PUBLIC_API_HEADERS "${BITCOIN_CONSENSUS_PUBLIC_API_HEADERS}"
+  BITCOIN_CONSENSUS_PUBLIC_PROTOCOL_HEADERS "${BITCOIN_CONSENSUS_PUBLIC_PROTOCOL_HEADERS}"
+  BITCOIN_CONSENSUS_PUBLIC_TRANSITIVE_HEADERS "${BITCOIN_CONSENSUS_PUBLIC_TRANSITIVE_HEADERS}"
+  BITCOIN_CONSENSUS_SUPPORT_HEADERS "${BITCOIN_CONSENSUS_SUPPORT_HEADERS}"
+  BITCOIN_CONSENSUS_INTERNAL_PROTOCOL_HEADERS "${BITCOIN_CONSENSUS_INTERNAL_PROTOCOL_HEADERS}"
+  BITCOIN_CONSENSUS_INSTALL_HEADERS "${BITCOIN_CONSENSUS_INSTALL_HEADERS}"
 )
 
 if(WITH_ZMQ)

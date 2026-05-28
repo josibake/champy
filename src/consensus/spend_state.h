@@ -14,6 +14,8 @@ class COutPoint;
 
 namespace Consensus {
 
+// Portable data required to validate a spend of one previous output. This is
+// not Core's Coin type and does not imply a CCoinsViewCache-backed UTXO set.
 struct CoinSnapshot {
     CTxOut output;
     int height{0};
@@ -24,6 +26,8 @@ class SpendStateView {
 public:
     virtual ~SpendStateView() = default;
 
+    // Existence checks can be cheaper than materializing a full CoinSnapshot
+    // for backends that separate membership from spend evidence.
     [[nodiscard]] virtual bool HaveCoin(const COutPoint& outpoint) const = 0;
     [[nodiscard]] virtual std::optional<CoinSnapshot> GetCoin(const COutPoint& outpoint) const = 0;
 };

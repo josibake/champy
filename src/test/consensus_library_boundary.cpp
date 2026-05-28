@@ -2,28 +2,7 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#include <consensus/amount.h>
-#include <consensus/block_commit.h>
-#include <consensus/block_check.h>
-#include <consensus/block_consensus_pipeline.h>
-#include <consensus/block_facts.h>
-#include <consensus/block_spend.h>
-#include <consensus/coin_effects.h>
-#include <consensus/consensus.h>
-#include <consensus/diagnostics.h>
-#include <consensus/expected.h>
-#include <consensus/locktime.h>
-#include <consensus/merkle.h>
-#include <consensus/params.h>
-#include <consensus/pow.h>
-#include <consensus/predicates.h>
-#include <consensus/script_checker.h>
-#include <consensus/sequence_locks.h>
-#include <consensus/sigops.h>
-#include <consensus/snapshot_spend_state.h>
-#include <consensus/spend_state.h>
-#include <consensus/tx_check.h>
-#include <consensus/validation.h>
+#include <consensus/api.h>
 #include <primitives/block.h>
 #include <primitives/transaction.h>
 #include <script/interpreter.h>

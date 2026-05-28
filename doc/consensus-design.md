@@ -100,6 +100,7 @@ src/test/consensus_amount_tests.cpp
 src/test/consensus_block_spend_tests.cpp
 src/test/consensus_block_commit_tests.cpp
 src/test/consensus_block_consensus_pipeline_tests.cpp
+src/test/consensus_api_consumer_tests.cpp
 src/test/consensus_conformance_tests.cpp
 src/test/consensus_library_boundary.cpp
 src/test/consensus_snapshot_spend_state_tests.cpp
@@ -108,9 +109,34 @@ src/test/util/consensus_fixture.{h,cpp}
 
 `src/test/consensus_library_boundary.cpp` is the boundary test. It catches
 accidental dependencies from the consensus target back into Core node code.
+`src/consensus/api.h` is the extraction-facing entry point for new library
+callers. It includes the staged validation API, spend-state interfaces, script
+checking, effects, commit interfaces, and fixture backends.
 `consensus_source_boundary` also checks public consensus headers. Public headers
 may include consensus headers, standard library headers, and the small set of
 protocol value headers currently accepted as part of the internal consensus API.
+The public protocol header set is:
+
+```text
+primitives/block.h
+primitives/transaction.h
+script/verify_flags.h
+uint256.h
+```
+
+Support-only consensus headers may use additional internal protocol helpers,
+such as `arith_uint256.h`, but public consensus API headers may not expose
+those helpers.
+It classifies every `src/consensus/*.h` file as public API or support-only,
+requires `consensus/api.h` to match the public API allowlist, and prevents
+public API headers from exposing support-only headers.
+`src/test/consensus_api_consumer_tests.cpp` is the external-consumer smoke
+test. It may include only `consensus/api.h` from the consensus directory and
+implements an independent spend backend, script checker, and commit adapter.
+It builds as `test_consensus_api_consumer`, which directly links only
+`bitcoin_consensus` and Boost headers. The `bitcoin_consensus` target publishes
+its build include directories and C++20 requirement. `core_interface` remains a
+private build-policy dependency for compiling the in-tree library.
 `consensus_header_self_containment` verifies that each public consensus header
 can be included first in a translation unit.
 Consensus implementation files are also checked against direct Core utility
@@ -119,7 +145,14 @@ from the consensus directory, standard library, or the small set of protocol and
 script headers allowed at the internal consensus boundary.
 The source boundary test also checks the `bitcoin_consensus` CMake target. It
 fails if the target pulls in Core/node sources or links non-consensus
-dependencies.
+dependencies. The header contract is listed in
+`cmake/BitcoinConsensusApi.cmake`; the boundary test checks the source tree
+against that manifest.
+The same manifest defines `BITCOIN_CONSENSUS_INSTALL_HEADERS`, the future
+install/export header set. It is the complete local header closure of
+`consensus/api.h`: public consensus API headers, public protocol value headers,
+and the value-header dependencies they include. It intentionally excludes
+support-only consensus headers and internal protocol helpers.
 
 The `bitcoinkernel` target links `bitcoin_consensus` instead of compiling the
 consensus sources directly. This keeps the kernel build on the same internal
