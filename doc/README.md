@@ -49,6 +49,7 @@ Development
 The Bitcoin repo's [root README](/README.md) contains relevant information on the development process and automated testing.
 
 - [Developer Notes](developer-notes.md)
+- [Consensus Design](consensus-design.md)
 - [Productivity Notes](productivity.md)
 - [Release Process](release-process.md)
 - [Source Code Documentation (External Link)](https://doxygen.bitcoincore.org/)
