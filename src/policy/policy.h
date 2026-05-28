@@ -8,7 +8,7 @@
 
 #include <consensus/amount.h>
 #include <consensus/consensus.h>
-#include <consensus/validation.h>
+#include <validation_state.h>
 #include <primitives/transaction.h>
 #include <script/interpreter.h>
 #include <script/solver.h>

@@ -15,7 +15,7 @@
 #include <common/bloom.h>
 #include <consensus/amount.h>
 #include <consensus/params.h>
-#include <consensus/validation.h>
+#include <validation_state.h>
 #include <core_memusage.h>
 #include <crypto/siphash.h>
 #include <deploymentstatus.h>

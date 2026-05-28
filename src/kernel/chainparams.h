@@ -9,6 +9,7 @@
 #include <consensus/params.h>
 #include <kernel/messagestartchars.h>
 #include <primitives/block.h>
+#include <uint256.h>
 #include <util/chaintype.h>
 
 #include <cstddef>
@@ -73,6 +74,8 @@ public:
     uint64_t AssumedBlockchainSize() const { return m_assumed_blockchain_size; }
     /** Minimum free space (in GB) needed for data directory when pruned; Does not include prune target*/
     uint64_t AssumedChainStateSize() const { return m_assumed_chain_state_size; }
+    /** Default -assumevalid block. This is node validation policy, not a consensus parameter. */
+    const uint256& DefaultAssumeValid() const { return m_default_assume_valid; }
     /** Whether it is possible to mine blocks on demand (no retargeting) */
     bool MineBlocksOnDemand() const { return consensus.fPowNoRetargeting; }
     /** Return the chain type string */
@@ -130,6 +133,7 @@ protected:
     uint64_t nPruneAfterHeight;
     uint64_t m_assumed_blockchain_size;
     uint64_t m_assumed_chain_state_size;
+    uint256 m_default_assume_valid;
     std::vector<std::string> vSeeds;
     std::vector<unsigned char> base58Prefixes[MAX_BASE58_TYPES];
     std::string bech32_hrp;

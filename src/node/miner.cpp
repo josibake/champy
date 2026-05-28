@@ -13,8 +13,8 @@
 #include <consensus/amount.h>
 #include <consensus/consensus.h>
 #include <consensus/merkle.h>
-#include <consensus/tx_verify.h>
-#include <consensus/validation.h>
+#include <tx_verify.h>
+#include <validation_state.h>
 #include <deploymentstatus.h>
 #include <logging.h>
 #include <node/context.h>

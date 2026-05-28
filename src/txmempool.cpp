@@ -9,8 +9,8 @@
 #include <coins.h>
 #include <common/system.h>
 #include <consensus/consensus.h>
-#include <consensus/tx_verify.h>
-#include <consensus/validation.h>
+#include <tx_verify.h>
+#include <validation_state.h>
 #include <policy/policy.h>
 #include <policy/settings.h>
 #include <random.h>

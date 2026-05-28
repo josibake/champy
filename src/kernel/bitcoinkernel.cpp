@@ -9,8 +9,9 @@
 #include <block_validation.h>
 #include <chain.h>
 #include <coins.h>
-#include <consensus/tx_check.h>
-#include <consensus/validation.h>
+#include <consensus/block_check.h>
+#include <tx_check_adapters.h>
+#include <validation_state.h>
 #include <dbwrapper.h>
 #include <kernel/caches.h>
 #include <kernel/chainparams.h>
@@ -1143,10 +1144,11 @@ int btck_block_check(const btck_Block* block, const btck_ConsensusParams* consen
     auto& state = btck_BlockValidationState::get(validation_state);
     state = BlockValidationState{};
 
-    const bool check_pow    = (flags & btck_BlockCheckFlags_POW) != 0;
-    const bool check_merkle = (flags & btck_BlockCheckFlags_MERKLE) != 0;
+    Consensus::BlockCheckOptions options;
+    options.check_pow = (flags & btck_BlockCheckFlags_POW) != 0;
+    options.check_merkle_root = (flags & btck_BlockCheckFlags_MERKLE) != 0;
 
-    const bool result = CheckBlock(*btck_Block::get(block), state, btck_ConsensusParams::get(consensus_params), /*fCheckPOW=*/check_pow, /*fCheckMerkleRoot=*/check_merkle);
+    const bool result = CheckBlock(*btck_Block::get(block), state, btck_ConsensusParams::get(consensus_params), options);
 
     return result ? 1 : 0;
 }
@@ -1346,8 +1348,9 @@ btck_BlockValidationState* btck_chainstate_manager_process_block_header(
 {
     try {
         auto& chainman = btck_ChainstateManager::get(chainstate_manager).m_chainman;
+
         auto state = btck_BlockValidationState::create();
-        auto result{ProcessNewBlockHeaders(*chainman, {&btck_BlockHeader::get(header), 1}, /*min_pow_checked=*/true, btck_BlockValidationState::get(state), /*ppindex=*/nullptr)};
+        bool result{ProcessNewBlockHeaders(*chainman, {&btck_BlockHeader::get(header), 1}, /*min_pow_checked=*/true, btck_BlockValidationState::get(state))};
         assert(result == btck_BlockValidationState::get(state).IsValid());
         return state;
     } catch (const std::exception& e) {

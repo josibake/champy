@@ -439,15 +439,16 @@ DisconnectResult ApplyTxInUndo(Coin&& undo, CCoinsViewCache& view, const COutPoi
 
 void UpdateCoins(const CTransaction& tx, CCoinsViewCache& inputs, CTxUndo& txundo, int nHeight)
 {
-    // mark inputs spent
+    // Mark inputs spent.
     if (!tx.IsCoinBase()) {
         txundo.vprevout.reserve(tx.vin.size());
         for (const CTxIn& txin : tx.vin) {
             txundo.vprevout.emplace_back();
-            bool is_spent = inputs.SpendCoin(txin.prevout, &txundo.vprevout.back());
+            const bool is_spent{inputs.SpendCoin(txin.prevout, &txundo.vprevout.back())};
             assert(is_spent);
         }
     }
-    // add outputs
+
+    // Add outputs.
     AddCoins(inputs, tx, nHeight);
 }

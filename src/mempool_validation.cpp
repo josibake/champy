@@ -5,11 +5,12 @@
 
 #include <mempool_validation.h>
 
+#include <block_validation_policy.h>
 #include <chain.h>
 #include <chainstate.h>
 #include <consensus/consensus.h>
-#include <consensus/tx_check.h>
-#include <consensus/tx_verify.h>
+#include <tx_check_adapters.h>
+#include <tx_verify.h>
 #include <kernel/chainparams.h>
 #include <kernel/disconnected_transactions.h>
 #include <kernel/mempool_entry.h>
@@ -22,6 +23,7 @@
 #include <policy/truc_policy.h>
 #include <primitives/transaction.h>
 #include <script/sigcache.h>
+#include <script_validation.h>
 #include <tinyformat.h>
 #include <txmempool.h>
 #include <uint256.h>
@@ -96,7 +98,7 @@ std::optional<LockPoints> CalculateLockPointsAtTip(
     // Thus if we want to know if a transaction can be part of the
     // *next* block, we need to use one more than active_chainstate.m_chain.Height()
     next_tip.nHeight = tip->nHeight + 1;
-    const auto [min_height, min_time] = CalculateSequenceLocks(tx, STANDARD_LOCKTIME_VERIFY_FLAGS, prev_heights.value(), next_tip);
+    const auto [min_height, min_time] = Consensus::CalculateSequenceLocks(tx, STANDARD_LOCKTIME_VERIFY_FLAGS, prev_heights.value(), next_tip);
 
     // Also store the hash of the block with the highest height of
     // all the blocks which have sequence locked prevouts.
@@ -109,7 +111,13 @@ std::optional<LockPoints> CalculateLockPointsAtTip(
     // input height of tip+1 for mempool txs and test the resulting
     // min_height and min_time from CalculateSequenceLocks against tip+1.
     int max_input_height{0};
-    for (const int height : prev_heights.value()) {
+    const bool enforce_sequence_locks{tx.version >= 2 && STANDARD_LOCKTIME_VERIFY_FLAGS & LOCKTIME_VERIFY_SEQUENCE};
+    for (std::size_t input_index{0}; input_index < prev_heights->size(); ++input_index) {
+        if (enforce_sequence_locks &&
+            (tx.vin[input_index].nSequence & CTxIn::SEQUENCE_LOCKTIME_DISABLE_FLAG)) {
+            continue;
+        }
+        const int height{(*prev_heights)[input_index]};
         // Can ignore mempool inputs since we'll fail if they had non-zero locks
         if (height != next_tip.nHeight) {
             max_input_height = std::max(max_input_height, height);
@@ -139,7 +147,7 @@ bool CheckSequenceLocksAtTip(CBlockIndex* tip,
     // *next* block, we need to use one more than active_chainstate.m_chain.Height()
     index.nHeight = tip->nHeight + 1;
 
-    return EvaluateSequenceLocks(index, {lock_points.height, lock_points.time});
+    return Consensus::EvaluateSequenceLocks(index, {lock_points.height, lock_points.time});
 }
 
 void LimitMempoolSize(CTxMemPool& pool, CCoinsViewCache& coins_cache)
@@ -688,7 +696,7 @@ bool MemPoolAccept::PreChecks(ATMPArgs& args, Workspace& ws)
         return state.Invalid(TxValidationResult::TX_WITNESS_MUTATED, "bad-witness-nonstandard");
     }
 
-    int64_t nSigOpsCost = GetTransactionSigOpCost(tx, m_view, STANDARD_SCRIPT_VERIFY_FLAGS);
+    int64_t nSigOpsCost = Consensus::GetTransactionSigOpCost(tx, m_view, STANDARD_SCRIPT_VERIFY_FLAGS);
 
     // Keep track of transactions that spend a coinbase, which we re-scan
     // during reorgs to ensure COINBASE_MATURITY is still met.

@@ -7,7 +7,7 @@
 #include <chainparams.h>
 #include <consensus/consensus.h>
 #include <consensus/merkle.h>
-#include <consensus/validation.h>
+#include <validation_state.h>
 #include <pow.h>
 #include <primitives/block.h>
 #include <primitives/transaction.h>

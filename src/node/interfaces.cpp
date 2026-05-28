@@ -10,7 +10,7 @@
 #include <chainparams.h>
 #include <common/args.h>
 #include <consensus/merkle.h>
-#include <consensus/validation.h>
+#include <validation_state.h>
 #include <deploymentstatus.h>
 #include <init.h>
 #include <interfaces/chain.h>

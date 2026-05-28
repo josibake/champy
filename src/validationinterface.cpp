@@ -6,7 +6,7 @@
 #include <validationinterface.h>
 
 #include <chain.h>
-#include <consensus/validation.h>
+#include <validation_state.h>
 #include <kernel/mempool_entry.h>
 #include <kernel/mempool_removal_reason.h>
 #include <primitives/block.h>

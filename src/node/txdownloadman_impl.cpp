@@ -6,7 +6,7 @@
 #include <node/txdownloadman.h>
 
 #include <chain.h>
-#include <consensus/validation.h>
+#include <validation_state.h>
 #include <logging.h>
 #include <txmempool.h>
 #include <chainstate.h>

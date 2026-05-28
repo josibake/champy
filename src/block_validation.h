@@ -8,34 +8,36 @@
 #include <arith_uint256.h>
 #include <coins.h>
 #include <consensus/amount.h>
+#include <consensus/block_check.h>
 #include <consensus/params.h>
-#include <consensus/validation.h>
+#include <validation_state.h>
 #include <kernel/cs_main.h>
 #include <primitives/block.h>
-#include <script/script_check.h>
-#include <script/verify_flags.h>
 
 #include <memory>
 #include <span>
-#include <vector>
 
 class CBlockIndex;
 class Chainstate;
 class ChainstateManager;
-class ValidationCache;
 class ValidationSignals;
-class CTransaction;
-
-/** Identifies blocks that overwrote an existing coinbase output in the UTXO set (see BIP30) */
-bool IsBIP30Repeat(const CBlockIndex& block_index);
-
-/** Identifies blocks which coinbase output was subsequently overwritten in the UTXO set (see BIP30) */
-bool IsBIP30Unspendable(const uint256& block_hash, int block_height);
 
 struct FlatFilePos;
 
+/**
+ * ConnectBlock adapter options.
+ *
+ * These keep block-check policy, script-cache policy, and commit behavior
+ * explicit at Core's existing validation entry point.
+ */
+struct ConnectBlockOptions {
+    Consensus::BlockCheckOptions block_check_options{};
+    bool cache_script_results{false};
+    bool commit{true};
+};
+
 DisconnectResult DisconnectBlock(Chainstate& chainstate, const CBlock& block, const CBlockIndex* pindex, CCoinsViewCache& view) EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
-bool ConnectBlock(Chainstate& chainstate, const CBlock& block, BlockValidationState& state, CBlockIndex* pindex, CCoinsViewCache& view, bool fJustCheck = false) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
+bool ConnectBlock(Chainstate& chainstate, const CBlock& block, BlockValidationState& state, CBlockIndex* pindex, CCoinsViewCache& view, ConnectBlockOptions options = {}) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
 bool RollforwardBlock(Chainstate& chainstate, const CBlockIndex* pindex, CCoinsViewCache& inputs) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
 bool ReplayBlocks(Chainstate& chainstate);
 void UpdateUncommittedBlockStructures(const ChainstateManager& chainman, CBlock& block, const CBlockIndex* pindexPrev);
@@ -46,6 +48,7 @@ bool ProcessNewBlock(ChainstateManager& chainman, const std::shared_ptr<const CB
 
 /** Context-independent validity checks */
 bool CheckBlock(const CBlock& block, BlockValidationState& state, const Consensus::Params& consensusParams, bool fCheckPOW = true, bool fCheckMerkleRoot = true);
+bool CheckBlock(const CBlock& block, BlockValidationState& state, const Consensus::Params& consensusParams, const Consensus::BlockCheckOptions& options);
 
 /** Check that the proof of work on each block header matches the value in nBits */
 bool HasValidProofOfWork(std::span<const CBlockHeader> headers, const Consensus::Params& consensusParams);
@@ -82,15 +85,6 @@ BlockValidationState TestBlockValidity(
     bool check_pow,
     bool check_merkle_root) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
 
-/** Return the script verification flags which should be checked for a given block */
-script_verify_flags GetBlockScriptFlags(const CBlockIndex& block_index, const ChainstateManager& chainman);
-
 void LimitValidationInterfaceQueue(ValidationSignals& signals) LOCKS_EXCLUDED(cs_main);
-
-bool CheckInputScripts(const CTransaction& tx, TxValidationState& state,
-                       const CCoinsViewCache& inputs, script_verify_flags flags, bool cacheSigStore,
-                       bool cacheFullScriptStore, PrecomputedTransactionData& txdata,
-                       ValidationCache& validation_cache,
-                       std::vector<CScriptCheck>* pvChecks = nullptr) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
 
 #endif // BITCOIN_BLOCK_VALIDATION_H

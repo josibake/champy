@@ -6,7 +6,7 @@
 #include <node/transaction.h>
 
 #include <mempool_validation.h>
-#include <consensus/validation.h>
+#include <validation_state.h>
 #include <net.h>
 #include <net_processing.h>
 #include <node/blockstorage.h>

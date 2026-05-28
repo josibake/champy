@@ -13,7 +13,7 @@
 #include <clientversion.h>
 #include <consensus/amount.h>
 #include <consensus/consensus.h>
-#include <consensus/validation.h>
+#include <validation_state.h>
 #include <flatfile.h>
 #include <kernel/chainparams.h>
 #include <kernel/coinstats.h>
@@ -2012,7 +2012,7 @@ static ChainstateManager::Options&& Flatten(ChainstateManager::Options&& opts)
 {
     if (!opts.check_block_index.has_value()) opts.check_block_index = opts.chainparams.DefaultConsistencyChecks();
     if (!opts.minimum_chain_work.has_value()) opts.minimum_chain_work = UintToArith256(opts.chainparams.GetConsensus().nMinimumChainWork);
-    if (!opts.assumed_valid_block.has_value()) opts.assumed_valid_block = opts.chainparams.GetConsensus().defaultAssumeValid;
+    if (!opts.assumed_valid_block.has_value()) opts.assumed_valid_block = opts.chainparams.DefaultAssumeValid();
     return std::move(opts);
 }
 

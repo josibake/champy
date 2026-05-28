@@ -42,7 +42,6 @@
 #include <utility>
 #include <vector>
 
-class BlockValidationState;
 class CBlockUndo;
 class Chainstate;
 class ChainstateManager;
@@ -175,6 +174,13 @@ enum class ReadRawError {
     BadPartRange,
 };
 
+struct BlockStorageError {
+    std::string reject_reason;
+};
+
+template <typename T>
+using BlockStorageResult = util::Expected<T, BlockStorageError>;
+
 /**
  * Maintains a tree of blocks (stored in `m_block_index`) which is consulted
  * to determine where the most-work tip is.
@@ -215,7 +221,7 @@ private:
      */
     [[nodiscard]] FlatFilePos FindNextBlockPos(unsigned int nAddSize, unsigned int nHeight, uint64_t nTime);
     [[nodiscard]] bool FlushChainstateBlockFile(int tip_height);
-    bool FindUndoPos(BlockValidationState& state, int nFile, FlatFilePos& pos, unsigned int nAddSize);
+    [[nodiscard]] BlockStorageResult<void> FindUndoPos(int nFile, FlatFilePos& pos, unsigned int nAddSize);
 
     AutoFile OpenUndoFile(const FlatFilePos& pos, bool fReadOnly = false) const;
 
@@ -343,7 +349,7 @@ public:
     /** Get block file info entry for one block file */
     CBlockFileInfo* GetBlockFileInfo(size_t n);
 
-    bool WriteBlockUndo(const CBlockUndo& blockundo, BlockValidationState& state, CBlockIndex& block)
+    [[nodiscard]] BlockStorageResult<void> WriteBlockUndo(const CBlockUndo& blockundo, CBlockIndex& block)
         EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
 
     /** Store block on disk and update block file statistics.

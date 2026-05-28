@@ -64,8 +64,23 @@ add_subdirectory(ipc)
 
 add_library(bitcoin_consensus STATIC EXCLUDE_FROM_ALL
   arith_uint256.cpp
+  consensus/amount.cpp
+  consensus/block_commit.cpp
+  consensus/block_spend.cpp
+  consensus/block_check.cpp
+  consensus/block_facts.cpp
+  consensus/coin_effects.cpp
+  consensus/locktime.cpp
   consensus/merkle.cpp
+  consensus/predicates.cpp
+  consensus/pow.cpp
+  consensus/sequence_locks.cpp
+  consensus/script_view.cpp
+  consensus/script_checker.cpp
+  consensus/sigops.cpp
+  consensus/snapshot_spend_state.cpp
   consensus/tx_check.cpp
+  consensus/block_consensus_pipeline.cpp
   hash.cpp
   primitives/block.cpp
   primitives/transaction.cpp
@@ -151,6 +166,26 @@ target_link_libraries(bitcoin_common
 include(InstallBinaryComponent)
 
 
+# Core validation sources shared by bitcoin_node and bitcoinkernel while the
+# consensus boundary is being extracted.
+set(BITCOIN_KERNEL_VALIDATION_SOURCES
+  ${CMAKE_CURRENT_SOURCE_DIR}/block_coin_effects.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/block_header_context_adapters.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/block_script_check_adapters.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/block_validation.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/block_validation_error.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/block_validation_policy.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/coins_view_spend_state.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/connect_block_bench.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/core_block_commit_adapters.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/core_block_connection_attempt.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/core_block_policy.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/mempool_validation.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/sequence_locks_adapters.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/tx_check_adapters.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/tx_verify.cpp
+)
+
 # P2P and RPC server functionality used by `bitcoind` executable.
 add_library(bitcoin_node STATIC EXCLUDE_FROM_ALL
   addrdb.cpp
@@ -158,7 +193,7 @@ add_library(bitcoin_node STATIC EXCLUDE_FROM_ALL
   banman.cpp
   bip324.cpp
   blockencodings.cpp
-  consensus/tx_verify.cpp
+  ${BITCOIN_KERNEL_VALIDATION_SOURCES}
   dbwrapper.cpp
   deploymentstatus.cpp
   flatfile.cpp
@@ -222,8 +257,6 @@ add_library(bitcoin_node STATIC EXCLUDE_FROM_ALL
   txgraph.cpp
   txmempool.cpp
   txrequest.cpp
-  block_validation.cpp
-  mempool_validation.cpp
   chainstate.cpp
   validationinterface.cpp
   versionbits.cpp

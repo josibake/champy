@@ -7,7 +7,7 @@
 #include <node/txdownloadman.h>
 
 #include <common/bloom.h>
-#include <consensus/validation.h>
+#include <validation_state.h>
 #include <kernel/chain.h>
 #include <net.h>
 #include <node/txorphanage.h>

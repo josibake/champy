@@ -112,8 +112,6 @@ public:
     CSHA256 ScriptExecutionCacheHasher() const { return m_script_execution_cache_hasher; }
 };
 
-/** Functions for validating blocks and updating the block tree */
-
 enum class VerifyDBResult {
     SUCCESS,
     CORRUPTED_BLOCK_DB,

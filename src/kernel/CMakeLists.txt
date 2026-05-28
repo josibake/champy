@@ -18,18 +18,14 @@ add_library(bitcoinkernel
   cs_main.cpp
   disconnected_transactions.cpp
   mempool_removal_reason.cpp
-  ../arith_uint256.cpp
   ../chain.cpp
   ../coins.cpp
   ../compressor.cpp
-  ../consensus/merkle.cpp
-  ../consensus/tx_check.cpp
-  ../consensus/tx_verify.cpp
+  ${BITCOIN_KERNEL_VALIDATION_SOURCES}
   ../dbwrapper.cpp
   ../deploymentinfo.cpp
   ../deploymentstatus.cpp
   ../flatfile.cpp
-  ../hash.cpp
   ../logging.cpp
   ../node/blockimport.cpp
   ../node/blockstorage.cpp
@@ -42,14 +38,8 @@ add_library(bitcoinkernel
   ../policy/settings.cpp
   ../policy/truc_policy.cpp
   ../pow.cpp
-  ../primitives/block.cpp
-  ../primitives/transaction.cpp
-  ../pubkey.cpp
   ../random.cpp
   ../randomenv.cpp
-  ../script/interpreter.cpp
-  ../script/script.cpp
-  ../script/script_error.cpp
   ../script/sigcache.cpp
   ../script/solver.cpp
   ../signet.cpp
@@ -58,7 +48,6 @@ add_library(bitcoinkernel
   ../txdb.cpp
   ../txgraph.cpp
   ../txmempool.cpp
-  ../uint256.cpp
   ../util/chaintype.cpp
   ../util/check.cpp
   ../util/expected.cpp
@@ -73,8 +62,6 @@ add_library(bitcoinkernel
   ../util/threadnames.cpp
   ../util/time.cpp
   ../util/tokenpipe.cpp
-  ../block_validation.cpp
-  ../mempool_validation.cpp
   ../script/script_check.cpp
   ../chainstate.cpp
   ../validationinterface.cpp
@@ -101,6 +88,7 @@ target_link_libraries(crc32c PRIVATE kernel_warn_interface)
 
 target_link_libraries(bitcoinkernel
   PRIVATE
+    bitcoin_consensus
     core_interface
     kernel_warn_interface
     secp256k1_objs
