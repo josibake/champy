@@ -3,7 +3,7 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #include <chain.h>
-#include <consensus/validation.h>
+#include <validation_state.h>
 #include <node/blockstorage.h>
 #include <sync.h>
 #include <test/util/setup_common.h>

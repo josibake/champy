@@ -5,7 +5,7 @@
 #include <addresstype.h>
 #include <clientversion.h>
 #include <coins.h>
-#include <consensus/tx_verify.h>
+#include <tx_verify.h>
 #include <streams.h>
 #include <test/util/common.h>
 #include <test/util/poolresourcetester.h>

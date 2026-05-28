@@ -3,7 +3,7 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #include <addresstype.h>
-#include <consensus/validation.h>
+#include <validation_state.h>
 #include <mempool_validation.h>
 #include <net_processing.h>
 #include <node/txdownloadman_impl.h>

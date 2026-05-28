@@ -2,16 +2,17 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
+#include <primitives/transaction.h>
+
 #include <chainparams.h>
 #include <coins.h>
-#include <consensus/tx_check.h>
-#include <consensus/tx_verify.h>
-#include <consensus/validation.h>
+#include <tx_check_adapters.h>
+#include <tx_verify.h>
+#include <validation_state.h>
 #include <core_io.h>
 #include <core_memusage.h>
 #include <policy/policy.h>
 #include <policy/settings.h>
-#include <primitives/transaction.h>
 #include <streams.h>
 #include <test/fuzz/fuzz.h>
 #include <test/util/random.h>
@@ -79,7 +80,7 @@ FUZZ_TARGET(transaction, .init = initialize_transaction)
     (void)tx.ToString();
 
     (void)EncodeHexTx(tx);
-    (void)GetLegacySigOpCount(tx);
+    (void)Consensus::GetLegacySigOpCount(tx);
     (void)GetTransactionWeight(tx);
     (void)GetVirtualTransactionSize(tx);
     (void)IsFinalTx(tx, /* nBlockHeight= */ 1024, /* nBlockTime= */ 1024);

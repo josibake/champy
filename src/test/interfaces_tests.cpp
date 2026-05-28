@@ -3,7 +3,7 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #include <chainparams.h>
-#include <consensus/validation.h>
+#include <validation_state.h>
 #include <interfaces/chain.h>
 #include <test/util/common.h>
 #include <test/util/setup_common.h>

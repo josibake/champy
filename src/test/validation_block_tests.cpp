@@ -8,7 +8,7 @@
 #include <chainparams.h>
 #include <consensus/merkle.h>
 #include <mempool_validation.h>
-#include <consensus/validation.h>
+#include <validation_state.h>
 #include <node/miner.h>
 #include <pow.h>
 #include <random.h>

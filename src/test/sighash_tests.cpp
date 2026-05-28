@@ -3,8 +3,8 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #include <common/system.h>
-#include <consensus/tx_check.h>
-#include <consensus/validation.h>
+#include <tx_check_adapters.h>
+#include <validation_state.h>
 #include <hash.h>
 #include <script/interpreter.h>
 #include <script/script.h>

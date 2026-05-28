@@ -5,7 +5,7 @@
 #include <block_validation.h>
 #include <chainparams.h>
 #include <consensus/merkle.h>
-#include <consensus/validation.h>
+#include <validation_state.h>
 #include <core_io.h>
 #include <core_memusage.h>
 #include <primitives/block.h>

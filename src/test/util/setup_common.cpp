@@ -11,7 +11,7 @@
 #include <common/system.h>
 #include <consensus/consensus.h>
 #include <consensus/params.h>
-#include <consensus/validation.h>
+#include <validation_state.h>
 #include <crypto/sha256.h>
 #include <init.h>
 #include <init/common.h>

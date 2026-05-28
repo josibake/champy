@@ -7,7 +7,7 @@
 #include <block_validation.h>
 #include <chainparams.h>
 #include <consensus/merkle.h>
-#include <consensus/validation.h>
+#include <validation_state.h>
 #include <key_io.h>
 #include <node/context.h>
 #include <pow.h>
