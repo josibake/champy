@@ -51,12 +51,9 @@ env -i HOME="$HOME" PATH="$PATH" USER="$USER" FILE_ENV="./ci/test/00_setup_env_a
 The test files (`FILE_ENV`) are constructed to test a wide range of
 configurations, rather than a single pass/fail. This helps to catch build
 failures and logic errors that present on platforms other than the ones the
-author has tested.
-
-Some builders use the dependency-generator in `./depends`, rather than using
-the system package manager to install build dependencies. This guarantees that
-the tester is using the same versions as the release builds, which also use
-`./depends`.
+author has tested. CI installs build dependencies through the system package
+manager for the selected image; reproducible package selections live outside
+this source repository.
 
 It is also possible to force a specific configuration without modifying the
 file. For example,
@@ -70,9 +67,7 @@ in order.
 
 ## Cache
 
-In order to avoid rebuilding all dependencies for each build, the binaries are
-cached and reused when possible. Changes in the dependency-generator will
-trigger cache-invalidation and rebuilds as necessary.
+The CI caches compiler output and previous release binaries when possible.
 
 ## Configuring a repository for CI
 

@@ -20,7 +20,7 @@ deadlock:src/qt/test/*
 # ------------------
 race:libzmq
 
-# To reproduce, build from depends with CFLAGS='-O0 -g' CXXFLAGS='-O0 -g'
+# To reproduce, build dependencies and binaries with CFLAGS='-O0 -g' CXXFLAGS='-O0 -g'
 race:zmq::*
 
 # Intermittent issues

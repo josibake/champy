@@ -79,19 +79,7 @@ To tag the version (or release candidate) in git, use the `make-tag.py` script f
 
 This will perform a few last-minute consistency checks in the build system files, and if they pass, create a signed tag.
 
-## Building
-
-### First time / New builders
-
-Install Guix using one of the installation methods detailed in
-[contrib/guix/INSTALL.md](/contrib/guix/INSTALL.md).
-
-Check out the source code in the following directory hierarchy.
-
-    cd /path/to/your/toplevel/build
-    git clone https://github.com/bitcoin-core/guix.sigs.git
-    git clone https://github.com/bitcoin-core/bitcoin-detached-sigs.git
-    git clone https://github.com/bitcoin/bitcoin.git
+## Release notes
 
 ### Write the release notes
 
@@ -103,146 +91,22 @@ Generate list of authors:
 
     git log --format='- %aN' v(current version, e.g. 25.0)..v(new version, e.g. 25.1) | grep -v 'merge-script' | sort -fiu
 
-### Setup and perform Guix builds
+## Building and signing
 
-Checkout the Bitcoin Core version you'd like to build:
+Release binaries, package metadata, dependency pinning, hardening policy, and
+codesigning flows are maintained in the external packaging repository. For each
+release candidate or final release:
 
-```sh
-pushd ./bitcoin
-SIGNER='(your builder key, ie bluematt, sipa, etc)'
-VERSION='(new version without v-prefix, e.g. 25.0)'
-git fetch origin "v${VERSION}"
-git checkout "v${VERSION}"
-popd
-```
+- Point the packaging repository at the signed source tag.
+- Record the packaging repository revision used for the build.
+- Build the supported platform artifacts from the packaging repository.
+- Generate and sign checksums for the resulting artifacts.
+- Have independent builders verify that their artifacts and checksums match.
+- Publish the artifacts and signed checksums together.
 
-Ensure your guix.sigs are up-to-date if you wish to `guix-verify` your builds
-against other `guix-attest` signatures.
-
-```sh
-git -C ./guix.sigs pull
-```
-
-### Create the macOS SDK tarball (first time, or when SDK version changes)
-
-Create the macOS SDK tarball, see the [macdeploy
-instructions](/contrib/macdeploy/README.md#sdk-extraction) for
-details.
-
-### Build and attest to build outputs
-
-Follow the relevant Guix README.md sections:
-- [Building](/contrib/guix/README.md#building)
-- [Attesting to build outputs](/contrib/guix/README.md#attesting-to-build-outputs)
-
-### Verify other builders' signatures to your own (optional)
-
-- [Verifying build output attestations](/contrib/guix/README.md#verifying-build-output-attestations)
-
-### Commit your non codesigned signature to guix.sigs
-
-```sh
-pushd ./guix.sigs
-git add "${VERSION}/${SIGNER}"/noncodesigned.SHA256SUMS{,.asc}
-git commit -m "Add attestations by ${SIGNER} for ${VERSION} non-codesigned"
-popd
-```
-
-Then open a Pull Request to the [guix.sigs repository](https://github.com/bitcoin-core/guix.sigs).
-
-## Codesigning
-
-### Windows codesigner only: Create detached Windows signatures
-
-In the `guix-build-${VERSION}/output/x86_64-w64-mingw32` directory:
-
-    tar xf bitcoin-${VERSION}-win64-codesigning.tar.gz
-    ./detached-sig-create.sh /path/to/codesign.key
-    Enter the passphrase for the key when prompted
-    signature-win.tar.gz will be created
-
-### Windows codesigners only: test code signatures
-It is advised to test that the code signature attaches properly prior to tagging by performing the `guix-codesign` step.
-However if this is done, once the release has been tagged in the bitcoin-detached-sigs repo, the `guix-codesign` step must be performed again in order for the guix attestation to be valid when compared against the attestations of non-codesigner builds. The directories created by `guix-codesign` will need to be cleared prior to running `guix-codesign` again.
-
-### Windows codesigners only: Commit the detached codesign payloads
-
-```sh
-pushd ./bitcoin-detached-sigs
-# checkout or create the appropriate branch for this release series
-git checkout --orphan <branch>
-rm -rf win
-tar xf signature-win.tar.gz
-git add -A
-git commit -m "<version>: win signature for {rc,final}"
-git tag -s "v${VERSION}" HEAD
-git push the current branch and new tag
-popd
-```
-
-### Non-codesigners: wait for Windows detached signatures
-
-- Once the Windows builds have 3 matching signatures, they will be signed with their respective release keys.
-- Detached signatures will then be committed to the [bitcoin-detached-sigs](https://github.com/bitcoin-core/bitcoin-detached-sigs) repository, which can be combined with the unsigned binaries to create signed executables.
-
-### Create the codesigned build outputs
-
-- [Codesigning build outputs](/contrib/guix/README.md#codesigning-build-outputs)
-
-### Verify other builders' signatures to your own (optional)
-
-- [Verifying build output attestations](/contrib/guix/README.md#verifying-build-output-attestations)
-
-### Commit your codesigned signature to guix.sigs (for the signed macOS/Windows binaries)
-
-```sh
-pushd ./guix.sigs
-git add "${VERSION}/${SIGNER}"/all.SHA256SUMS{,.asc}
-git commit -m "Add attestations by ${SIGNER} for ${VERSION} codesigned"
-popd
-```
-
-Then open a Pull Request to the [guix.sigs repository](https://github.com/bitcoin-core/guix.sigs).
-
-## After 6 or more people have guix-built and their results match
-
-After verifying signatures, combine the `all.SHA256SUMS.asc` file from all signers into `SHA256SUMS.asc`:
-
-```bash
-cat "$VERSION"/*/all.SHA256SUMS.asc > SHA256SUMS.asc
-```
-
-
-- Upload to the bitcoincore.org server:
-    1. The contents of each `./bitcoin/guix-build-${VERSION}/output/${HOST}/` directory.
-
-       Guix will output all of the results into host subdirectories, but the SHA256SUMS
-       file does not include these subdirectories. In order for downloads via torrent
-       to verify without directory structure modification, all of the uploaded files
-       need to be in the same directory as the SHA256SUMS file.
-
-       Wait until all of these files have finished uploading before uploading the SHA256SUMS(.asc) files.
-
-    2. The `SHA256SUMS` file
-
-    3. The `SHA256SUMS.asc` combined signature file you just created.
-
-- After uploading release candidate binaries, notify the bitcoin-core-dev mailing list and
-  bitcoin-dev group that a release candidate is available for testing. Include a link to the release
-  notes draft.
-
-- The server will automatically create an OpenTimestamps file and torrent of the directory.
-
-- Optionally help seed this torrent. To get the `magnet:` URI use:
-
-  ```sh
-  transmission-show -m <torrent file>
-  ```
-
-  Insert the magnet URI into the announcement sent to mailing lists. This permits
-  people without access to `bitcoincore.org` to download the binary distribution.
-  Also put it into the `optional_magnetlink:` slot in the YAML file for
-  bitcoincore.org.
+- After uploading release candidate binaries, notify the relevant mailing lists
+  that a release candidate is available for testing. Include a link to the
+  release notes draft.
 
 - Archive the release notes for the new version to `doc/release-notes/release-notes-${VERSION}.md`
   (branch `master` and branch of the release).
@@ -264,9 +128,8 @@ cat "$VERSION"/*/all.SHA256SUMS.asc > SHA256SUMS.asc
 
   - Delete ["Needs backport" labels](https://github.com/bitcoin/bitcoin/labels?q=backport) for non-existing branches.
 
-  - Update packaging repo
-
-      - Push the snap, see https://github.com/bitcoin-core/packaging/blob/main/snap/local/build.md
+  - Update the external packaging repository with the new source tag and any
+    packaging metadata changes.
 
   - Create a [new GitHub release](https://github.com/bitcoin/bitcoin/releases/new) with a link to the archived release notes
 

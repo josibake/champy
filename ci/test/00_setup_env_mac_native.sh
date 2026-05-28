@@ -11,7 +11,6 @@ export PIP_PACKAGES="--break-system-packages pycapnp zmq"
 export GOAL="install"
 export CMAKE_GENERATOR="Ninja"
 export CI_OS_NAME="macos"
-export NO_DEPENDS=1
 export OSX_SDK=""
 export BITCOIN_CONFIG="\
   --preset=dev-mode \

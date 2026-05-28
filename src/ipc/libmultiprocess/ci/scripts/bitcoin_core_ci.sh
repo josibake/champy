@@ -104,25 +104,6 @@ build_bitcoin_core() {
   cmake --build build --parallel "${BUILD_PARALLEL}"
 }
 
-build_depends_without_ipc() {
-  make -C depends -j "${BUILD_PARALLEL}" \
-    CC=clang \
-    CXX=clang++ \
-    CXXFLAGS="${LIBCXX_FLAGS}" \
-    NO_ZMQ=1 \
-    NO_USDT=1 \
-    NO_IPC=1
-}
-
-build_depends_with_ipc() {
-  make -C depends -j "${BUILD_PARALLEL}" \
-    CC=clang \
-    CXX=clang++ \
-    CXXFLAGS="${LIBCXX_FLAGS}" \
-    NO_ZMQ=1 \
-    NO_USDT=1
-}
-
 run_ipc_unit_tests() {
   local runs="$1"
 

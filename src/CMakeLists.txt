@@ -5,7 +5,12 @@
 include(AddWindowsResources)
 
 configure_file(${PROJECT_SOURCE_DIR}/cmake/bitcoin-build-config.h.in bitcoin-build-config.h USE_SOURCE_PERMISSIONS @ONLY)
-include_directories(${CMAKE_CURRENT_BINARY_DIR} ${CMAKE_CURRENT_SOURCE_DIR})
+add_library(bitcoin_source_interface INTERFACE)
+target_include_directories(bitcoin_source_interface INTERFACE
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}>
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
+)
+target_link_libraries(core_interface INTERFACE bitcoin_source_interface)
 
 #=============================
 # Subprojects

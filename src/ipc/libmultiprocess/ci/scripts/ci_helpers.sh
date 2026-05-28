@@ -66,10 +66,11 @@ install_pip_packages() {
 }
 
 determine_host() {
-  local config_guess="${1:-./depends/config.guess}"
+  local config_guess="${1:-cc -dumpmachine}"
   local output_key="${2:-host}"
 
-  write_output_var "${output_key}" "$("${config_guess}")"
+  # shellcheck disable=SC2086
+  write_output_var "${output_key}" "$(${config_guess})"
 }
 
 ci_helpers_main() {

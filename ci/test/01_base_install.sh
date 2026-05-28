@@ -91,29 +91,29 @@ if [[ "${RUN_IWYU}" == true ]]; then
   make -C /iwyu-build/ install "$MAKEJOBS"
 fi
 
-mkdir -p "${DEPENDS_DIR}/SDKs" "${DEPENDS_DIR}/sdk-sources"
+mkdir -p "${SDK_CACHE_DIR}/SDKs" "${SDK_CACHE_DIR}/sources"
 
 OSX_SDK_BASENAME="Xcode-${XCODE_VERSION}-${XCODE_BUILD_ID}-extracted-SDK-with-libcxx-headers"
 
-if [ -n "$XCODE_VERSION" ] && [ ! -d "${DEPENDS_DIR}/SDKs/${OSX_SDK_BASENAME}" ]; then
+if [ -n "$XCODE_VERSION" ] && [ ! -d "${SDK_CACHE_DIR}/SDKs/${OSX_SDK_BASENAME}" ]; then
   OSX_SDK_FILENAME="${OSX_SDK_BASENAME}.tar"
-  OSX_SDK_PATH="${DEPENDS_DIR}/sdk-sources/${OSX_SDK_FILENAME}"
+  OSX_SDK_PATH="${SDK_CACHE_DIR}/sources/${OSX_SDK_FILENAME}"
   if [ ! -f "$OSX_SDK_PATH" ]; then
     ${CI_RETRY_EXE} curl --location --fail "${SDK_URL}/${OSX_SDK_FILENAME}" -o "$OSX_SDK_PATH"
   fi
-  tar -C "${DEPENDS_DIR}/SDKs" -xf "$OSX_SDK_PATH"
+  tar -C "${SDK_CACHE_DIR}/SDKs" -xf "$OSX_SDK_PATH"
 fi
 
 FREEBSD_SDK_BASENAME="freebsd-${HOST}-${FREEBSD_VERSION}"
 
-if [ -n "$FREEBSD_VERSION" ] && [ ! -d "${DEPENDS_DIR}/SDKs/${FREEBSD_SDK_BASENAME}" ]; then
+if [ -n "$FREEBSD_VERSION" ] && [ ! -d "${SDK_CACHE_DIR}/SDKs/${FREEBSD_SDK_BASENAME}" ]; then
   FREEBSD_SDK_FILENAME="base-${FREEBSD_VERSION}.txz"
-  FREEBSD_SDK_PATH="${DEPENDS_DIR}/sdk-sources/${FREEBSD_SDK_FILENAME}"
+  FREEBSD_SDK_PATH="${SDK_CACHE_DIR}/sources/${FREEBSD_SDK_FILENAME}"
   if [ ! -f "$FREEBSD_SDK_PATH" ]; then
     ${CI_RETRY_EXE} curl --location --fail "https://download.freebsd.org/releases/amd64/${FREEBSD_VERSION}-RELEASE/base.txz" -o "$FREEBSD_SDK_PATH"
   fi
-  mkdir -p "${DEPENDS_DIR}/SDKs/${FREEBSD_SDK_BASENAME}"
-  tar -C "${DEPENDS_DIR}/SDKs/${FREEBSD_SDK_BASENAME}" -xf "$FREEBSD_SDK_PATH"
+  mkdir -p "${SDK_CACHE_DIR}/SDKs/${FREEBSD_SDK_BASENAME}"
+  tar -C "${SDK_CACHE_DIR}/SDKs/${FREEBSD_SDK_BASENAME}" -xf "$FREEBSD_SDK_PATH"
 fi
 
 echo -n "done" > "${CFG_DONE}"

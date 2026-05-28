@@ -34,22 +34,6 @@ set(CLIENT_VERSION_RC 0)
 set(CLIENT_VERSION_IS_RELEASE "false")
 set(COPYRIGHT_YEAR "2026")
 
-# During the enabling of the CXX and CXXOBJ languages, we modify
-# CMake's compiler/linker invocation strings by appending the content
-# of the user-defined `APPEND_*` variables, which allows overriding
-# any flag. We also ensure that the APPEND_* flags are considered
-# during CMake's tests, which use the `try_compile()` command.
-#
-# CMake's docs state that the `CMAKE_TRY_COMPILE_PLATFORM_VARIABLES`
-# variable "is meant to be set by CMake's platform information modules
-# for the current toolchain, or by a toolchain file." We do our best
-# to set it before the `project()` command.
-set(CMAKE_TRY_COMPILE_PLATFORM_VARIABLES
-  CMAKE_CXX_COMPILE_OBJECT
-  CMAKE_OBJCXX_COMPILE_OBJECT
-  CMAKE_CXX_LINK_EXECUTABLE
-)
-
 project(BitcoinCore
   VERSION ${CLIENT_VERSION_MAJOR}.${CLIENT_VERSION_MINOR}.${CLIENT_VERSION_BUILD}
   DESCRIPTION "Bitcoin client software"
@@ -111,8 +95,8 @@ option(BUILD_KERNEL_LIB "Build experimental bitcoinkernel library." ${BUILD_UTIL
 cmake_dependent_option(BUILD_KERNEL_TEST "Build tests for the experimental bitcoinkernel library." ON "BUILD_KERNEL_LIB" OFF)
 
 option(REDUCE_EXPORTS "Attempt to reduce exported symbols in the resulting executables." OFF)
+option(BITCOIN_ENABLE_HARDENING "Enable project hardening compile and link options." OFF)
 option(CMAKE_COMPILE_WARNING_AS_ERROR "Treat compiler warnings as errors." OFF)
-option(WITH_CCACHE "Attempt to use ccache for compiling." ON)
 
 option(WITH_ZMQ "Enable ZMQ notifications." OFF)
 if(WITH_ZMQ)
@@ -139,16 +123,6 @@ option(BUILD_FUZZ_BINARY "Build fuzz binary." OFF)
 option(BUILD_FOR_FUZZING "Build for fuzzing. Enabling this will disable all other targets and override BUILD_FUZZ_BINARY." OFF)
 
 option(INSTALL_MAN "Install man pages." ON)
-
-set(APPEND_CPPFLAGS "" CACHE STRING "Preprocessor flags that are appended to the command line after all other flags added by the build system. This variable is intended for debugging and special builds.")
-set(APPEND_CFLAGS "" CACHE STRING "C compiler flags that are appended to the command line after all other flags added by the build system. This variable is intended for debugging and special builds.")
-set(APPEND_CXXFLAGS "" CACHE STRING "(Objective) C++ compiler flags that are appended to the command line after all other flags added by the build system. This variable is intended for debugging and special builds.")
-set(APPEND_LDFLAGS "" CACHE STRING "Linker flags that are appended to the command line after all other flags added by the build system. This variable is intended for debugging and special builds.")
-# Appending to this low-level rule variables is the only way to
-# guarantee that the flags appear at the end of the command line.
-string(APPEND CMAKE_CXX_COMPILE_OBJECT " ${APPEND_CPPFLAGS} ${APPEND_CXXFLAGS}")
-string(APPEND CMAKE_CXX_CREATE_SHARED_LIBRARY " ${APPEND_LDFLAGS}")
-string(APPEND CMAKE_CXX_LINK_EXECUTABLE " ${APPEND_LDFLAGS}")
 
 # Check required C++ toolchain features early.
 include(CheckCXXFeatures)
@@ -226,13 +200,9 @@ if(WIN32)
   )
 
   if(MSVC)
-    if(VCPKG_TARGET_TRIPLET MATCHES "-static")
-      set(msvc_library_linkage "")
-    else()
-      set(msvc_library_linkage "DLL")
+    if(NOT DEFINED CMAKE_MSVC_RUNTIME_LIBRARY)
+      set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
     endif()
-    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>${msvc_library_linkage}")
-    unset(msvc_library_linkage)
 
     target_compile_definitions(core_interface INTERFACE
       _UNICODE;UNICODE
@@ -261,7 +231,6 @@ if(WIN32)
     # Avoid the use of aligned vector instructions when building for Windows.
     # See https://gcc.gnu.org/bugzilla/show_bug.cgi?id=54412.
     try_append_cxx_flags("-Wa,-muse-unaligned-vector-move" TARGET core_interface SKIP_LINK)
-    try_append_linker_flag("-static" TARGET core_interface)
     # We support Windows 10+, however it's not possible to set these values accordingly,
     # due to a bug in mingw-w64. See https://sourceforge.net/p/mingw-w64/bugs/968/.
     # As a best effort, target Windows 8.
@@ -379,8 +348,6 @@ add_boost_if_needed()
 
 include(cmake/introspection.cmake)
 
-include(cmake/ccache.cmake)
-
 add_library(warn_interface INTERFACE)
 target_link_libraries(core_interface INTERFACE warn_interface)
 if(MSVC)
@@ -442,82 +409,78 @@ configure_file(contrib/filter-lcov.py filter-lcov.py USE_SOURCE_PERMISSIONS COPY
 # Don't allow extended (non-ASCII) symbols in identifiers. This is easier for code review.
 try_append_cxx_flags("-fno-extended-identifiers" TARGET core_interface SKIP_LINK)
 
-# Set `-fmacro-prefix-map`, so that source file names are expanded without the
-# src prefix.
-try_append_cxx_flags("-fmacro-prefix-map=A=B" TARGET core_interface SKIP_LINK
-  IF_CHECK_PASSED "-fmacro-prefix-map=${PROJECT_SOURCE_DIR}/src=."
-)
-
 # GCC versions 13.2 (and earlier) are subject to a class of bugs, see
 # https://gcc.gnu.org/bugzilla/show_bug.cgi?id=90348 and the meta bug
 # https://gcc.gnu.org/bugzilla/show_bug.cgi?id=111843. To work around that, set
 # -fstack-reuse=none for all gcc builds. (Only gcc understands this flag).
 try_append_cxx_flags("-fstack-reuse=none" TARGET core_interface)
 
-if(MSVC)
-  try_append_linker_flag("/DYNAMICBASE" TARGET core_interface)
-  try_append_linker_flag("/HIGHENTROPYVA" TARGET core_interface)
-  try_append_linker_flag("/NXCOMPAT" TARGET core_interface)
-else()
+if(BITCOIN_ENABLE_HARDENING)
+  if(MSVC)
+    try_append_linker_flag("/DYNAMICBASE" TARGET core_interface)
+    try_append_linker_flag("/HIGHENTROPYVA" TARGET core_interface)
+    try_append_linker_flag("/NXCOMPAT" TARGET core_interface)
+  else()
 
-  # _FORTIFY_SOURCE requires that there is some level of optimization,
-  # otherwise it does nothing and just creates a compiler warning.
-  try_append_cxx_flags("-U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=3"
-    RESULT_VAR cxx_supports_fortify_source
-    SOURCE "int main() {
-            # if !defined __OPTIMIZE__ || __OPTIMIZE__ <= 0
-              #error
-            #endif
-            }"
-  )
-  if(cxx_supports_fortify_source)
-    target_compile_options(core_interface INTERFACE
-      -U_FORTIFY_SOURCE
-      -D_FORTIFY_SOURCE=3
+    # _FORTIFY_SOURCE requires that there is some level of optimization,
+    # otherwise it does nothing and just creates a compiler warning.
+    try_append_cxx_flags("-U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=3"
+      RESULT_VAR cxx_supports_fortify_source
+      SOURCE "int main() {
+              # if !defined __OPTIMIZE__ || __OPTIMIZE__ <= 0
+                #error
+              #endif
+              }"
     )
-  endif()
-  unset(cxx_supports_fortify_source)
-
-  try_append_cxx_flags("-Wstack-protector" TARGET core_interface SKIP_LINK)
-  try_append_cxx_flags("-fstack-protector-all" TARGET core_interface)
-  try_append_cxx_flags("-fcf-protection=full" TARGET core_interface)
-
-  if(MINGW)
-    # stack-clash-protection is a no-op for Windows.
-    # See https://gcc.gnu.org/bugzilla/show_bug.cgi?id=90458 for more details.
-  else()
-    try_append_cxx_flags("-fstack-clash-protection" TARGET core_interface)
-  endif()
-
-  if(CMAKE_SYSTEM_PROCESSOR STREQUAL "aarch64" OR CMAKE_SYSTEM_PROCESSOR STREQUAL "arm64")
-    if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
-      try_append_cxx_flags("-mbranch-protection=bti" TARGET core_interface SKIP_LINK)
-    else()
-      try_append_cxx_flags("-mbranch-protection=standard" TARGET core_interface SKIP_LINK)
+    if(cxx_supports_fortify_source)
+      target_compile_options(core_interface INTERFACE
+        -U_FORTIFY_SOURCE
+        -D_FORTIFY_SOURCE=3
+      )
     endif()
-  endif()
+    unset(cxx_supports_fortify_source)
 
-  try_append_linker_flag("-Wl,--enable-reloc-section" TARGET core_interface)
-  try_append_linker_flag("-Wl,--dynamicbase" TARGET core_interface)
-  try_append_linker_flag("-Wl,--nxcompat" TARGET core_interface)
-  try_append_linker_flag("-Wl,--high-entropy-va" TARGET core_interface)
-  try_append_linker_flag("-Wl,-z,relro" TARGET core_interface)
-  try_append_linker_flag("-Wl,-z,now" TARGET core_interface)
-  # TODO: This can be dropped once Bitcoin Core no longer supports
-  #       NetBSD 10.0 or if upstream fix is backported.
-  # NetBSD's dynamic linker ld.elf_so < 11.0 supports exactly 2
-  # `PT_LOAD` segments and binaries linked with `-z separate-code`
-  # have 4 `PT_LOAD` segments.
-  # Relevant discussions:
-  # - https://github.com/bitcoin/bitcoin/pull/28724#issuecomment-2589347934
-  # - https://mail-index.netbsd.org/tech-userlevel/2023/01/05/msg013666.html
-  if(CMAKE_SYSTEM_NAME STREQUAL "NetBSD" AND CMAKE_SYSTEM_VERSION VERSION_LESS 11.0)
-    try_append_linker_flag("-Wl,-z,noseparate-code" TARGET core_interface)
-  else()
-    try_append_linker_flag("-Wl,-z,separate-code" TARGET core_interface)
-  endif()
-  if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
-    try_append_linker_flag("-Wl,-fixup_chains" TARGET core_interface)
+    try_append_cxx_flags("-Wstack-protector" TARGET core_interface SKIP_LINK)
+    try_append_cxx_flags("-fstack-protector-all" TARGET core_interface)
+    try_append_cxx_flags("-fcf-protection=full" TARGET core_interface)
+
+    if(MINGW)
+      # stack-clash-protection is a no-op for Windows.
+      # See https://gcc.gnu.org/bugzilla/show_bug.cgi?id=90458 for more details.
+    else()
+      try_append_cxx_flags("-fstack-clash-protection" TARGET core_interface)
+    endif()
+
+    if(CMAKE_SYSTEM_PROCESSOR STREQUAL "aarch64" OR CMAKE_SYSTEM_PROCESSOR STREQUAL "arm64")
+      if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+        try_append_cxx_flags("-mbranch-protection=bti" TARGET core_interface SKIP_LINK)
+      else()
+        try_append_cxx_flags("-mbranch-protection=standard" TARGET core_interface SKIP_LINK)
+      endif()
+    endif()
+
+    try_append_linker_flag("-Wl,--enable-reloc-section" TARGET core_interface)
+    try_append_linker_flag("-Wl,--dynamicbase" TARGET core_interface)
+    try_append_linker_flag("-Wl,--nxcompat" TARGET core_interface)
+    try_append_linker_flag("-Wl,--high-entropy-va" TARGET core_interface)
+    try_append_linker_flag("-Wl,-z,relro" TARGET core_interface)
+    try_append_linker_flag("-Wl,-z,now" TARGET core_interface)
+    # TODO: This can be dropped once Bitcoin Core no longer supports
+    #       NetBSD 10.0 or if upstream fix is backported.
+    # NetBSD's dynamic linker ld.elf_so < 11.0 supports exactly 2
+    # `PT_LOAD` segments and binaries linked with `-z separate-code`
+    # have 4 `PT_LOAD` segments.
+    # Relevant discussions:
+    # - https://github.com/bitcoin/bitcoin/pull/28724#issuecomment-2589347934
+    # - https://mail-index.netbsd.org/tech-userlevel/2023/01/05/msg013666.html
+    if(CMAKE_SYSTEM_NAME STREQUAL "NetBSD" AND CMAKE_SYSTEM_VERSION VERSION_LESS 11.0)
+      try_append_linker_flag("-Wl,-z,noseparate-code" TARGET core_interface)
+    else()
+      try_append_linker_flag("-Wl,-z,separate-code" TARGET core_interface)
+    endif()
+    if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+      try_append_linker_flag("-Wl,-fixup_chains" TARGET core_interface)
+    endif()
   endif()
 endif()
 
@@ -541,19 +504,6 @@ if(NOT TARGET Python3::Interpreter)
   )
 endif()
 
-target_compile_definitions(core_interface INTERFACE ${DEPENDS_COMPILE_DEFINITIONS})
-target_compile_definitions(core_interface_relwithdebinfo INTERFACE ${DEPENDS_COMPILE_DEFINITIONS_RELWITHDEBINFO})
-target_compile_definitions(core_interface_debug INTERFACE ${DEPENDS_COMPILE_DEFINITIONS_DEBUG})
-
-# If the {CXX,LD}FLAGS environment variables are defined during building depends
-# and configuring this build system, their content might be duplicated.
-if(DEFINED ENV{CXXFLAGS})
-  deduplicate_flags(CMAKE_CXX_FLAGS)
-endif()
-if(DEFINED ENV{LDFLAGS})
-  deduplicate_flags(CMAKE_EXE_LINKER_FLAGS)
-endif()
-
 if(BUILD_TESTS)
   enable_testing()
 endif()
@@ -567,11 +517,6 @@ add_subdirectory(test)
 add_subdirectory(doc)
 
 add_subdirectory(src)
-
-include(Maintenance)
-setup_split_debug_script()
-add_windows_deploy_target()
-add_macos_deploy_target()
 
 message("\n")
 message("Configure summary")
@@ -602,8 +547,8 @@ message("Cross compiling ....................... ${cross_status}")
 message("C++ compiler .......................... ${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION}, ${CMAKE_CXX_COMPILER}")
 include(FlagsSummary)
 flags_summary()
+message("Project hardening ..................... ${BITCOIN_ENABLE_HARDENING}")
 message("Treat compiler warnings as errors ..... ${CMAKE_COMPILE_WARNING_AS_ERROR}")
-message("Use ccache for compiling .............. ${WITH_CCACHE}")
 message("\n")
 if(configure_warnings)
     message("  ******\n")

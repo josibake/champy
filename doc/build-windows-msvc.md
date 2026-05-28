@@ -14,7 +14,8 @@ WinGet is available on all supported Windows versions. The applications mentione
 
 #### Visual Studio
 
-This guide relies on using CMake and vcpkg package manager provided with the Visual Studio installation.
+This guide relies on CMake and dependencies installed outside this source
+repository.
 
 Minimum required version: Visual Studio 2026 version 18.3 with the "Desktop development with C++" workload.
 
@@ -53,19 +54,6 @@ git clone https://github.com/bitcoin/bitcoin.git
 ```
 
 
-## Triplets and Presets
-
-The Bitcoin Core project supports the following vcpkg triplets:
-- `x64-windows` (both CRT and library linkage is dynamic)
-- `x64-windows-static` (both CRT and library linkage is static)
-
-To facilitate build process, the Bitcoin Core project provides presets, which are used in this guide.
-
-Available presets can be listed as follows:
-```powershell
-cmake --list-presets
-```
-
 ## Building
 
 CMake will put the resulting object files, libraries, and executables into a dedicated build directory.
@@ -74,55 +62,16 @@ In the following instructions, the "Debug" configuration can be specified instea
 
 Run `cmake -B build -LH` to see the full list of available options.
 
-### Building with Static Linking
+### Configure and build
 
 ```powershell
-cmake -B build --preset vs2026-static          # It might take a while if the vcpkg binary cache is unpopulated or invalidated.
+cmake -B build -G "Visual Studio 18 2026"
 cmake --build build --config Release           # Append "-j N" for N parallel jobs.
 ctest --test-dir build --build-config Release  # Append "-j N" for N parallel tests.
 cmake --install build --config Release         # Optional.
 ```
 
-### Building with Dynamic Linking
-
-```powershell
-cmake -B build --preset vs2026                 # It might take a while if the vcpkg binary cache is unpopulated or invalidated.
-cmake --build build --config Release           # Append "-j N" for N parallel jobs.
-ctest --test-dir build --build-config Release  # Append "-j N" for N parallel tests.
-```
-
-### vcpkg-specific Issues and Workarounds
-
-vcpkg installation during the configuration step might fail for various reasons unrelated to Bitcoin Core.
-
-If the failure is due to a "Buildtrees path … is too long" error, which is often encountered when
-using the default vcpkg installation provided by Visual Studio, you can
-specify a shorter path to store intermediate build files by using
-the [`--x-buildtrees-root`](https://learn.microsoft.com/en-us/vcpkg/commands/common-options#buildtrees-root) option:
-
-```powershell
-cmake -B build --preset vs2026-static -DVCPKG_INSTALL_OPTIONS="--x-buildtrees-root=C:\vcpkg"
-```
-
-If vcpkg installation fails with the message "Paths with embedded space may be handled incorrectly", which
-can occur if your local Bitcoin Core repository path contains spaces, you can override the vcpkg install directory
-by setting the [`VCPKG_INSTALLED_DIR`](https://github.com/microsoft/vcpkg-docs/blob/main/vcpkg/users/buildsystems/cmake-integration.md#vcpkg_installed_dir) variable:
-
-```powershell
-cmake -B build --preset vs2026-static -DVCPKG_INSTALLED_DIR="C:\path_without_spaces"
-```
-
 ## Performance Notes
-
-### vcpkg Manifest Default Features
-
-One can skip vcpkg manifest default features to speed up the configuration step.
-For example, the following invocation will skip all features except for "tests" and their dependencies:
-```powershell
-cmake -B build --preset vs2026 -DVCPKG_MANIFEST_NO_DEFAULT_FEATURES=ON -DVCPKG_MANIFEST_FEATURES="tests" -DWITH_ZMQ=OFF
-```
-
-Available features are listed in the [`vcpkg.json`](/vcpkg.json) file.
 
 ### Antivirus Software
 

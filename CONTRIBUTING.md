@@ -152,7 +152,7 @@ the pull request affects. Valid areas are:
   - `test`, `qa` or `ci` for changes to the unit tests, QA tests or CI code
   - `util` or `lib` for changes to the utils or libraries
   - `build` for changes to CMake
-  - `guix` for changes to the GUIX reproducible builds
+  - `packaging` for changes to external package definitions
 
 Examples:
 

@@ -54,7 +54,7 @@ For Debian "oldstable", or earlier Ubuntu LTS releases, you may need to pick a
 later compiler version, according to the [dependencies](/doc/dependencies.md)
 documentation.
 
-Now, you can either build from self-compiled [depends](#dependencies) or install the required dependencies:
+Install the required dependencies:
 
     sudo apt-get install libboost-dev libcapnp-dev capnproto
 
@@ -75,7 +75,7 @@ Build requirements:
 
     sudo dnf install gcc-c++ cmake make python3
 
-Now, you can either build from self-compiled [depends](#dependencies) or install the required dependencies:
+Install the required dependencies:
 
     sudo dnf install boost-devel capnproto capnproto-devel
 
@@ -96,7 +96,7 @@ Build requirements:
 
     apk add build-base cmake linux-headers pkgconf python3
 
-Now, you can either build from self-compiled [depends](#dependencies) or install the required dependencies:
+Install the required dependencies:
 
     apk add boost-dev capnproto capnproto-dev
 
@@ -108,9 +108,9 @@ User-Space, Statically Defined Tracing (USDT) is not supported or tested on Alpi
 
 ## Dependencies
 
-See [dependencies.md](dependencies.md) for a complete overview, and
-[depends](/depends/README.md) on how to compile them yourself, if you wish to
-not use the packages of your Linux distribution.
+See [dependencies.md](dependencies.md) for a complete overview. If you need a
+reproducible package environment instead of distribution packages, use the
+external packaging repository.
 
 Setup and Build Example: Arch Linux
 -----------------------------------
@@ -124,4 +124,3 @@ This example lists the steps necessary to setup and build a command line only di
     ctest --test-dir build
     ./build/bin/bitcoind
     ./build/bin/bitcoin help
-

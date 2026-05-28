@@ -10,23 +10,9 @@ The `-debug=ipc` command line option can be used to see requests and responses b
 
 [Cap'n Proto](https://capnproto.org/) is a required dependency. See [build-unix.md](build-unix.md) and [build-osx.md](build-osx.md) for information about installing dependencies.
 
-### Depends installation
-
-Alternatively the [depends system](../depends) can be used to avoid needing to install local dependencies:
-
-```
-cd <BITCOIN_SOURCE_DIRECTORY>
-make -C depends
-# Set host platform to output of gcc -dumpmachine or clang -dumpmachine or check the depends/ directory for the generated subdirectory name
-HOST_PLATFORM="x86_64-pc-linux-gnu"
-cmake -B build --toolchain=depends/$HOST_PLATFORM/toolchain.cmake
-cmake --build build
-build/bin/bitcoin -m node -regtest -printtoconsole -debug=ipc
-```
-
 ### Cross-compiling
 
-When cross-compiling and not using depends, native code generation tools from [libmultiprocess](https://github.com/bitcoin-core/libmultiprocess) and [Cap'n Proto](https://capnproto.org/) are required. They can be passed to the cmake build by specifying `-DMPGEN_EXECUTABLE=/path/to/mpgen -DCAPNP_EXECUTABLE=/path/to/capnp -DCAPNPC_CXX_EXECUTABLE=/path/to/capnpc-c++` options.
+When cross-compiling, native code generation tools from [libmultiprocess](https://github.com/bitcoin-core/libmultiprocess) and [Cap'n Proto](https://capnproto.org/) are required. They can be passed to the cmake build by specifying `-DMPGEN_EXECUTABLE=/path/to/mpgen -DCAPNP_EXECUTABLE=/path/to/capnp -DCAPNPC_CXX_EXECUTABLE=/path/to/capnpc-c++` options.
 
 ### External libmultiprocess installation
 

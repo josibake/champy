@@ -1,6 +1,7 @@
 function(add_example name)
   set(target_name ${name}_example)
   add_executable(${target_name} ${name}.c)
+  secp256k1_apply_extra_flags(${target_name})
   target_include_directories(${target_name} PRIVATE
     ${PROJECT_SOURCE_DIR}/include
   )

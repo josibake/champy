@@ -345,8 +345,8 @@ RPC that, when enabled, logs the location and duration of each lock contention
 to the `debug.log` file.
 
 The `-DCMAKE_BUILD_TYPE=Debug` build option adds `-DDEBUG_LOCKCONTENTION` to the
-compiler flags. You may also enable it manually by building with `-DDEBUG_LOCKCONTENTION`
-added to your CPPFLAGS, i.e. `-DAPPEND_CPPFLAGS="-DDEBUG_LOCKCONTENTION"`.
+compiler flags. You may also enable it manually by configuring with
+`-DCMAKE_CXX_FLAGS="-DDEBUG_LOCKCONTENTION"`.
 
 You can then use the `-debug=lock` configuration option at bitcoind startup or
 `bitcoin-cli logging '["lock"]'` at runtime to turn on lock contention logging.
@@ -442,9 +442,9 @@ Configure the build with the following flags:
 # MacOS may instead require `-DCMAKE_C_COMPILER="$(brew --prefix llvm)/bin/clang" -DCMAKE_CXX_COMPILER="$(brew --prefix llvm)/bin/clang++"`
 cmake -B build -DCMAKE_C_COMPILER="clang" \
    -DCMAKE_CXX_COMPILER="clang++" \
-   -DAPPEND_CFLAGS="-fprofile-instr-generate -fcoverage-mapping" \
-   -DAPPEND_CXXFLAGS="-fprofile-instr-generate -fcoverage-mapping" \
-   -DAPPEND_LDFLAGS="-fprofile-instr-generate -fcoverage-mapping"
+   -DCMAKE_C_FLAGS="-fprofile-instr-generate -fcoverage-mapping" \
+   -DCMAKE_CXX_FLAGS="-fprofile-instr-generate -fcoverage-mapping" \
+   -DCMAKE_EXE_LINKER_FLAGS="-fprofile-instr-generate -fcoverage-mapping"
 cmake --build build # Append "-j N" here for N parallel jobs.
 ```
 

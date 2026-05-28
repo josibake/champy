@@ -93,11 +93,6 @@ brew install python
 
 ---
 
-#### Deploy Dependencies
-
-You can [deploy](#3-deploy-optional) a `.zip` containing the Bitcoin Core application.
-It is required that you have `python` and `zip` installed.
-
 ## Building Bitcoin Core
 
 ### 1. Configuration
@@ -121,14 +116,6 @@ Run the following in your terminal to compile Bitcoin Core:
 ``` bash
 cmake --build build     # Append "-j N" here for N parallel jobs.
 ctest --test-dir build  # Append "-j N" for N parallel tests.
-```
-
-### 3. Deploy (optional)
-
-You can also create a `.zip` containing the `.app` bundle by running the following command:
-
-``` bash
-cmake --build build --target deploy
 ```
 
 ## Running Bitcoin Core

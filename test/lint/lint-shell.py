@@ -47,17 +47,16 @@ def main():
     ]
     sourced_files = get_files(sourced_files_cmd)
 
-    # build the `guix files` list
-    guix_files_cmd = [
+    # build the bash helper files list
+    bash_helper_files_cmd = [
         'git',
         'grep',
         '-El',
         r'^#!\/usr\/bin\/env bash',
         '--',
-        'contrib/guix',
         'contrib/shell',
     ]
-    guix_files = get_files(guix_files_cmd)
+    bash_helper_files = get_files(bash_helper_files_cmd)
 
     # build the other script files list
     files_cmd = [
@@ -84,7 +83,7 @@ def main():
     ]
     shellcheck_cmd.append(exclude)
     shellcheck_cmd.extend(sourced_files)
-    shellcheck_cmd.extend(guix_files)
+    shellcheck_cmd.extend(bash_helper_files)
     shellcheck_cmd.extend(files)
 
     # run the `shellcheck` command

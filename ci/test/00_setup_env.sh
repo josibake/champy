@@ -16,9 +16,8 @@ export BASE_READ_ONLY_DIR
 # This folder will also hold any SDKs.
 # This folder only exists on the ci guest and will be a copy of BASE_READ_ONLY_DIR
 export BASE_ROOT_DIR="${BASE_ROOT_DIR:-/ci_container_base}"
-# The depends dir.
-# This folder exists only on the ci guest, and on the ci host as a volume.
-export DEPENDS_DIR=${DEPENDS_DIR:-$BASE_ROOT_DIR/depends}
+# SDK cache used by cross-build jobs that need external platform SDKs.
+export SDK_CACHE_DIR=${SDK_CACHE_DIR:-$BASE_ROOT_DIR/ci/sdks}
 # A folder for the ci system to put temporary files (build result, datadirs for tests, ...)
 # This folder only exists on the ci guest.
 export BASE_SCRATCH_DIR=${BASE_SCRATCH_DIR:-$BASE_ROOT_DIR/ci/scratch}

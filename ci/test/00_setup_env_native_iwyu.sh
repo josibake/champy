@@ -11,7 +11,6 @@ export CONTAINER_NAME=ci_native_iwyu
 export IWYU_LLVM_V="22"
 export APT_LLVM_V="${IWYU_LLVM_V}"
 export PACKAGES="clang-${IWYU_LLVM_V} clang-format-${IWYU_LLVM_V} libclang-${IWYU_LLVM_V}-dev llvm-${IWYU_LLVM_V}-dev jq libevent-dev libboost-dev libzmq3-dev systemtap-sdt-dev libcapnp-dev capnproto"
-export NO_DEPENDS=1
 export RUN_UNIT_TESTS=false
 export RUN_FUNCTIONAL_TESTS=false
 export RUN_FUZZ_TESTS=false

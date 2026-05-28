@@ -15,7 +15,6 @@ fn get_pathspecs_exclude_whitespace() -> Vec<String> {
             // Permanent excludes
             "*.patch",
             "src/qt/locale",
-            "contrib/windeploy/win-codesign.cert",
             "doc/README_windows.txt",
             // Temporary excludes, or existing violations
             "src/qt/res/src/*.svg",

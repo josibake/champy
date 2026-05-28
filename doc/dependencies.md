@@ -1,8 +1,9 @@
 # Dependencies
 
 These are the dependencies used by Bitcoin Core.
-You can find installation instructions in the `/doc/build-*.md` file for your platform, or self-compile
-them using [depends](/depends/README.md).
+You can find installation instructions in the `/doc/build-*.md` file for your
+platform. Exact package selections for reproducible builds are maintained by
+external packaging.
 
 ## Compiler
 
@@ -21,10 +22,10 @@ Bitcoin Core requires one of the following compilers.
 
 | Dependency | Releases | Minimum required |
 | --- | --- | --- |
-| [Boost](../depends/packages/boost.mk) | [link](https://www.boost.org/users/download/) | [1.74.0](https://github.com/bitcoin/bitcoin/pull/34107) |
-| [Cap'n Proto](../depends/packages/native_capnp.mk) ([IPC](multiprocess.md)) | [link](https://capnproto.org/) | [0.7.1](https://github.com/bitcoin/bitcoin/pull/33241) |
+| [Boost](https://www.boost.org/) | [link](https://www.boost.org/users/download/) | [1.74.0](https://github.com/bitcoin/bitcoin/pull/34107) |
+| [Cap'n Proto](https://capnproto.org/) ([IPC](multiprocess.md)) | [link](https://capnproto.org/) | [0.7.1](https://github.com/bitcoin/bitcoin/pull/33241) |
 | CMake | [link](https://cmake.org/) | [3.22](https://github.com/bitcoin/bitcoin/pull/30454) |
-| [libmultiprocess](../depends/packages/native_libmultiprocess.mk) ([IPC](multiprocess.md)) | [link](https://github.com/bitcoin-core/libmultiprocess/tags) | [v7.0-pre1](https://github.com/bitcoin/bitcoin/pull/33517) |
+| [libmultiprocess](https://github.com/bitcoin-core/libmultiprocess) ([IPC](multiprocess.md)) | [link](https://github.com/bitcoin-core/libmultiprocess/tags) | [v7.0-pre1](https://github.com/bitcoin/bitcoin/pull/33517) |
 
 ### Runtime
 
@@ -39,6 +40,5 @@ Bitcoin Core requires one of the following compilers.
 | Dependency | Releases | Minimum required |
 | --- | --- | --- |
 | Python (scripts, tests) | [link](https://www.python.org) | [3.10](https://github.com/bitcoin/bitcoin/pull/30527) |
-| [systemtap](../depends/packages/systemtap.mk) ([tracing](tracing.md)) | [link](https://sourceware.org/systemtap/) | N/A |
-| [ZeroMQ](../depends/packages/zeromq.mk) (notifications) | [link](https://github.com/zeromq/libzmq/releases) | 4.0.0 |
-
+| [systemtap](https://sourceware.org/systemtap/) ([tracing](tracing.md)) | [link](https://sourceware.org/systemtap/) | N/A |
+| [ZeroMQ](https://zeromq.org/) (notifications) | [link](https://github.com/zeromq/libzmq/releases) | 4.0.0 |

@@ -27,16 +27,7 @@ Build Tools and Keys
 ### Packaging ###
 The [Debian](/contrib/debian) subfolder contains the copyright file.
 
-All other packaging related files can be found in the [bitcoin-core/packaging](https://github.com/bitcoin-core/packaging) repository.
-
-### [MacDeploy](/contrib/macdeploy) ###
-Scripts and notes for Mac builds.
-
-Test and Verify Tools
----------------------
-
-### [Verify-Binaries](/contrib/verify-binaries) ###
-This script attempts to download and verify the signature file SHA256SUMS.asc from bitcoin.org.
+Packaging related files are maintained outside of this source repository.
 
 Command Line Tools
 ---------------------

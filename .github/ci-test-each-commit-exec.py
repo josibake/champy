@@ -35,8 +35,8 @@ def main():
         # Use mold, because it is faster than the default linker
         "-DCMAKE_EXE_LINKER_FLAGS=-fuse-ld=mold",
         # Use Debug build type for more debug checks, but enable optimizations
-        "-DAPPEND_CXXFLAGS='-O3 -g2'",
-        "-DAPPEND_CFLAGS='-O3 -g2'",
+        "-DCMAKE_CXX_FLAGS_DEBUG='-O3 -g2'",
+        "-DCMAKE_C_FLAGS_DEBUG='-O3 -g2'",
         "-DCMAKE_BUILD_TYPE=Debug",
         "-DCMAKE_COMPILE_WARNING_AS_ERROR=ON",
         "--preset=dev-mode",

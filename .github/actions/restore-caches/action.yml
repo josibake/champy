@@ -1,5 +1,5 @@
 name: 'Restore Caches'
-description: 'Restore ccache, depends sources, and built depends caches'
+description: 'Restore ccache, SDK, and previous releases caches'
 runs:
   using: 'composite'
   steps:
@@ -12,23 +12,14 @@ runs:
         restore-keys: |
           ccache-${{ env.CONTAINER_NAME }}-
 
-    - name: Restore depends sources cache
-      id: depends-sources
+    - name: Restore SDK cache
+      id: sdk-cache
       uses: cirruslabs/cache/restore@v5
       with:
-        path: ${{ env.SOURCES_PATH }}
-        key: depends-sources-${{ env.CONTAINER_NAME }}-${{ env.DEPENDS_HASH }}
+        path: ${{ env.SDK_CACHE_DIR }}
+        key: sdk-cache-${{ env.CONTAINER_NAME }}-${{ env.SDK_CACHE_HASH }}
         restore-keys: |
-          depends-sources-${{ env.CONTAINER_NAME }}-
-
-    - name: Restore built depends cache
-      id: depends-built
-      uses: cirruslabs/cache/restore@v5
-      with:
-        path: ${{ env.BASE_CACHE }}
-        key: depends-built-${{ env.CONTAINER_NAME }}-${{ env.DEPENDS_HASH }}
-        restore-keys: |
-          depends-built-${{ env.CONTAINER_NAME }}-
+          sdk-cache-${{ env.CONTAINER_NAME }}-
 
     - name: Restore previous releases cache
       id: previous-releases
@@ -42,6 +33,5 @@ runs:
     - name: export cache hits
       shell: bash
       run: |
-        echo "depends-sources-cache-hit=${{ steps.depends-sources.outputs.cache-hit }}" >> $GITHUB_ENV
-        echo "depends-built-cache-hit=${{ steps.depends-built.outputs.cache-hit }}" >> $GITHUB_ENV
+        echo "sdk-cache-hit=${{ steps.sdk-cache.outputs.cache-hit }}" >> $GITHUB_ENV
         echo "previous-releases-cache-hit=${{ steps.previous-releases.outputs.cache-hit }}" >> $GITHUB_ENV

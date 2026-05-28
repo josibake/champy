@@ -40,10 +40,9 @@ if [[ "$CONTAINER_NAME" == "ci_native_asan" ]]; then
   ${CI_RETRY_EXE} bash -c "apt-get install --no-install-recommends --no-upgrade -y $PACKAGES"
 fi
 
-# What host to compile for. See also ./depends/README.md
 # Tests that need cross-compilation export the appropriate HOST.
-# Tests that run natively guess the host
-export HOST=${HOST:-$("$BASE_ROOT_DIR/depends/config.guess")}
+# Tests that run natively use a host label for build directory naming.
+export HOST=${HOST:-"$(uname -m)-$(uname -s | tr '[:upper:]' '[:lower:]')"}
 
 echo "=== BEGIN env ==="
 env
@@ -87,22 +86,11 @@ else
   echo > "${HOME}/.bitcoin"
 fi
 
-if [ -z "$NO_DEPENDS" ]; then
-  if [[ $CI_IMAGE_NAME_TAG == *alpine* ]]; then
-    SHELL_OPTS="CONFIG_SHELL=/usr/bin/dash"
-  else
-    SHELL_OPTS="CONFIG_SHELL="
-  fi
-  bash -c "$SHELL_OPTS make $MAKEJOBS -C depends HOST=$HOST $DEP_OPTS LOG=1"
-fi
 if [ "$DOWNLOAD_PREVIOUS_RELEASES" = "true" ]; then
   test/get_previous_releases.py --target-dir "$PREVIOUS_RELEASES_DIR"
 fi
 
 BITCOIN_CONFIG_ALL="-DCMAKE_COMPILE_WARNING_AS_ERROR=ON -DBUILD_BENCH=ON -DBUILD_FUZZ_BINARY=ON"
-if [ -z "$NO_DEPENDS" ]; then
-  BITCOIN_CONFIG_ALL="${BITCOIN_CONFIG_ALL} -DCMAKE_TOOLCHAIN_FILE=$DEPENDS_DIR/$HOST/toolchain.cmake"
-fi
 
 ccache --zero-stats
 
@@ -140,7 +128,6 @@ hit_rate=$(ccache --show-stats | grep "Hits:" | head -1 | sed 's/.*(\(.*\)%).*/\
 if [ "${hit_rate%.*}" -lt 75 ]; then
   echo "::notice title=low ccache hitrate::Ccache hit-rate in $CONTAINER_NAME was $hit_rate%"
 fi
-du -sh "${DEPENDS_DIR}"/*/
 du -sh "${PREVIOUS_RELEASES_DIR}"
 
 if [ -n "${CI_LIMIT_STACK_SIZE}" ]; then
@@ -157,7 +144,6 @@ fi
 
 if [ "$RUN_UNIT_TESTS" = "true" ]; then
   DIR_UNIT_TEST_DATA="${DIR_UNIT_TEST_DATA}" \
-  LD_LIBRARY_PATH="${DEPENDS_DIR}/${HOST}/lib" \
   CTEST_OUTPUT_ON_FAILURE=ON \
   ctest --test-dir "${BASE_BUILD_DIR}" \
     --stop-on-failure \
@@ -213,7 +199,6 @@ fi
 
 if [ "$RUN_FUZZ_TESTS" = "true" ]; then
   # shellcheck disable=SC2086
-  LD_LIBRARY_PATH="${DEPENDS_DIR}/${HOST}/lib" \
   "${BASE_BUILD_DIR}/test/fuzz/test_runner.py" \
     ${FUZZ_TESTS_CONFIG} \
     "${MAKEJOBS}" \

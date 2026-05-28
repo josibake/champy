@@ -13,7 +13,6 @@ export CONTAINER_NAME=ci_native_chimera_musl
 export CI_IMAGE_NAME_TAG="mirror.gcr.io/chimeralinux/chimera"
 export CI_BASE_PACKAGES="ccache chimerautils chimerautils-extra clang cmake curl e2fsprogs git gmake gtar linux-headers ninja pkgconf procps python-devel python-pip rsync util-linux util-linux-lscpu xz"
 export PIP_PACKAGES="--break-system-packages pyzmq pycapnp"
-export DEP_OPTS="build_CC=clang build_CXX=clang++ build_TAR=gtar AR=llvm-ar CC=clang CXX=clang++ NM=llvm-nm RANLIB=llvm-ranlib STRIP=llvm-strip"
 export GOAL="install"
 export BITCOIN_CONFIG="\
  --preset=dev-mode \
