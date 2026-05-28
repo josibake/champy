@@ -92,7 +92,6 @@ configure_bitcoin_core() {
   cmake -S . -B build \
     --preset=dev-mode \
     -DCMAKE_BUILD_TYPE=Debug \
-    -DWITH_ZMQ=OFF \
     -DWITH_USDT=OFF \
     -DBUILD_BENCH=OFF \
     -DBUILD_FUZZ_BINARY=OFF \
