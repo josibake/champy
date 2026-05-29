@@ -15,7 +15,7 @@
 #include <kernel/chainparams.h>
 #include <node/mempool_entry.h>
 #include <kernel/notifications_interface.h>
-#include <node/blockstorage.h>
+#include <kernel/blockstorage.h>
 #include <policy/ephemeral_policy.h>
 #include <policy/policy.h>
 #include <policy/rbf.h>

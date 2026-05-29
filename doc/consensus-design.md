@@ -84,9 +84,14 @@ The public kernel API should not expose node-only concepts such as mempool
 relay, P2P peers, or RPC behavior. Core's implementation may still use LevelDB,
 block files, and the current block index internally.
 
+Core's default block storage, block import, and chainstate loading
+implementations live under `src/kernel`. They are runtime capabilities used by
+validation and the kernel API. They are not consensus APIs, and kernel code must
+not include or reference node code.
+
 ### Storage Adapters
 
-Storage adapters are validation-layer capabilities for reading and writing
+Storage adapters are validation-facing capabilities for reading and writing
 Core's current block storage and block index.
 
 `BlockDataStore`, `BlockIndexView`, and `BlockIndexStore` are not consensus
@@ -159,6 +164,14 @@ src/tx_check_adapters.{h,cpp}
 src/node/mempool_chain_sync.{h,cpp}
 ```
 
+Kernel runtime:
+
+```text
+src/kernel/blockimport.{h,cpp}
+src/kernel/blockstorage.{h,cpp}
+src/kernel/chainstate_load.{h,cpp}
+```
+
 Main tests:
 
 ```text
@@ -176,6 +189,8 @@ src/test/util/consensus_fixture.{h,cpp}
 
 `src/test/consensus_library_boundary.cpp` is the boundary test. It catches
 accidental dependencies from the consensus target back into Core node code.
+`kernel_boundary` checks that kernel sources do not include or reference node
+code.
 `src/consensus/api.h` is the extraction-facing entry point for new library
 callers. It includes the staged validation API, spend-state interfaces, script
 checking, effects, commit interfaces, and fixture backends.

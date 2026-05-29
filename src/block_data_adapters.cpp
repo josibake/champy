@@ -4,7 +4,7 @@
 
 #include <block_data_adapters.h>
 
-#include <node/blockstorage.h>
+#include <kernel/blockstorage.h>
 
 bool CoreBlockDataStore::ReadBlock(CBlock& block, const CBlockIndex& index)
 {

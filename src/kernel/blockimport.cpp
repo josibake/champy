@@ -2,12 +2,12 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#include <node/blockimport.h>
+#include <kernel/blockimport.h>
 
 #include <flatfile.h>
 #include <kernel/cs_main.h>
 #include <logging.h>
-#include <node/blockstorage.h>
+#include <kernel/blockstorage.h>
 #include <streams.h>
 #include <sync.h>
 #include <uint256.h>
@@ -22,7 +22,7 @@
 #include <map>
 #include <span>
 
-namespace node {
+namespace kernel {
 
 class ImportingNow
 {
@@ -98,4 +98,4 @@ void ImportBlocks(ChainstateManager& chainman, std::span<const fs::path> import_
     // End scope of ImportingNow
 }
 
-} // namespace node
+} // namespace kernel

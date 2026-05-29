@@ -2,7 +2,7 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#include <node/chainstate_load.h>
+#include <kernel/chainstate_load.h>
 
 #include <block_validation.h>
 #include <arith_uint256.h>
@@ -10,7 +10,7 @@
 #include <coins.h>
 #include <consensus/params.h>
 #include <kernel/caches.h>
-#include <node/blockstorage.h>
+#include <kernel/blockstorage.h>
 #include <sync.h>
 #include <tinyformat.h>
 #include <txdb.h>
@@ -28,9 +28,7 @@
 #include <optional>
 #include <vector>
 
-using kernel::CacheSizes;
-
-namespace node {
+namespace kernel {
 // Complete initialization of chainstates after the initial call has been made
 // to ChainstateManager::InitializeChainstate().
 static ChainstateLoadResult CompleteChainstateInitialization(
@@ -206,4 +204,4 @@ ChainstateLoadResult VerifyLoadedChainstate(ChainstateManager& chainman, const C
 
     return {ChainstateLoadStatus::SUCCESS, {}};
 }
-} // namespace node
+} // namespace kernel

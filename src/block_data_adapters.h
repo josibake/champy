@@ -16,9 +16,9 @@
 
 class CBlockIndex;
 
-namespace node {
+namespace kernel {
 class BlockManager;
-} // namespace node
+} // namespace kernel
 
 class BlockDataStore
 {
@@ -38,7 +38,7 @@ public:
 class CoreBlockDataStore final : public BlockDataStore
 {
 public:
-    explicit CoreBlockDataStore(node::BlockManager& blockman) : m_blockman{blockman} {}
+    explicit CoreBlockDataStore(kernel::BlockManager& blockman) : m_blockman{blockman} {}
 
     bool ReadBlock(CBlock& block, const CBlockIndex& index) override;
     bool ReadBlockFromPosition(CBlock& block, const FlatFilePos& pos, const std::optional<uint256>& expected_hash) override;
@@ -50,7 +50,7 @@ public:
     void UpdateBlockInfo(const CBlock& block, unsigned int height, const FlatFilePos& pos) override;
 
 private:
-    node::BlockManager& m_blockman;
+    kernel::BlockManager& m_blockman;
 };
 
 #endif // BITCOIN_BLOCK_DATA_ADAPTERS_H

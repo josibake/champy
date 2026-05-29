@@ -5,7 +5,7 @@
 #include <node/blockmanager_args.h>
 
 #include <common/args.h>
-#include <node/blockstorage.h>
+#include <kernel/blockstorage.h>
 #include <node/database_args.h>
 #include <tinyformat.h>
 #include <util/byte_units.h>
@@ -16,7 +16,7 @@
 #include <cstdint>
 
 namespace node {
-util::Result<void> ApplyArgsManOptions(const ArgsManager& args, BlockManager::Options& opts)
+util::Result<void> ApplyArgsManOptions(const ArgsManager& args, kernel::BlockManager::Options& opts)
 {
     if (auto value{args.GetBoolArg("-blocksxor")}) opts.use_xor = *value;
     // block pruning; get the amount of disk space (in MiB) to allot for block & undo files
@@ -26,7 +26,7 @@ util::Result<void> ApplyArgsManOptions(const ArgsManager& args, BlockManager::Op
     }
     uint64_t nPruneTarget{uint64_t(nPruneArg) * 1_MiB};
     if (nPruneArg == 1) { // manual pruning: -prune=1
-        nPruneTarget = BlockManager::PRUNE_TARGET_MANUAL;
+        nPruneTarget = kernel::BlockManager::PRUNE_TARGET_MANUAL;
     } else if (nPruneTarget) {
         if (nPruneTarget < MIN_DISK_SPACE_FOR_BLOCK_FILES) {
             return util::Error{strprintf(_("Prune configured below the minimum of %d MiB.  Please use a higher number."), MIN_DISK_SPACE_FOR_BLOCK_FILES / 1_MiB)};

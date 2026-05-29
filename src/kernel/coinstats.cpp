@@ -8,7 +8,7 @@
 #include <coins.h>
 #include <crypto/muhash.h>
 #include <hash.h>
-#include <node/blockstorage.h>
+#include <kernel/blockstorage.h>
 #include <primitives/transaction.h>
 #include <script/script.h>
 #include <span.h>
@@ -108,7 +108,7 @@ static void ApplyStats(CCoinsStats& stats, const std::map<uint32_t, Coin>& outpu
 
 //! Calculate statistics about the unspent transaction output set
 template <typename T>
-static std::optional<CCoinsStats> ComputeUTXOStats(T hash_obj, CCoinsView* view, node::BlockManager& blockman, const std::function<void()>& interruption_point)
+static std::optional<CCoinsStats> ComputeUTXOStats(T hash_obj, CCoinsView* view, kernel::BlockManager& blockman, const std::function<void()>& interruption_point)
 {
     std::unique_ptr<CCoinsViewCursor> pcursor;
     CBlockIndex* pindex;
@@ -152,7 +152,7 @@ static std::optional<CCoinsStats> ComputeUTXOStats(T hash_obj, CCoinsView* view,
     return stats;
 }
 
-std::optional<CCoinsStats> ComputeUTXOStats(CoinStatsHashType hash_type, CCoinsView* view, node::BlockManager& blockman, const std::function<void()>& interruption_point)
+std::optional<CCoinsStats> ComputeUTXOStats(CoinStatsHashType hash_type, CCoinsView* view, kernel::BlockManager& blockman, const std::function<void()>& interruption_point)
 {
     return [&]() -> std::optional<CCoinsStats> {
         switch (hash_type) {

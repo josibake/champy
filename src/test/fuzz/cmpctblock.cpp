@@ -14,7 +14,7 @@
 #include <net.h>
 #include <net_processing.h>
 #include <netmessagemaker.h>
-#include <node/blockstorage.h>
+#include <kernel/blockstorage.h>
 #include <node/miner.h>
 #include <policy/truc_policy.h>
 #include <primitives/block.h>

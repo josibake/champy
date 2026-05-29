@@ -272,16 +272,16 @@ add_library(bitcoin_node STATIC EXCLUDE_FROM_ALL
   kernel/coinstats.cpp
   kernel/context.cpp
   kernel/cs_main.cpp
+  kernel/blockimport.cpp
+  kernel/blockstorage.cpp
+  kernel/chainstate_load.cpp
   mapport.cpp
   net.cpp
   net_processing.cpp
   netgroup.cpp
   node/abort.cpp
-  node/blockimport.cpp
   node/blockmanager_args.cpp
-  node/blockstorage.cpp
   node/caches.cpp
-  node/chainstate_load.cpp
   node/chainstatemanager_args.cpp
   node/coin.cpp
   node/coins_view_args.cpp

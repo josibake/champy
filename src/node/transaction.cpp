@@ -9,7 +9,7 @@
 #include <validation_state.h>
 #include <net.h>
 #include <net_processing.h>
-#include <node/blockstorage.h>
+#include <kernel/blockstorage.h>
 #include <node/context.h>
 #include <node/types.h>
 #include <node/txmempool.h>
@@ -141,7 +141,7 @@ TransactionError BroadcastTransaction(NodeContext& node,
     return TransactionError::OK;
 }
 
-CTransactionRef GetTransaction(const CBlockIndex* const block_index, const CTxMemPool* const mempool, const Txid& hash, const BlockManager& blockman, uint256& hashBlock)
+CTransactionRef GetTransaction(const CBlockIndex* const block_index, const CTxMemPool* const mempool, const Txid& hash, const kernel::BlockManager& blockman, uint256& hashBlock)
 {
     if (mempool && !block_index) {
         CTransactionRef ptx = mempool->get(hash);

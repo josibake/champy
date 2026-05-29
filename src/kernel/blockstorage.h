@@ -2,8 +2,8 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#ifndef BITCOIN_NODE_BLOCKSTORAGE_H
-#define BITCOIN_NODE_BLOCKSTORAGE_H
+#ifndef BITCOIN_KERNEL_BLOCKSTORAGE_H
+#define BITCOIN_KERNEL_BLOCKSTORAGE_H
 
 #include <attributes.h>
 #include <chain.h>
@@ -110,11 +110,6 @@ public:
     bool LoadBlockIndexGuts(const Consensus::Params& consensusParams, std::function<CBlockIndex*(const uint256&)> insertBlockIndex, const util::SignalInterrupt& interrupt)
         EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
 };
-} // namespace kernel
-
-namespace node {
-using kernel::CBlockFileInfo;
-using kernel::BlockTreeDB;
 
 /** The pre-allocation chunk size for blk?????.dat files (since 0.8) */
 static const unsigned int BLOCKFILE_CHUNK_SIZE{16_MiB};
@@ -450,6 +445,6 @@ public:
     void CleanupBlockRevFiles() const;
 };
 
-} // namespace node
+} // namespace kernel
 
-#endif // BITCOIN_NODE_BLOCKSTORAGE_H
+#endif // BITCOIN_KERNEL_BLOCKSTORAGE_H

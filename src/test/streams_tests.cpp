@@ -3,7 +3,7 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #include <flatfile.h>
-#include <node/blockstorage.h>
+#include <kernel/blockstorage.h>
 #include <streams.h>
 #include <test/util/common.h>
 #include <test/util/random.h>
@@ -672,7 +672,7 @@ BOOST_AUTO_TEST_CASE(buffered_reader_matches_autofile_random_content)
     const size_t buf_size{1 + m_rng.randrange(file_size)};
     const FlatFilePos pos{0, 0};
 
-    const FlatFileSeq test_file{m_args.GetDataDirBase(), "buffered_file_test_random", node::BLOCKFILE_CHUNK_SIZE};
+    const FlatFileSeq test_file{m_args.GetDataDirBase(), "buffered_file_test_random", kernel::BLOCKFILE_CHUNK_SIZE};
     const Obfuscation obfuscation{m_rng.randbytes<Obfuscation::KEY_SIZE>()};
 
     // Write out the file with random content
@@ -726,8 +726,8 @@ BOOST_AUTO_TEST_CASE(buffered_writer_matches_autofile_random_content)
     const size_t buf_size{1 + m_rng.randrange(file_size)};
     const FlatFilePos pos{0, 0};
 
-    const FlatFileSeq test_buffered{m_args.GetDataDirBase(), "buffered_write_test", node::BLOCKFILE_CHUNK_SIZE};
-    const FlatFileSeq test_direct{m_args.GetDataDirBase(), "direct_write_test", node::BLOCKFILE_CHUNK_SIZE};
+    const FlatFileSeq test_buffered{m_args.GetDataDirBase(), "buffered_write_test", kernel::BLOCKFILE_CHUNK_SIZE};
+    const FlatFileSeq test_direct{m_args.GetDataDirBase(), "direct_write_test", kernel::BLOCKFILE_CHUNK_SIZE};
     const Obfuscation obfuscation{m_rng.randbytes<Obfuscation::KEY_SIZE>()};
 
     {

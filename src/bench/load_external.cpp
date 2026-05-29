@@ -6,7 +6,7 @@
 #include <bench/data/block413567.raw.h>
 #include <chainparams.h>
 #include <flatfile.h>
-#include <node/blockstorage.h>
+#include <kernel/blockstorage.h>
 #include <span.h>
 #include <streams.h>
 #include <test/util/setup_common.h>
@@ -52,7 +52,7 @@ static void LoadExternalBlockFile(benchmark::Bench& bench)
         // "wb+" is "binary, O_RDWR | O_CREAT | O_TRUNC".
         FILE* file{fsbridge::fopen(blkfile, "wb+")};
         // Make the test block file about 128 MB in length.
-        for (size_t i = 0; i < node::MAX_BLOCKFILE_SIZE / ss.size(); ++i) {
+        for (size_t i = 0; i < kernel::MAX_BLOCKFILE_SIZE / ss.size(); ++i) {
             if (fwrite(ss.data(), 1, ss.size(), file) != ss.size()) {
                 throw std::runtime_error("write to test file failed\n");
             }

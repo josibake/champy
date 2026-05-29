@@ -27,7 +27,7 @@
 #include <hash.h>
 #include <kernel/chainparams.h>
 #include <kernel/notifications_interface.h>
-#include <node/blockstorage.h>
+#include <kernel/blockstorage.h>
 #include <pow.h>
 #include <primitives/block.h>
 #include <primitives/transaction.h>

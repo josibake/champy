@@ -16,7 +16,7 @@
 #include <net.h>
 #include <netbase.h>
 #include <netgroup.h>
-#include <node/blockstorage.h>
+#include <kernel/blockstorage.h>
 #include <primitives/block.h>
 #include <protocol.h>
 #include <pubkey.h>

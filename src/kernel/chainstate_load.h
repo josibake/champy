@@ -2,8 +2,8 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#ifndef BITCOIN_NODE_CHAINSTATE_LOAD_H
-#define BITCOIN_NODE_CHAINSTATE_LOAD_H
+#ifndef BITCOIN_KERNEL_CHAINSTATE_LOAD_H
+#define BITCOIN_KERNEL_CHAINSTATE_LOAD_H
 
 #include <util/translation.h>
 #include <chainstate.h>
@@ -13,10 +13,8 @@
 #include <tuple>
 
 namespace kernel {
-struct CacheSizes;
-} // namespace kernel
 
-namespace node {
+struct CacheSizes;
 
 struct ChainstateLoadOptions {
     bool coins_db_in_memory{false};
@@ -66,6 +64,6 @@ using ChainstateLoadResult = std::tuple<ChainstateLoadStatus, bilingual_str>;
 ChainstateLoadResult LoadChainstate(ChainstateManager& chainman, const kernel::CacheSizes& cache_sizes,
                                     const ChainstateLoadOptions& options);
 ChainstateLoadResult VerifyLoadedChainstate(ChainstateManager& chainman, const ChainstateLoadOptions& options);
-} // namespace node
+} // namespace kernel
 
-#endif // BITCOIN_NODE_CHAINSTATE_LOAD_H
+#endif // BITCOIN_KERNEL_CHAINSTATE_LOAD_H

@@ -10,7 +10,10 @@ include(GNUInstallDirs)
 #       which are absolutely necessary.
 add_library(bitcoinkernel
   bitcoinkernel.cpp
+  blockimport.cpp
+  blockstorage.cpp
   chain.cpp
+  chainstate_load.cpp
   checks.cpp
   chainparams.cpp
   coinstats.cpp
@@ -24,9 +27,6 @@ add_library(bitcoinkernel
   ../deploymentstatus.cpp
   ../flatfile.cpp
   ../logging.cpp
-  ../node/blockimport.cpp
-  ../node/blockstorage.cpp
-  ../node/chainstate_load.cpp
   ../policy/feerate.cpp
   ../policy/policy.cpp
   ../policy/settings.cpp

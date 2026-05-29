@@ -2,7 +2,7 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#include <node/blockstorage.h>
+#include <kernel/blockstorage.h>
 
 #include <arith_uint256.h>
 #include <chain.h>
@@ -163,9 +163,6 @@ std::string CBlockFileInfo::ToString() const
 {
     return strprintf("CBlockFileInfo(blocks=%u, size=%u, heights=%u...%u, time=%s...%s)", nBlocks, nSize, nHeightFirst, nHeightLast, FormatISO8601Date(nTimeFirst), FormatISO8601Date(nTimeLast));
 }
-} // namespace kernel
-
-namespace node {
 
 namespace {
 
@@ -1205,4 +1202,4 @@ std::ostream& operator<<(std::ostream& os, const BlockfileCursor& cursor) {
     os << strprintf("BlockfileCursor(file_num=%d, undo_height=%d)", cursor.file_num, cursor.undo_height);
     return os;
 }
-} // namespace node
+} // namespace kernel

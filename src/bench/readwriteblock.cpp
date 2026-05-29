@@ -5,7 +5,7 @@
 #include <bench/bench.h>
 #include <bench/data/block413567.raw.h>
 #include <flatfile.h>
-#include <node/blockstorage.h>
+#include <kernel/blockstorage.h>
 #include <primitives/block.h>
 #include <primitives/transaction.h>
 #include <serialize.h>

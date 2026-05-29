@@ -25,7 +25,7 @@
 #include <kernel/notifications_interface.h>
 #include <kernel/warning.h>
 #include <logging/timer.h>
-#include <node/blockstorage.h>
+#include <kernel/blockstorage.h>
 #include <policy/policy.h>
 #include <policy/settings.h>
 #include <pow.h>
@@ -68,10 +68,10 @@
 using kernel::Notifications;
 
 using fsbridge::FopenFn;
-using node::BlockManager;
-using node::BlockMap;
-using node::CBlockIndexHeightOnlyComparator;
-using node::CBlockIndexWorkComparator;
+using kernel::BlockManager;
+using kernel::BlockMap;
+using kernel::CBlockIndexHeightOnlyComparator;
+using kernel::CBlockIndexWorkComparator;
 
 /** Time window to wait between writing blocks/block index and chainstate to disk.
  *  Randomize writing time inside the window to prevent a situation where the
@@ -2068,7 +2068,7 @@ static ChainstateManager::Options&& Flatten(ChainstateManager::Options&& opts)
     return std::move(opts);
 }
 
-ChainstateManager::ChainstateManager(const util::SignalInterrupt& interrupt, Options options, node::BlockManager::Options blockman_options)
+ChainstateManager::ChainstateManager(const util::SignalInterrupt& interrupt, Options options, kernel::BlockManager::Options blockman_options)
     : m_script_check_queue{/*batch_size=*/128, std::clamp(options.worker_threads_num, 0, MAX_SCRIPTCHECK_THREADS)},
       m_interrupt{interrupt},
       m_options{Flatten(std::move(options))},

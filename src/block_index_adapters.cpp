@@ -6,7 +6,7 @@
 
 #include <chainstate.h>
 #include <flatfile.h>
-#include <node/blockstorage.h>
+#include <kernel/blockstorage.h>
 
 const CBlockIndex* CoreBlockIndexView::LookupBlockIndex(const uint256& block_hash) const
     EXCLUSIVE_LOCKS_REQUIRED(::cs_main)

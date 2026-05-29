@@ -40,11 +40,11 @@
 #include <net_processing.h>
 #include <netbase.h>
 #include <netgroup.h>
-#include <node/blockimport.h>
+#include <kernel/blockimport.h>
 #include <node/blockmanager_args.h>
-#include <node/blockstorage.h>
+#include <kernel/blockstorage.h>
 #include <node/caches.h>
-#include <node/chainstate_load.h>
+#include <kernel/chainstate_load.h>
 #include <node/chainstatemanager_args.h>
 #include <node/context.h>
 #include <node/interface_ui.h>
@@ -113,22 +113,22 @@ using common::InvalidPortErrMsg;
 using common::ResolveErrMsg;
 
 using node::ApplyArgsManOptions;
-using node::BlockManager;
+using kernel::BlockManager;
 using node::CalculateCacheSizes;
-using node::ChainstateLoadResult;
-using node::ChainstateLoadStatus;
+using kernel::ChainstateLoadResult;
+using kernel::ChainstateLoadStatus;
 using node::DEFAULT_PERSIST_MEMPOOL;
 using node::DEFAULT_PRINT_MODIFIED_FEE;
 using node::DEFAULT_STOPATHEIGHT;
 using node::DumpMempool;
-using node::ImportBlocks;
+using kernel::ImportBlocks;
 using node::KernelNotifications;
-using node::LoadChainstate;
+using kernel::LoadChainstate;
 using node::LoadMempool;
 using node::MempoolPath;
 using node::NodeContext;
 using node::ShouldPersistMempool;
-using node::VerifyLoadedChainstate;
+using kernel::VerifyLoadedChainstate;
 using util::Join;
 using util::ReplaceAll;
 using util::ToString;
@@ -1210,7 +1210,7 @@ static ChainstateLoadResult InitAndLoadChainstate(
     ChainstateManager& chainman = *node.chainman;
     if (chainman.m_interrupt) return {ChainstateLoadStatus::INTERRUPTED, {}};
 
-    node::ChainstateLoadOptions options;
+    kernel::ChainstateLoadOptions options;
     options.wipe_chainstate_db = do_reindex || do_reindex_chainstate;
     options.prune = chainman.m_blockman.IsPruneMode();
     options.check_blocks = args.GetIntArg("-checkblocks", DEFAULT_CHECKBLOCKS);
@@ -1227,18 +1227,18 @@ static ChainstateLoadResult InitAndLoadChainstate(
             return f();
         } catch (const std::exception& e) {
             LogError("%s\n", e.what());
-            return std::make_tuple(node::ChainstateLoadStatus::FAILURE, _("Error loading databases"));
+            return std::make_tuple(kernel::ChainstateLoadStatus::FAILURE, _("Error loading databases"));
         }
     };
     auto [status, error] = catch_exceptions([&] { return LoadChainstate(chainman, cache_sizes, options); });
-    if (status == node::ChainstateLoadStatus::SUCCESS) {
+    if (status == kernel::ChainstateLoadStatus::SUCCESS) {
         uiInterface.InitMessage(_("Verifying blocks…"));
         if (chainman.m_blockman.m_have_pruned && options.check_blocks > MIN_BLOCKS_TO_KEEP) {
             LogWarning("pruned datadir may not have more than %d blocks; only checking available blocks\n",
                        MIN_BLOCKS_TO_KEEP);
         }
         std::tie(status, error) = catch_exceptions([&] { return VerifyLoadedChainstate(chainman, options); });
-        if (status == node::ChainstateLoadStatus::SUCCESS) {
+        if (status == kernel::ChainstateLoadStatus::SUCCESS) {
             LogInfo("Block index and chainstate loaded");
             node.notifications->setChainstateLoaded(true);
         }

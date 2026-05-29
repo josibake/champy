@@ -4,7 +4,7 @@
 
 #include <test/util/validation.h>
 
-#include <node/blockstorage.h>
+#include <kernel/blockstorage.h>
 #include <util/check.h>
 #include <util/time.h>
 #include <chainstate.h>

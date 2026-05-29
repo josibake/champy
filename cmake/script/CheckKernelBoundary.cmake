@@ -26,6 +26,23 @@ require_text("src/kernel/bitcoinkernel.h" "typedef struct btck_ChainstateManager
 require_text("src/kernel/bitcoinkernel.h" "btck_chainstate_manager_options_create")
 require_text("src/kernel/bitcoinkernel.cpp" "#include <chain_validation.h>")
 
+file(GLOB_RECURSE kernel_sources
+  "${SOURCE_DIR}/src/kernel/*.cpp"
+  "${SOURCE_DIR}/src/kernel/*.h"
+)
+
+foreach(path IN LISTS kernel_sources)
+  file(RELATIVE_PATH relative_path "${SOURCE_DIR}" "${path}")
+  foreach(needle IN ITEMS
+      "#include <node/"
+      "namespace node"
+      "node::")
+    forbid_text("${relative_path}" "${needle}")
+  endforeach()
+endforeach()
+
+forbid_text("src/kernel/CMakeLists.txt" "../node/")
+
 foreach(needle IN ITEMS
     "CTxMemPool"
     "TxMemPool"

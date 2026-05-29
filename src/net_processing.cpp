@@ -30,7 +30,7 @@
 #include <netaddress.h>
 #include <netbase.h>
 #include <netmessagemaker.h>
-#include <node/blockstorage.h>
+#include <kernel/blockstorage.h>
 #include <node/connection_types.h>
 #include <node/protocol_version.h>
 #include <node/timeoffsets.h>

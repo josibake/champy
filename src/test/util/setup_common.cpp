@@ -22,8 +22,8 @@
 #include <logging.h>
 #include <net.h>
 #include <net_processing.h>
-#include <node/blockstorage.h>
-#include <node/chainstate_load.h>
+#include <kernel/blockstorage.h>
+#include <kernel/chainstate_load.h>
 #include <node/context.h>
 #include <node/kernel_notifications.h>
 #include <node/mempool_args.h>
@@ -69,11 +69,11 @@
 using namespace util::hex_literals;
 using node::ApplyArgsManOptions;
 using node::BlockAssembler;
-using node::BlockManager;
+using kernel::BlockManager;
 using node::KernelNotifications;
-using node::LoadChainstate;
+using kernel::LoadChainstate;
 using node::RegenerateCommitments;
-using node::VerifyLoadedChainstate;
+using kernel::VerifyLoadedChainstate;
 
 const TranslateFn G_TRANSLATION_FUN{nullptr};
 
@@ -316,7 +316,7 @@ ChainTestingSetup::~ChainTestingSetup()
 void ChainTestingSetup::LoadVerifyActivateChainstate()
 {
     auto& chainman{*Assert(m_node.chainman)};
-    node::ChainstateLoadOptions options;
+    kernel::ChainstateLoadOptions options;
     options.coins_db_in_memory = m_coins_db_in_memory;
     options.wipe_chainstate_db = m_args.GetBoolArg("-reindex", false) || m_args.GetBoolArg("-reindex-chainstate", false);
     options.prune = chainman.m_blockman.IsPruneMode();
@@ -324,10 +324,10 @@ void ChainTestingSetup::LoadVerifyActivateChainstate()
     options.check_level = m_args.GetIntArg("-checklevel", DEFAULT_CHECKLEVEL);
     options.require_full_verification = m_args.IsArgSet("-checkblocks") || m_args.IsArgSet("-checklevel");
     auto [status, error] = LoadChainstate(chainman, m_kernel_cache_sizes, options);
-    assert(status == node::ChainstateLoadStatus::SUCCESS);
+    assert(status == kernel::ChainstateLoadStatus::SUCCESS);
 
     std::tie(status, error) = VerifyLoadedChainstate(chainman, options);
-    assert(status == node::ChainstateLoadStatus::SUCCESS);
+    assert(status == kernel::ChainstateLoadStatus::SUCCESS);
 
     BlockValidationState state;
     if (!chainman.ActiveChainstate().ActivateBestChain(state)) {

@@ -19,7 +19,7 @@
 #include <kernel/chainparams.h>
 #include <kernel/chainstatemanager_opts.h>
 #include <kernel/cs_main.h> // IWYU pragma: export
-#include <node/blockstorage.h>
+#include <kernel/blockstorage.h>
 #include <script/script_check.h>
 #include <script/sigcache.h>
 #include <sync.h>
@@ -240,7 +240,7 @@ public:
 
     //! Reference to a BlockManager instance which itself is shared across all
     //! Chainstate instances.
-    node::BlockManager& m_blockman;
+    kernel::BlockManager& m_blockman;
 
     //! The chainstate manager that owns this chainstate. The reference is
     //! necessary so that this instance can check whether it is the active
@@ -248,7 +248,7 @@ public:
     ChainstateManager& m_chainman;
 
     explicit Chainstate(
-        node::BlockManager& blockman,
+        kernel::BlockManager& blockman,
         ChainstateManager& chainman);
 
     //! Return path to chainstate leveldb directory.
@@ -288,7 +288,7 @@ public:
      * genesis block). Entries may be failed, though, and pruning nodes may be
      * missing the data for the block.
      */
-    std::set<CBlockIndex*, node::CBlockIndexWorkComparator> setBlockIndexCandidates;
+    std::set<CBlockIndex*, kernel::CBlockIndexWorkComparator> setBlockIndexCandidates;
 
     //! @returns A reference to the in-memory cache of the UTXO set.
     CCoinsViewCache& CoinsTip() EXCLUSIVE_LOCKS_REQUIRED(::cs_main)
@@ -526,7 +526,7 @@ protected:
 public:
     using Options = kernel::ChainstateManagerOpts;
 
-    explicit ChainstateManager(const util::SignalInterrupt& interrupt, Options options, node::BlockManager::Options blockman_options);
+    explicit ChainstateManager(const util::SignalInterrupt& interrupt, Options options, kernel::BlockManager::Options blockman_options);
 
     const CChainParams& GetParams() const { return m_options.chainparams; }
     const Consensus::Params& GetConsensus() const { return m_options.chainparams.GetConsensus(); }
@@ -560,7 +560,7 @@ public:
     const Options m_options;
     //! A single BlockManager instance is shared across each constructed
     //! chainstate to avoid duplicating block metadata.
-    node::BlockManager m_blockman;
+    kernel::BlockManager m_blockman;
 
     ValidationCache m_validation_cache;
 
@@ -633,7 +633,7 @@ public:
      */
     void UpdateIBDStatus() EXCLUSIVE_LOCKS_REQUIRED(cs_main);
 
-    node::BlockMap& BlockIndex() EXCLUSIVE_LOCKS_REQUIRED(::cs_main)
+    kernel::BlockMap& BlockIndex() EXCLUSIVE_LOCKS_REQUIRED(::cs_main)
     {
         AssertLockHeld(::cs_main);
         return m_blockman.m_block_index;

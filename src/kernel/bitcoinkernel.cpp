@@ -23,9 +23,9 @@
 #include <kernel/notifications_interface.h>
 #include <kernel/warning.h>
 #include <logging.h>
-#include <node/blockimport.h>
-#include <node/blockstorage.h>
-#include <node/chainstate_load.h>
+#include <kernel/blockimport.h>
+#include <kernel/blockstorage.h>
+#include <kernel/chainstate_load.h>
 #include <primitives/block.h>
 #include <primitives/transaction.h>
 #include <script/interpreter.h>
@@ -455,9 +455,9 @@ public:
 struct ChainstateManagerOptions {
     mutable Mutex m_mutex;
     ChainstateManager::Options m_chainman_options GUARDED_BY(m_mutex);
-    node::BlockManager::Options m_blockman_options GUARDED_BY(m_mutex);
+    kernel::BlockManager::Options m_blockman_options GUARDED_BY(m_mutex);
     std::shared_ptr<const Context> m_context;
-    node::ChainstateLoadOptions m_chainstate_load_options GUARDED_BY(m_mutex);
+    kernel::ChainstateLoadOptions m_chainstate_load_options GUARDED_BY(m_mutex);
 
     ChainstateManagerOptions(const std::shared_ptr<const Context>& context, const fs::path& data_dir, const fs::path& blocks_dir)
         : m_chainman_options{ChainstateManager::Options{
@@ -465,7 +465,7 @@ struct ChainstateManagerOptions {
               .datadir = data_dir,
               .notifications = *context->m_notifications,
               .signals = context->m_signals.get()}},
-          m_blockman_options{node::BlockManager::Options{
+          m_blockman_options{kernel::BlockManager::Options{
               .chainparams = *context->m_chainparams,
               .blocks_dir = blocks_dir,
               .notifications = *context->m_notifications,
@@ -473,7 +473,7 @@ struct ChainstateManagerOptions {
                   .path = data_dir / "blocks" / "index",
                   .cache_bytes = kernel::CacheSizes{DEFAULT_KERNEL_CACHE}.block_tree_db,
               }}},
-          m_context{context}, m_chainstate_load_options{node::ChainstateLoadOptions{}}
+          m_context{context}, m_chainstate_load_options{kernel::ChainstateLoadOptions{}}
     {
     }
 };
@@ -1045,13 +1045,13 @@ btck_ChainstateManager* btck_chainstate_manager_create(
         const auto chainstate_load_opts{WITH_LOCK(opts.m_mutex, return opts.m_chainstate_load_options)};
 
         kernel::CacheSizes cache_sizes{DEFAULT_KERNEL_CACHE};
-        auto [status, chainstate_err]{node::LoadChainstate(*chainman, cache_sizes, chainstate_load_opts)};
-        if (status != node::ChainstateLoadStatus::SUCCESS) {
+        auto [status, chainstate_err]{kernel::LoadChainstate(*chainman, cache_sizes, chainstate_load_opts)};
+        if (status != kernel::ChainstateLoadStatus::SUCCESS) {
             LogError("Failed to load chain state from your data directory: %s", chainstate_err.original);
             return nullptr;
         }
-        std::tie(status, chainstate_err) = node::VerifyLoadedChainstate(*chainman, chainstate_load_opts);
-        if (status != node::ChainstateLoadStatus::SUCCESS) {
+        std::tie(status, chainstate_err) = kernel::VerifyLoadedChainstate(*chainman, chainstate_load_opts);
+        if (status != kernel::ChainstateLoadStatus::SUCCESS) {
             LogError("Failed to verify loaded chain state from your datadir: %s", chainstate_err.original);
             return nullptr;
         }
@@ -1111,7 +1111,7 @@ int btck_chainstate_manager_import_blocks(btck_ChainstateManager* chainman, cons
             }
         }
         auto& chainman_ref{*btck_ChainstateManager::get(chainman).m_chainman};
-        node::ImportBlocks(chainman_ref, import_files);
+        kernel::ImportBlocks(chainman_ref, import_files);
         WITH_LOCK(::cs_main, chainman_ref.UpdateIBDStatus());
     } catch (const std::exception& e) {
         LogError("Failed to import blocks: %s", e.what());

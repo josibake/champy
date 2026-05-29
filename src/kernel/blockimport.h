@@ -2,8 +2,8 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#ifndef BITCOIN_NODE_BLOCKIMPORT_H
-#define BITCOIN_NODE_BLOCKIMPORT_H
+#ifndef BITCOIN_KERNEL_BLOCKIMPORT_H
+#define BITCOIN_KERNEL_BLOCKIMPORT_H
 
 #include <util/fs.h>
 
@@ -11,11 +11,11 @@
 
 class ChainstateManager;
 
-namespace node {
+namespace kernel {
 
 // Calls ActivateBestChain() even if no blocks are imported.
 void ImportBlocks(ChainstateManager& chainman, std::span<const fs::path> import_paths);
 
-} // namespace node
+} // namespace kernel
 
-#endif // BITCOIN_NODE_BLOCKIMPORT_H
+#endif // BITCOIN_KERNEL_BLOCKIMPORT_H
