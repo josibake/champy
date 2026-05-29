@@ -2,15 +2,16 @@
 
 This document describes the consensus layout in this branch.
 
-It is a current-state guide for developers. It explains where the code lives,
-what the consensus API looks like, why the API is shaped this way, and which
-files are most important to read first.
+It is a current-state guide for developers. It explains the terminology used in
+this branch, where the code lives, what the consensus API looks like, and which
+files show the intended design.
 
-For the longer-term plan, see [consensus-architecture.md](consensus-architecture.md).
+For rationale and examples, see
+[consensus-refactor-rationale.md](consensus-refactor-rationale.md).
 
 ## Summary
 
-The consensus path is being split into explicit stages:
+The consensus path is split into explicit stages:
 
 ```text
 structural -> contextual -> spend -> commit
@@ -21,10 +22,9 @@ return explicit results. It should not read global node state, mutate chainstate
 directly, log, use clocks, write files, or update Core validation-state
 objects.
 
-Production validation still enters through Core validation code, mainly
-`src/block_validation.cpp`. The extracted consensus-facing rule code and
-interfaces live in `src/consensus`. Core-specific adapters stay outside that
-directory.
+Production validation still enters through Core validation code. The
+consensus-facing rule code and interfaces live in `src/consensus`.
+Core-specific adapters stay outside that directory.
 
 ## Terms
 
@@ -43,11 +43,70 @@ older global helpers remain as Core compatibility wrappers.
 
 ### Validation
 
-Validation is Core's integration layer around consensus.
+Validation is Core's chain-acceptance integration layer around consensus.
 
-Validation owns chainstate, indexes, block storage, undo writes, locks, script
-caches, logging, and error mapping. It calls consensus code and maps consensus
-results back into existing Core behavior.
+Validation owns chainstate ordering, indexes, block storage adapters, undo
+writes, locks, script caches, logging, and error mapping. It calls consensus
+code and maps consensus results back into existing Core behavior.
+
+Mempool admission is separate. It uses consensus transaction helpers and local
+policy rules, but it owns relay policy, package policy, fee policy, resource
+limits, and mempool-specific caching.
+
+Core's default validation runtime may use LevelDB coins, block files, and the
+current block index. Those are adapter implementations, not consensus
+requirements.
+
+### Chain Validation Service
+
+`ChainValidationService` is the current service boundary for block and header
+admission. Node, kernel, mining, and tests should call this service instead of
+calling legacy block-validation entry points directly.
+
+The service still wraps Core's existing `ChainstateManager`. It is a boundary
+around current validation behavior, not a standalone consensus API.
+
+### Node
+
+Node code owns P2P, relay policy, mempool policy, RPC-facing behavior, process
+lifecycle, and orchestration.
+
+Mempool state is node state. Chain validation may request mempool side effects
+through `ChainstateMempoolSync`, but the concrete implementation lives in
+`node::MempoolChainSync`.
+
+### Kernel
+
+Kernel is Core's embeddable runtime API. It wires chain validation to Core's
+default runtime services and storage adapters.
+
+The public kernel API should not expose node-only concepts such as mempool
+relay, P2P peers, or RPC behavior. Core's implementation may still use LevelDB,
+block files, and the current block index internally.
+
+### Storage Adapters
+
+Storage adapters are validation-layer capabilities for reading and writing
+Core's current block storage and block index.
+
+`BlockDataStore`, `BlockIndexView`, and `BlockIndexStore` are not consensus
+interfaces. They make Core storage effects explicit while preserving current
+behavior.
+
+### Spend Backend
+
+A spend backend provides the UTXO-dependent state needed by the spend stage.
+
+The production backend adapts Core's `CCoinsViewCache`. The snapshot backend is
+a map-backed implementation used by tests and conformance fixtures.
+
+### Script Checker
+
+A script checker receives script-check plans from consensus spend validation
+and decides how to execute them.
+
+The production checker uses Core's script-check queue and validation cache.
+Tests can use a direct checker.
 
 ### Commit
 
@@ -83,13 +142,21 @@ Core adapters:
 
 ```text
 src/block_script_check_adapters.{h,cpp}
-src/block_validation_adapters.{h,cpp}
+src/block_data_adapters.{h,cpp}
+src/block_data_admission.{h,cpp}
+src/block_index_adapters.{h,cpp}
+src/block_validation_adapters.h
 src/block_validation_policy.{h,cpp}
-src/coins_view_spend_state.{h,cpp}
 src/block_coin_effects.{h,cpp}
+src/chain_validation.{h,cpp}
+src/chainstate_mempool_sync.h
+src/coins_view_spend_state.{h,cpp}
+src/core_block_commit_adapters.{h,cpp}
+src/core_block_connection_attempt.{h,cpp}
 src/script_validation.h
 src/sequence_locks_adapters.{h,cpp}    legacy tx verification adapters
 src/tx_check_adapters.{h,cpp}
+src/node/mempool_chain_sync.{h,cpp}
 ```
 
 Main tests:
@@ -154,13 +221,108 @@ install/export header set. It is the complete local header closure of
 and the value-header dependencies they include. It intentionally excludes
 support-only consensus headers and internal protocol helpers.
 
-The `bitcoinkernel` target links `bitcoin_consensus` instead of compiling the
-consensus sources directly. This keeps the kernel build on the same internal
-library boundary used by the boundary tests.
+The `bitcoin_chain_validation` target owns Core's current chain-validation
+sources at this boundary. `bitcoin_node` and
+`bitcoinkernel` link that target instead of compiling those sources directly.
+`bitcoin_chain_validation` links `bitcoin_consensus`, so production validation
+uses the same internal consensus target checked by the boundary tests.
 
 Conformance fixtures model spend state with `Consensus::CoinSnapshot`. The Core
 fixture adapter converts that portable shape to `Coin` only when loading a Core
 UTXO cache.
+
+## Design Shape
+
+The important production flow is:
+
+```text
+node or kernel caller
+  -> ChainValidationService
+  -> Core validation setup
+  -> consensus stages
+  -> Core adapters
+  -> Core storage and chainstate mutation
+```
+
+The important consensus flow is:
+
+```text
+structural checks
+  -> contextual checks
+  -> spend validation
+  -> script check completion
+  -> explicit effects
+  -> commit interfaces
+```
+
+The important dependency rule is:
+
+```text
+node -> chain validation -> consensus
+kernel -> chain validation -> consensus
+Core storage adapters -> Core storage
+consensus -/-> node, kernel, chainstate, mempool, storage, logging, clocks
+```
+
+The important side-effect rule is:
+
+```text
+consensus returns results and effects
+validation maps those results to Core state
+adapters perform storage, cache, mempool, and block-index effects
+```
+
+## Important Examples
+
+Use these files as examples of the design.
+
+`src/block_validation.cpp`
+
+- Shows production validation entering the staged consensus path.
+- Builds Core-derived context and options.
+- Maps consensus errors back to `BlockValidationState`.
+- Keeps existing Core validation behavior at the adapter boundary.
+
+`src/core_block_connection_attempt.{h,cpp}`
+
+- Shows the explicit spend path:
+  `ValidateAndStageSpend()`, `CompleteSpendStage()`,
+  `WriteUndoAndCommitSpendState()`, and `CommitBlockIndex()`.
+
+`src/core_block_commit_adapters.{h,cpp}`
+
+- Turns consensus spend effects into Core undo data, coins-cache mutation, and
+  block-index metadata updates.
+
+`src/block_data_admission.{h,cpp}`
+
+- Shows block-data admission as a value-based policy function with named
+  outcomes.
+
+`src/block_data_adapters.{h,cpp}` and `src/block_index_adapters.{h,cpp}`
+
+- Show Core block storage and block-index access behind narrow validation
+  capabilities.
+
+`src/chain_validation.{h,cpp}`
+
+- Shows the service boundary used by node, kernel, mining, and tests.
+
+`src/chainstate_mempool_sync.h` and `src/node/mempool_chain_sync.{h,cpp}`
+
+- Show node-owned mempool side effects behind an explicit chainstate sync
+  capability.
+
+`src/consensus/snapshot_spend_state.{h,cpp}`
+
+- Shows an alternate spend-state backend that does not depend on Core's UTXO
+  cache implementation.
+
+`src/test/consensus_api_consumer_tests.cpp`
+
+- Shows how an external-style consumer can include `consensus/api.h`, provide
+  its own spend backend, script checker, and commit adapters, and run the
+  consensus API without Core validation headers.
 
 ## Stage API
 
@@ -442,8 +604,10 @@ CoreBlockConnectionAttempt connection_attempt{
     block,
     *pindex,
     view,
-    chainstate.m_blockman,
-    chainstate.m_blockman.DirtyBlockIndex(),
+    block_store,
+    block_index_store,
+    spend_workspace,
+    spend_state_committer,
     consensus_context,
     spend_options,
 };
@@ -618,7 +782,7 @@ struct BlockSpendEffects {
 ```
 
 Core turns those effects into undo data and cache mutation in
-`src/block_coin_effects.cpp` and `src/block_validation_adapters.cpp`.
+`src/block_coin_effects.cpp` and `src/core_block_commit_adapters.cpp`.
 
 ## Why This Design
 
@@ -632,6 +796,14 @@ CheckBlockFutureTime(block, max_block_time);
 
 This is easier to reason about than a function that reads time from a global
 clock or reaches through `ChainstateManager`.
+
+At the Core adapter boundary, `BlockValidationTime` carries current time in
+seconds and the derived future block time limit into header admission, block
+admission, block processing, and test validation.
+
+Core callers enter chain validation through `ChainValidationService`. This keeps
+the validation capability explicit at call sites while the underlying
+implementation still uses `block_validation.cpp`.
 
 ### Testability
 
@@ -809,6 +981,9 @@ Current limitations:
 - production adapts header history from Core's block-index view
 - Core still owns validation orchestration, locks, block storage, undo writes,
   and chainstate persistence
+- mempool admission is not yet split into its own explicit target
+- LevelDB coins and block-file storage are not yet behind stable kernel storage
+  interfaces
 - alternate spend-state backends are enabled by interfaces, but only the Core
   and snapshot backends exist today
 - script scheduling is abstracted, but Core's production path still uses the
@@ -821,6 +996,7 @@ explicit without requiring a full rewrite.
 
 When reviewing consensus changes on this branch, check:
 
+- boundary guardrails still cover dependency direction
 - `src/consensus` avoids Core node types and side effects
 - rule inputs are explicit
 - failures return `Consensus::Expected` errors instead of mutating validation
