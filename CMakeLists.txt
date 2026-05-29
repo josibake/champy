@@ -117,8 +117,6 @@ option(BUILD_BENCH "Build bench_bitcoin executable." OFF)
 option(BUILD_FUZZ_BINARY "Build fuzz binary." OFF)
 option(BUILD_FOR_FUZZING "Build for fuzzing. Enabling this will disable all other targets and override BUILD_FUZZ_BINARY." OFF)
 
-option(INSTALL_MAN "Install man pages." ON)
-
 # Check required C++ toolchain features early.
 include(CheckCXXFeatures)
 check_cxx_features()
@@ -167,12 +165,6 @@ include(cmake/introspection.cmake)
 
 include(cmake/warnings.cmake)
 
-configure_file(cmake/script/Coverage.cmake Coverage.cmake USE_SOURCE_PERMISSIONS COPYONLY)
-configure_file(cmake/script/CoverageFuzz.cmake CoverageFuzz.cmake USE_SOURCE_PERMISSIONS COPYONLY)
-configure_file(cmake/script/CoverageInclude.cmake.in CoverageInclude.cmake USE_SOURCE_PERMISSIONS @ONLY)
-configure_file(cmake/script/cov_tool_wrapper.sh.in cov_tool_wrapper.sh.in USE_SOURCE_PERMISSIONS COPYONLY)
-configure_file(contrib/filter-lcov.py filter-lcov.py USE_SOURCE_PERMISSIONS COPYONLY)
-
 include(cmake/hardening.cmake)
 
 # Prefer Unix-style package components over frameworks on macOS.
@@ -199,8 +191,6 @@ if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.29)
 endif()
 
 add_subdirectory(test)
-add_subdirectory(doc)
-
 add_subdirectory(src)
 
 include(cmake/configure_summary.cmake)

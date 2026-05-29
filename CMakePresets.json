@@ -12,8 +12,7 @@
         "BUILD_DAEMON": "ON",
         "BUILD_KERNEL_LIB": "ON",
         "BUILD_TESTS": "ON",
-        "BUILD_UTIL_CHAINSTATE": "ON",
-        "WITH_ZMQ": "ON"
+        "BUILD_UTIL_CHAINSTATE": "ON"
       }
     },
     {

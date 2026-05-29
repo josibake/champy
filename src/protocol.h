@@ -302,9 +302,8 @@ std::vector<std::string> serviceFlagsToStr(uint64_t flags);
 
 /**
  * State independent service flags.
- * If the return value is changed, contrib/seeds/makeseeds.py
- * should be updated appropriately to filter for nodes with
- * desired service flags (compatible with our new flags).
+ * If the return value is changed, fixed seed data should be regenerated with
+ * the same service flag filter.
  */
 constexpr ServiceFlags SeedsServiceFlags() { return ServiceFlags(NODE_NETWORK | NODE_WITNESS); }
 

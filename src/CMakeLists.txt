@@ -317,7 +317,7 @@ if(BUILD_BITCOIN_BIN)
   add_windows_resources(bitcoin bitcoin-res.rc)
   add_windows_application_manifest(bitcoin)
   target_link_libraries(bitcoin core_interface bitcoin_common bitcoin_util)
-  install_binary_component(bitcoin HAS_MANPAGE)
+  install_binary_component(bitcoin)
 endif()
 
 # Bitcoin Core bitcoind.
@@ -333,7 +333,7 @@ if(BUILD_DAEMON)
     bitcoin_node
     bitcoin_ipc
   )
-  install_binary_component(bitcoind HAS_MANPAGE)
+  install_binary_component(bitcoind)
 endif()
 if(BUILD_DAEMON)
   add_executable(bitcoin-node
@@ -370,7 +370,7 @@ if(BUILD_CLI)
     bitcoin_ipc
     bitcoin_util
   )
-  install_binary_component(bitcoin-cli HAS_MANPAGE)
+  install_binary_component(bitcoin-cli)
 endif()
 
 

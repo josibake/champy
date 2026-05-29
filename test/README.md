@@ -6,18 +6,13 @@ This directory contains the following sets of tests:
 
 - [fuzz](/test/fuzz) A runner to execute all fuzz targets from
   [/src/test/fuzz](/src/test/fuzz).
-- [lint](/test/lint/) which perform various static analysis checks.
 
-The fuzz tests and lint scripts can be run as explained in the sections below.
+The fuzz tests can be run as explained in the sections below.
 
 # Running tests locally
 
-Before tests can be run locally, Bitcoin Core must be built.  See the [building instructions](/doc#building) for help.
+Before tests can be run locally, Champy must be built.
 
 ## Fuzz tests
 
-See [/doc/fuzzing.md](/doc/fuzzing.md)
-
-### Lint tests
-
-See the README in [test/lint](/test/lint).
+Run `build/test/fuzz/test_runner.py` after building the fuzz binary.

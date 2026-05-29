@@ -207,8 +207,7 @@ MempoolAcceptResult AcceptToMemoryPool(Chainstate& active_chainstate, const CTra
     EXCLUSIVE_LOCKS_REQUIRED(cs_main);
 
 /**
- * Validate (and maybe submit) a package to the mempool. See doc/policy/packages.md for full details
- * on package validation rules.
+ * Validate and optionally submit a package to the mempool.
  * @param[in]    test_accept         When true, run validation checks but don't submit to mempool.
  * @param[in]    client_maxfeerate    If exceeded by an individual transaction, rest of (sub)package evaluation is aborted.
  *                                   Only for sanity checks against local submission of transactions.
