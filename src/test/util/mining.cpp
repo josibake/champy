@@ -112,10 +112,10 @@ COutPoint ProcessBlock(const NodeContext& node, const std::shared_ptr<CBlock>& b
     const auto old_height = WITH_LOCK(chainman.GetMutex(), return chainman.ActiveHeight());
     BlockValidationStateCatcher bvsc{block->GetHash()};
     node.validation_signals->RegisterValidationInterface(&bvsc);
-    std::optional<node::MempoolChainSync> mempool_sync;
-    if (node.mempool) mempool_sync.emplace(*node.mempool);
+    std::optional<node::MempoolChainSync> chain_events;
+    if (node.mempool) chain_events.emplace(*node.mempool);
     const NewBlockProcessingResult result{ChainValidationService{chainman}.ProcessNewBlock(
-        mempool_sync ? &*mempool_sync : nullptr,
+        chain_events ? &*chain_events : nullptr,
         block,
         {.force_processing = true, .header = {.min_pow_checked = true}},
         CurrentBlockValidationTime())};

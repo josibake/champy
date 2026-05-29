@@ -7,6 +7,8 @@ path easier to test, easier to reason about, and easier to extract later.
 
 For validation locking, scheduling, and callback rules, see
 [validation-execution-contracts.md](validation-execution-contracts.md).
+For compatibility surfaces that should not become permanent architecture, see
+[legacy-compatibility.md](legacy-compatibility.md).
 
 ## Layers
 
@@ -105,7 +107,7 @@ The important interfaces are:
 - `CoinEffects`: records validated coin spends and creates.
 - `BlockCommitter`: applies validated effects.
 - `ChainValidationService`: Core-facing service for block/header admission.
-- `ChainstateMempoolSync`: validation-to-node hook for mempool side effects.
+- `ChainstateEventSink`: validation-to-node hook for chain events.
 
 These names are intentional:
 
@@ -132,7 +134,7 @@ Kernel should be usable without node:
 - no mempool ownership in kernel
 
 Mempool state is node state. Chain validation may notify a
-`ChainstateMempoolSync` implementation that blocks connected or disconnected,
+`ChainstateEventSink` when blocks connect, disconnect, or a reorg completes,
 but the concrete mempool repair logic belongs to node.
 
 Storage is not consensus. Core's block storage and chainstate loading live in
@@ -166,7 +168,7 @@ and commit code can be reviewed as mutation rather than validation.
 
 Mempool reorg handling used to leak through validation and kernel-adjacent code.
 
-Now validation only reports chain events through `ChainstateMempoolSync`:
+Now validation reports chain events through `ChainstateEventSink`:
 
 - a block connected
 - a block disconnected
@@ -177,6 +179,11 @@ disconnected-transaction staging.
 
 This keeps mempool policy out of kernel and keeps validation from owning node
 state.
+
+## Quick Regression Check
+
+Use `bench_bitcoin -filter=BlockConnectionEngine` to measure the deterministic
+block-connection path without running a full node.
 
 ## Adding Code
 

@@ -55,7 +55,7 @@ building a full node.
 
 Mempool state is not consensus and is not kernel runtime state.
 
-Validation reports chain events through `ChainstateMempoolSync`. The concrete
+Validation reports chain events through `ChainstateEventSink`. The node
 implementation, `node::MempoolChainSync`, owns mempool repair and
 disconnected-transaction staging.
 

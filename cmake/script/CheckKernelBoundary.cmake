@@ -50,6 +50,7 @@ foreach(needle IN ITEMS
     "Mempool"
     "node::"
     "#include <node/"
-    "ChainstateMempoolSync")
+    "ChainstateMempoolSync"
+    "ChainstateEventSink")
   forbid_text("src/kernel/bitcoinkernel.h" "${needle}")
 endforeach()

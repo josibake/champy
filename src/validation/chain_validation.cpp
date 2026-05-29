@@ -25,12 +25,12 @@ BlockAcceptanceResult ChainValidationService::AcceptBlock(
 }
 
 NewBlockProcessingResult ChainValidationService::ProcessNewBlock(
-    ChainstateMempoolSync* mempool_sync,
+    ChainstateEventSink* chain_events,
     const std::shared_ptr<const CBlock>& block,
     NewBlockProcessingOptions options,
     BlockValidationTime time)
 {
-    return ::ProcessNewBlock(m_chainman, mempool_sync, block, options, time);
+    return ::ProcessNewBlock(m_chainman, chain_events, block, options, time);
 }
 
 NewBlockProcessingResult ChainValidationService::ProcessNewBlock(

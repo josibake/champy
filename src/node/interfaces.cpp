@@ -790,10 +790,10 @@ public:
     bool submitSolution(uint32_t version, uint32_t timestamp, uint32_t nonce, CTransactionRef coinbase) override
     {
         AddMerkleRootAndCoinbase(m_block_template->block, std::move(coinbase), version, timestamp, nonce);
-        std::optional<MempoolChainSync> mempool_sync;
-        if (m_node.mempool) mempool_sync.emplace(*m_node.mempool);
+        std::optional<MempoolChainSync> chain_events;
+        if (m_node.mempool) chain_events.emplace(*m_node.mempool);
         return ChainValidationService{chainman()}.ProcessNewBlock(
-            mempool_sync ? &*mempool_sync : nullptr,
+            chain_events ? &*chain_events : nullptr,
             std::make_shared<const CBlock>(m_block_template->block),
             {.force_processing = true, .header = {.min_pow_checked = true}},
             CurrentBlockValidationTime())

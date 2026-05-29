@@ -35,6 +35,8 @@ foreach(relative_path IN ITEMS
     src/validation/block_data_adapters.h
     src/validation/block_index_adapters.cpp
     src/validation/block_index_adapters.h
+    src/validation/block_connection.cpp
+    src/validation/block_connection.h
     src/validation/block_validation_internal.h
     src/validation/chain_validation.cpp
     src/validation/chain_validation.h)
@@ -49,6 +51,9 @@ require_text("src/CMakeLists.txt" "target_link_libraries(bitcoin_chain_validatio
 require_text("src/CMakeLists.txt" "bitcoin_chain_validation")
 require_text("src/kernel/CMakeLists.txt" "bitcoin_chain_validation")
 require_text("src/validation/block_validation.cpp" "#include <validation/block_validation_internal.h>")
+require_text("src/validation/block_validation.cpp" "validation::BlockConnectionEngine")
+require_text("src/validation/block_connection.h" "struct BlockConnectionRequest")
+require_text("src/validation/block_connection.h" "class BlockConnectionEngine")
 require_text("src/validation/chain_validation.cpp" "#include <validation/block_validation_internal.h>")
 require_text("src/validation/chain_validation.h" "class ChainValidationService")
 require_text("src/validation/block_validation_internal.h" "ProcessNewBlockHeaders(")

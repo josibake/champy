@@ -204,6 +204,7 @@ set(BITCOIN_CHAIN_VALIDATION_SOURCES
   ${CMAKE_CURRENT_SOURCE_DIR}/validation/block_index_adapters.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/validation/block_coin_effects.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/validation/block_header_context_adapters.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/validation/block_connection.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/validation/block_script_check_adapters.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/validation/block_validation.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/validation/block_validation_error.cpp

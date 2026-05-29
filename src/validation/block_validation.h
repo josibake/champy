@@ -8,11 +8,11 @@
 #include <arith_uint256.h>
 #include <coins.h>
 #include <consensus/amount.h>
-#include <consensus/block_check.h>
 #include <consensus/params.h>
 #include <validation_state.h>
 #include <kernel/cs_main.h>
 #include <primitives/block.h>
+#include <validation/block_connection.h>
 
 #include <cstdint>
 #include <memory>
@@ -20,23 +20,11 @@
 
 class CBlockIndex;
 class Chainstate;
-class ChainstateMempoolSync;
+class ChainstateEventSink;
 class ChainstateManager;
 class ValidationSignals;
 
 struct FlatFilePos;
-
-/**
- * ConnectBlock adapter options.
- *
- * These keep block-check policy, script-cache policy, and commit behavior
- * explicit at Core's existing validation entry point.
- */
-struct ConnectBlockOptions {
-    Consensus::BlockCheckOptions block_check_options{};
-    bool cache_script_results{false};
-    bool commit{true};
-};
 
 struct BlockHeaderAcceptanceOptions {
     bool min_pow_checked{false};

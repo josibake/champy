@@ -22,19 +22,19 @@
 
 namespace node {
 
-void MempoolChainSync::AddTransactionsUpdated()
+void MempoolChainSync::TransactionsUpdated()
 {
     AssertLockHeld(cs_main);
     m_mempool.AddTransactionsUpdated(1);
 }
 
-void MempoolChainSync::Check(const CCoinsViewCache& coins, int64_t spend_height) const
+void MempoolChainSync::CheckPostReorgState(const CCoinsViewCache& coins, int64_t spend_height) const
 {
     AssertLockHeld(cs_main);
     m_mempool.check(coins, spend_height);
 }
 
-void MempoolChainSync::UpdateForDisconnectedBlock(
+void MempoolChainSync::BlockDisconnected(
     const CBlock& block) NO_THREAD_SAFETY_ANALYSIS
 {
     AssertLockHeld(cs_main);
@@ -47,7 +47,7 @@ void MempoolChainSync::UpdateForDisconnectedBlock(
     }
 }
 
-void MempoolChainSync::UpdateForConnectedBlock(
+void MempoolChainSync::BlockConnected(
     const CBlock& block,
     unsigned int block_height) NO_THREAD_SAFETY_ANALYSIS
 {
@@ -58,9 +58,9 @@ void MempoolChainSync::UpdateForConnectedBlock(
     m_disconnectpool.removeForBlock(block.vtx);
 }
 
-void MempoolChainSync::UpdateForReorg(
+void MempoolChainSync::ReorgCompleted(
     Chainstate& chainstate,
-    bool add_to_mempool) NO_THREAD_SAFETY_ANALYSIS
+    bool restore_disconnected_transactions) NO_THREAD_SAFETY_ANALYSIS
 {
     AssertLockHeld(cs_main);
     AssertLockHeld(m_mempool.cs);
@@ -76,7 +76,7 @@ void MempoolChainSync::UpdateForReorg(
         auto it = queuedTx.rbegin();
         while (it != queuedTx.rend()) {
             // ignore validation errors in resurrected transactions
-            if (!add_to_mempool || (*it)->IsCoinBase() ||
+            if (!restore_disconnected_transactions || (*it)->IsCoinBase() ||
                 AcceptToMemoryPool(chainstate, m_mempool, *it, GetTime(),
                                    /*bypass_limits=*/true, /*test_accept=*/false)
                         .m_result_type !=

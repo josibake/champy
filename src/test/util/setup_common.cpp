@@ -430,10 +430,10 @@ CBlock TestChain100Setup::CreateAndProcessBlock(
 
     CBlock block = this->CreateBlock(txns, scriptPubKey, *chainstate);
     std::shared_ptr<const CBlock> shared_pblock = std::make_shared<const CBlock>(block);
-    std::optional<node::MempoolChainSync> mempool_sync;
-    if (m_node.mempool) mempool_sync.emplace(*m_node.mempool);
+    std::optional<node::MempoolChainSync> chain_events;
+    if (m_node.mempool) chain_events.emplace(*m_node.mempool);
     (void)ChainValidationService{*Assert(m_node.chainman)}.ProcessNewBlock(
-        mempool_sync ? &*mempool_sync : nullptr,
+        chain_events ? &*chain_events : nullptr,
         shared_pblock,
         {.force_processing = true, .header = {.min_pow_checked = true}},
         CurrentBlockValidationTime());

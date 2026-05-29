@@ -5,7 +5,7 @@
 #ifndef BITCOIN_NODE_MEMPOOL_CHAIN_SYNC_H
 #define BITCOIN_NODE_MEMPOOL_CHAIN_SYNC_H
 
-#include <chainstate_mempool_sync.h>
+#include <chainstate_event_sink.h>
 #include <node/disconnected_transactions.h>
 #include <node/txmempool.h>
 #include <sync.h>
@@ -18,7 +18,7 @@ class CCoinsViewCache;
 
 namespace node {
 
-class MempoolChainSync final : public ChainstateMempoolSync
+class MempoolChainSync final : public ChainstateEventSink
 {
 public:
     explicit MempoolChainSync(CTxMemPool& mempool) : m_mempool{mempool} {}
@@ -32,8 +32,8 @@ public:
         };
     }
 
-    void AddTransactionsUpdated() override EXCLUSIVE_LOCKS_REQUIRED(cs_main);
-    void Check(const CCoinsViewCache& coins, int64_t spend_height) const override EXCLUSIVE_LOCKS_REQUIRED(cs_main);
+    void TransactionsUpdated() override EXCLUSIVE_LOCKS_REQUIRED(cs_main);
+    void CheckPostReorgState(const CCoinsViewCache& coins, int64_t spend_height) const override EXCLUSIVE_LOCKS_REQUIRED(cs_main);
 
     /**
      * Apply mempool bookkeeping for a block disconnected from the active chain.
@@ -42,13 +42,13 @@ public:
      * block disconnect and the later reorg repair step, so observers never see
      * a half-repaired mempool after the locks are released.
      */
-    void UpdateForDisconnectedBlock(
+    void BlockDisconnected(
         const CBlock& block) override EXCLUSIVE_LOCKS_REQUIRED(cs_main);
 
     /**
      * Remove transactions confirmed by a connected block from mempool state.
      */
-    void UpdateForConnectedBlock(
+    void BlockConnected(
         const CBlock& block,
         unsigned int block_height) override EXCLUSIVE_LOCKS_REQUIRED(cs_main);
 
@@ -57,9 +57,9 @@ public:
      * transactions from disconnected blocks, then dropping entries that are no
      * longer final, mature, or within mempool size limits.
      */
-    void UpdateForReorg(
+    void ReorgCompleted(
         Chainstate& chainstate,
-        bool add_to_mempool) override EXCLUSIVE_LOCKS_REQUIRED(cs_main);
+        bool restore_disconnected_transactions) override EXCLUSIVE_LOCKS_REQUIRED(cs_main);
 
 private:
     CTxMemPool& m_mempool;

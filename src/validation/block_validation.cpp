@@ -8,6 +8,7 @@
 #include <arith_uint256.h>
 #include <validation/block_data_admission.h>
 #include <validation/block_data_adapters.h>
+#include <validation/block_connection.h>
 #include <validation/block_index_adapters.h>
 #include <validation/block_script_check_adapters.h>
 #include <validation/block_validation_adapters.h>
@@ -61,7 +62,6 @@
 using kernel::Notifications;
 
 using fsbridge::FopenFn;
-TRACEPOINT_SEMAPHORE(validation, block_connected);
 
 /** Undo the effects of this block (with given index) on the UTXO set represented by coins.
  *  When FAILED is returned, view is left in an indeterminate state. */
@@ -143,132 +143,20 @@ DisconnectResult DisconnectBlock(Chainstate& chainstate, const CBlock& block, co
     return DisconnectBlock(block_store, block, pindex, view);
 }
 
-/** Apply the effects of this block (with given index) on the UTXO set represented by coins.
- *  Validity checks that depend on the UTXO set are also done; ConnectBlock()
- *  can fail if those validity checks fail (among other reasons). */
 bool ConnectBlock(Chainstate& chainstate, const CBlock& block, BlockValidationState& state, CBlockIndex* pindex,
                   CCoinsViewCache& view, ConnectBlockOptions options)
 {
     AssertLockHeld(cs_main);
     assert(pindex);
-
-    uint256 block_hash{block.GetHash()};
-    assert(*pindex->phashBlock == block_hash);
-
-    ConnectBlockBench bench{chainstate.m_chainman};
-    const CChainParams& params{chainstate.m_chainman.GetParams()};
-
-    // Check it again in case a previous version let a bad block in
-    // NOTE: We don't currently (re-)invoke ContextualCheckBlock() or
-    // ContextualCheckBlockHeader() here. This means that if we add a new
-    // consensus rule that is enforced in one of those two functions, then we
-    // may have let in a block that violates the rule prior to updating the
-    // software, and we would NOT be enforcing the rule here. Fully solving
-    // upgrade from one software version to the next after a consensus rule
-    // change is potentially tricky and issue-specific (see NeedsRedownload()
-    // for one approach that was used for BIP 141 deployment).
-    // Also, currently the rule against blocks more than 2 hours in the future
-    // is enforced in ContextualCheckBlockHeader(); we wouldn't want to
-    // re-enforce that rule here (at least until we make it impossible for
-    // the clock to go backward).
-    if (!CheckBlock(block, state, params.GetConsensus(), options.block_check_options)) {
-        if (state.GetResult() == BlockValidationResult::BLOCK_MUTATED) {
-            // We don't write down blocks to disk if they may have been
-            // corrupted, so this should be impossible unless we're having hardware
-            // problems.
-            return FatalError(chainstate.m_chainman.GetNotifications(), state, _("Corrupt block found indicating potential hardware failure."));
-        }
-        LogError("%s: Consensus::CheckBlock: %s\n", __func__, state.ToString());
-        return false;
-    }
-
-    // verify that the view's current state corresponds to the previous block
-    uint256 hashPrevBlock = pindex->pprev == nullptr ? uint256() : pindex->pprev->GetBlockHash();
-    assert(hashPrevBlock == view.GetBestBlock());
-
-    bench.CountBlock();
-
-    // Special case for the genesis block, skipping connection of its transactions
-    // (its coinbase is unspendable)
-    if (block_hash == params.GetConsensus().hashGenesisBlock) {
-        if (options.commit)
-            view.SetBestBlock(pindex->GetBlockHash());
-        return true;
-    }
-
-    const CoreBlockScriptCheckDecision script_check_decision{DetermineCoreBlockScriptChecks(chainstate, *pindex, params.GetConsensus())};
-
-    bench.SanityChecksDone();
-
-    const Consensus::BlockSpendConsensusOptions spend_options{BuildCoreBlockSpendConsensusOptions(
-        *pindex,
-        chainstate.m_chainman)};
-
-    bench.ForkChecksDone();
-
-    MaybeLogCoreBlockScriptCheckDecision(chainstate, *pindex, block_hash, script_check_decision);
-
-    CoreBlockScriptChecks script_checks{
-        chainstate.m_chainman.GetCheckQueue(),
-        script_check_decision.run_script_checks,
-        options.cache_script_results,
-        chainstate.m_chainman.m_validation_cache};
-    CoreBlockDataStore block_store{chainstate.m_blockman};
-    CoreBlockIndexStore block_index_store{chainstate.m_chainman};
-    const Consensus::BlockConsensusContext consensus_context{BuildCoreBlockConsensusContext(*pindex, chainstate.m_chainman, params.GetConsensus())};
-    Consensus::CoinsViewBlockSpendWorkspace spend_workspace{view, *pindex};
-    CoreBlockSpendStateCommitter spend_state_committer{spend_workspace.StagedCoins(), view};
-    CoreBlockConnectionAttempt connection_attempt{
-        block,
-        *pindex,
-        view,
-        block_store,
-        block_index_store,
-        spend_workspace,
-        spend_state_committer,
-        consensus_context,
-        spend_options};
-    auto spend_effects{connection_attempt.ValidateAndStageSpend(script_checks.Checker())};
-    const int spend_inputs{spend_effects ? spend_effects->inputs : 0};
-    bench.SpendStageValidated(block.vtx.size(), spend_inputs);
-
-    // Complete any queued script work before leaving the spend stage so cache
-    // updates and script diagnostics stay inside the script-checker boundary.
-    spend_effects = connection_attempt.CompleteSpendStage(std::move(spend_effects), script_checks.Checker());
-    if (!spend_effects) {
-        ApplyBlockSpendError(state, spend_effects.error());
-        LogInfo("Block validation error: %s", state.ToString());
-        return false;
-    }
-    assert(spend_effects);
-    const Consensus::BlockSpendEffects& effects{*spend_effects};
-    bench.SpendStageCompleted(effects.inputs);
-
-    if (!options.commit) {
-        return true;
-    }
-
-    if (const auto spend_state_commit{connection_attempt.WriteUndoAndCommitSpendState(effects)}; !spend_state_commit) {
-        return ApplyBlockCommitError(state, spend_state_commit.error());
-    }
-
-    bench.UndoWritten();
-
-    if (const auto index_commit{connection_attempt.CommitBlockIndex(effects)}; !index_commit) {
-        return ApplyBlockCommitError(state, index_commit.error());
-    }
-
-    bench.IndexCommitted();
-
-    TRACEPOINT(validation, block_connected,
-               block_hash.data(),
-               pindex->nHeight,
-               block.vtx.size(),
-               effects.inputs,
-               effects.sigop_cost,
-               bench.TraceDuration().count());
-
-    return true;
+    // Legacy Core entry point. New orchestration belongs in
+    // validation::BlockConnectionEngine; see doc/legacy-compatibility.md.
+    return validation::BlockConnectionEngine{}.Connect({
+        .chainstate = chainstate,
+        .block = block,
+        .block_index = *pindex,
+        .coins_view = view,
+        .options = options,
+    }, state);
 }
 
 static bool CheckMerkleRoot(const CBlock& block, const Consensus::BlockStructuralFacts& facts, BlockValidationState& state)
@@ -695,7 +583,7 @@ BlockAcceptanceResult AcceptBlock(ChainstateManager& chainman, const std::shared
     return {.status = BlockAcceptanceStatus::BlockDataStored, .block_index = &block_index_entry};
 }
 
-NewBlockProcessingResult ProcessNewBlock(ChainstateManager& chainman, ChainstateMempoolSync* mempool_sync, const std::shared_ptr<const CBlock>& block, NewBlockProcessingOptions options, BlockValidationTime time)
+NewBlockProcessingResult ProcessNewBlock(ChainstateManager& chainman, ChainstateEventSink* chain_events, const std::shared_ptr<const CBlock>& block, NewBlockProcessingOptions options, BlockValidationTime time)
 {
     AssertLockNotHeld(cs_main);
 
@@ -740,7 +628,7 @@ NewBlockProcessingResult ProcessNewBlock(ChainstateManager& chainman, Chainstate
     chainman.NotifyHeaderTip();
 
     BlockValidationState state; // Only used to report errors, not invalidity - ignore it
-    if (!chainman.ActiveChainstate().ActivateBestChain(state, block, mempool_sync)) {
+    if (!chainman.ActiveChainstate().ActivateBestChain(state, block, chain_events)) {
         LogError("%s: ActivateBestChain failed (%s)\n", __func__, state.ToString());
         return result;
     }
@@ -751,7 +639,7 @@ NewBlockProcessingResult ProcessNewBlock(ChainstateManager& chainman, Chainstate
 
 NewBlockProcessingResult ProcessNewBlock(ChainstateManager& chainman, const std::shared_ptr<const CBlock>& block, NewBlockProcessingOptions options, BlockValidationTime time)
 {
-    return ProcessNewBlock(chainman, /*mempool_sync=*/nullptr, block, options, time);
+    return ProcessNewBlock(chainman, /*chain_events=*/nullptr, block, options, time);
 }
 
 BlockValidationState TestBlockValidity(

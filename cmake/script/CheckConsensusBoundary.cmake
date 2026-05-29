@@ -195,6 +195,7 @@ set(forbidden_symbols
   "Chainstate"
   "ChainstateManager"
   "ChainstateMempoolSync"
+  "ChainstateEventSink"
   "FlatFilePos"
   "BlockDataStore"
   "BlockIndexStore"

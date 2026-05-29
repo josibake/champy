@@ -50,7 +50,7 @@
 class Chainstate;
 class ChainstateManager;
 struct ChainTxData;
-class ChainstateMempoolSync;
+class ChainstateEventSink;
 struct LockPoints;
 namespace Consensus {
 struct Params;
@@ -369,26 +369,26 @@ public:
     bool ActivateBestChain(
         BlockValidationState& state,
         std::shared_ptr<const CBlock> pblock = nullptr,
-        ChainstateMempoolSync* mempool_sync = nullptr)
+        ChainstateEventSink* chain_events = nullptr)
         EXCLUSIVE_LOCKS_REQUIRED(!m_chainstate_mutex)
         LOCKS_EXCLUDED(::cs_main);
 
     // Apply the effects of a block disconnection on the UTXO set.
     bool DisconnectTip(
         BlockValidationState& state,
-        ChainstateMempoolSync* mempool_sync) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
+        ChainstateEventSink* chain_events) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
 
     // Manual block validity manipulation:
     /** Mark a block as precious and reorganize.
      *
      * May not be called in a validationinterface callback.
      */
-    bool PreciousBlock(BlockValidationState& state, CBlockIndex* pindex, ChainstateMempoolSync* mempool_sync = nullptr)
+    bool PreciousBlock(BlockValidationState& state, CBlockIndex* pindex, ChainstateEventSink* chain_events = nullptr)
         EXCLUSIVE_LOCKS_REQUIRED(!m_chainstate_mutex)
         LOCKS_EXCLUDED(::cs_main);
 
     /** Mark a block as invalid. */
-    bool InvalidateBlock(BlockValidationState& state, CBlockIndex* pindex, ChainstateMempoolSync* mempool_sync = nullptr)
+    bool InvalidateBlock(BlockValidationState& state, CBlockIndex* pindex, ChainstateEventSink* chain_events = nullptr)
         EXCLUSIVE_LOCKS_REQUIRED(!m_chainstate_mutex)
         LOCKS_EXCLUDED(::cs_main);
 
@@ -445,13 +445,13 @@ protected:
         const std::shared_ptr<const CBlock>& pblock,
         bool& fInvalidFound,
         std::vector<ConnectedBlock>& connected_blocks,
-        ChainstateMempoolSync* mempool_sync) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
+        ChainstateEventSink* chain_events) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
     bool ConnectTip(
         BlockValidationState& state,
         CBlockIndex* pindexNew,
         std::shared_ptr<const CBlock> block_to_connect,
         std::vector<ConnectedBlock>& connected_blocks,
-        ChainstateMempoolSync* mempool_sync) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
+        ChainstateEventSink* chain_events) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
 
     CBlockIndex* FindMostWorkChain() EXCLUSIVE_LOCKS_REQUIRED(cs_main);
 
@@ -459,7 +459,7 @@ protected:
     void InvalidChainFound(CBlockIndex* pindexNew) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
 
     /** Check warning conditions and do some notifications on new chain tip set. */
-    void UpdateTip(const CBlockIndex* pindexNew, ChainstateMempoolSync* mempool_sync = nullptr)
+    void UpdateTip(const CBlockIndex* pindexNew, ChainstateEventSink* chain_events = nullptr)
         EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
 
     NodeClock::time_point m_next_write{NodeClock::time_point::max()};
@@ -699,7 +699,7 @@ public:
     void ResetChainstates() EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
 
     //! Call ActivateBestChain() on the chainstate.
-    util::Result<void> ActivateBestChains(ChainstateMempoolSync* mempool_sync = nullptr) LOCKS_EXCLUDED(::cs_main);
+    util::Result<void> ActivateBestChains(ChainstateEventSink* chain_events = nullptr) LOCKS_EXCLUDED(::cs_main);
 
     //! If, due to invalidation / reconsideration of blocks, the previous
     //! best header is no longer valid / guaranteed to be the most-work

@@ -277,10 +277,10 @@ BOOST_AUTO_TEST_CASE(processnewblock_signals_ordering)
  */
 BOOST_AUTO_TEST_CASE(mempool_locks_reorg)
 {
-    node::MempoolChainSync mempool_sync{*Assert(m_node.mempool)};
+    node::MempoolChainSync chain_events{*Assert(m_node.mempool)};
     auto ProcessBlock = [&](std::shared_ptr<const CBlock> block) -> bool {
         return ChainValidationService{*Assert(m_node.chainman)}.ProcessNewBlock(
-            &mempool_sync,
+            &chain_events,
             block,
             {.force_processing = true, .header = {.min_pow_checked = true}},
             CurrentBlockValidationTime())

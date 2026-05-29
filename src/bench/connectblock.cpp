@@ -4,13 +4,14 @@
 
 #include <addresstype.h>
 #include <bench/bench.h>
-#include <validation/block_validation.h>
 #include <interfaces/chain.h>
 #include <kernel/cs_main.h>
 #include <policy/feerate.h>
 #include <script/interpreter.h>
 #include <sync.h>
 #include <test/util/setup_common.h>
+#include <validation/block_connection.h>
+#include <validation_state.h>
 #include <chainstate.h>
 
 #include <cassert>
@@ -91,7 +92,7 @@ std::pair<std::vector<CKey>, std::vector<CTxOut>> CreateKeysAndOutputs(const CKe
     return {keys, outputs};
 }
 
-void BenchmarkConnectBlock(benchmark::Bench& bench, std::vector<CKey>& keys, std::vector<CTxOut>& outputs, TestChain100Setup& test_setup)
+void BenchmarkBlockConnectionEngine(benchmark::Bench& bench, std::vector<CKey>& keys, std::vector<CTxOut>& outputs, TestChain100Setup& test_setup)
 {
     const auto& test_block{CreateTestBlock(test_setup, keys, outputs)};
     bench.unit("block").run([&] {
@@ -102,32 +103,38 @@ void BenchmarkConnectBlock(benchmark::Bench& bench, std::vector<CKey>& keys, std
         auto* pindex{chainman->m_blockman.AddToBlockIndex(test_block, chainman->m_best_header)}; // Doing this here doesn't impact the benchmark
         CCoinsViewCache viewNew{&chainstate.CoinsTip()};
 
-        assert(ConnectBlock(chainstate, test_block, test_block_state, pindex, viewNew));
+        const validation::BlockConnectionRequest request{
+            .chainstate = chainstate,
+            .block = test_block,
+            .block_index = *pindex,
+            .coins_view = viewNew,
+        };
+        assert(validation::BlockConnectionEngine{}.Connect(request, test_block_state));
     });
 }
 
-static void ConnectBlockAllSchnorr(benchmark::Bench& bench)
+static void BlockConnectionEngineAllSchnorr(benchmark::Bench& bench)
 {
     const auto test_setup{MakeNoLogFileContext<TestChain100Setup>()};
     auto [keys, outputs]{CreateKeysAndOutputs(test_setup->coinbaseKey, /*num_schnorr=*/5, /*num_ecdsa=*/0)};
-    BenchmarkConnectBlock(bench, keys, outputs, *test_setup);
+    BenchmarkBlockConnectionEngine(bench, keys, outputs, *test_setup);
 }
 
-static void ConnectBlockMixedEcdsaSchnorr(benchmark::Bench& bench)
+static void BlockConnectionEngineMixedEcdsaSchnorr(benchmark::Bench& bench)
 {
     const auto test_setup{MakeNoLogFileContext<TestChain100Setup>()};
     // Blocks in range 848000 to 868000 have a roughly 20 to 80 ratio of schnorr to ecdsa inputs
     auto [keys, outputs]{CreateKeysAndOutputs(test_setup->coinbaseKey, /*num_schnorr=*/1, /*num_ecdsa=*/4)};
-    BenchmarkConnectBlock(bench, keys, outputs, *test_setup);
+    BenchmarkBlockConnectionEngine(bench, keys, outputs, *test_setup);
 }
 
-static void ConnectBlockAllEcdsa(benchmark::Bench& bench)
+static void BlockConnectionEngineAllEcdsa(benchmark::Bench& bench)
 {
     const auto test_setup{MakeNoLogFileContext<TestChain100Setup>()};
     auto [keys, outputs]{CreateKeysAndOutputs(test_setup->coinbaseKey, /*num_schnorr=*/0, /*num_ecdsa=*/5)};
-    BenchmarkConnectBlock(bench, keys, outputs, *test_setup);
+    BenchmarkBlockConnectionEngine(bench, keys, outputs, *test_setup);
 }
 
-BENCHMARK(ConnectBlockAllSchnorr);
-BENCHMARK(ConnectBlockMixedEcdsaSchnorr);
-BENCHMARK(ConnectBlockAllEcdsa);
+BENCHMARK(BlockConnectionEngineAllSchnorr);
+BENCHMARK(BlockConnectionEngineMixedEcdsaSchnorr);
+BENCHMARK(BlockConnectionEngineAllEcdsa);

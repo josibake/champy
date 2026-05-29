@@ -39,7 +39,7 @@ Validation may:
 Validation should not:
 
 - own mempool policy or mempool state
-- call node event handlers while holding `cs_main`
+- add new node event handlers that require broad `cs_main` scopes
 - hide storage access behind consensus helpers
 - schedule background work from consensus code
 
@@ -123,8 +123,9 @@ Those events are not consensus effects. They are runtime notifications used by
 node features such as mempool repair.
 
 Event sinks should be called after the corresponding chainstate mutation is
-committed and outside inappropriate lock scopes. Validation should not name or
-own mempool behavior directly.
+committed. The current mempool event sink still uses Core's legacy `cs_main` and
+mempool lock contract; this is tracked in `legacy-compatibility.md`.
+Validation should not name or own mempool behavior directly.
 
 ## Review Checklist
 

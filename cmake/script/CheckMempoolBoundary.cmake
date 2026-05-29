@@ -60,7 +60,7 @@ function(extract_cmake_call_from_file out_var cmake_file call_name target_name)
 endfunction()
 
 foreach(relative_path IN ITEMS
-    src/chainstate_mempool_sync.h
+    src/chainstate_event_sink.h
     src/node/disconnected_transactions.cpp
     src/node/disconnected_transactions.h
     src/node/mempool_chain_sync.cpp
@@ -115,6 +115,7 @@ foreach(source IN LISTS expected_mempool_policy_sources)
 endforeach()
 
 foreach(relative_path IN ITEMS
+    src/chainstate_mempool_sync.h
     src/kernel/disconnected_transactions.cpp
     src/kernel/disconnected_transactions.h
     src/mempool_validation.cpp

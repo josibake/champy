@@ -28,7 +28,7 @@ public:
         BlockValidationTime time) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
 
     [[nodiscard]] NewBlockProcessingResult ProcessNewBlock(
-        ChainstateMempoolSync* mempool_sync,
+        ChainstateEventSink* chain_events,
         const std::shared_ptr<const CBlock>& block,
         NewBlockProcessingOptions options,
         BlockValidationTime time) LOCKS_EXCLUDED(cs_main);
