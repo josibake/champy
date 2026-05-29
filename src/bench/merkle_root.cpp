@@ -29,8 +29,12 @@ static void MerkleRoot(benchmark::Bench& bench)
                 leaves.push_back(hash);
             }
 
-            bool mutated{false};
-            const uint256 root{ComputeMerkleRoot(std::move(leaves), mutate ? &mutated : nullptr)};
+            uint256 root;
+            if (mutate) {
+                root = ComputeMerkleRootWithMutation(std::move(leaves)).root;
+            } else {
+                root = ComputeMerkleRoot(std::move(leaves));
+            }
             assert(root == expected_root);
         });
     }

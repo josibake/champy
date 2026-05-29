@@ -21,6 +21,7 @@ add_executable(test_bitcoin
   blockchain_tests.cpp
   blockencodings_tests.cpp
   blockmanager_tests.cpp
+  block_data_admission_tests.cpp
   bloom_tests.cpp
   bswap_tests.cpp
   btcsignals_tests.cpp
@@ -202,6 +203,13 @@ add_test(
   COMMAND ${CMAKE_COMMAND}
     -DSOURCE_DIR=${PROJECT_SOURCE_DIR}
     -P ${PROJECT_SOURCE_DIR}/cmake/script/CheckConsensusBoundary.cmake
+)
+
+add_test(
+  NAME block_validation_boundary
+  COMMAND ${CMAKE_COMMAND}
+    -DSOURCE_DIR=${PROJECT_SOURCE_DIR}
+    -P ${PROJECT_SOURCE_DIR}/cmake/script/CheckBlockValidationBoundary.cmake
 )
 
 add_test(

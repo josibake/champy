@@ -791,7 +791,12 @@ public:
         AddMerkleRootAndCoinbase(m_block_template->block, std::move(coinbase), version, timestamp, nonce);
         std::optional<MempoolChainSync> mempool_sync;
         if (m_node.mempool) mempool_sync.emplace(*m_node.mempool);
-        return ProcessNewBlock(chainman(), mempool_sync ? &*mempool_sync : nullptr, std::make_shared<const CBlock>(m_block_template->block), /*force_processing=*/true, /*min_pow_checked=*/true, /*new_block=*/nullptr);
+        return ProcessNewBlock(
+            chainman(),
+            mempool_sync ? &*mempool_sync : nullptr,
+            std::make_shared<const CBlock>(m_block_template->block),
+            {.force_processing = true, .header = {.min_pow_checked = true}})
+            .processed();
     }
 
     std::unique_ptr<BlockTemplate> waitNext(BlockWaitOptions options) override
@@ -886,7 +891,10 @@ public:
     bool checkBlock(const CBlock& block, const node::BlockCheckOptions& options, std::string& reason, std::string& debug) override
     {
         LOCK(chainman().GetMutex());
-        BlockValidationState state{TestBlockValidity(chainman().ActiveChainstate(), block, /*check_pow=*/options.check_pow, /*check_merkle_root=*/options.check_merkle_root)};
+        const Consensus::BlockCheckOptions validity_options{
+            .check_pow = options.check_pow,
+            .check_merkle_root = options.check_merkle_root};
+        BlockValidationState state{TestBlockValidity(chainman().ActiveChainstate(), block, validity_options)};
         reason = state.GetRejectReason();
         debug = state.GetDebugMessage();
         return state.IsValid();

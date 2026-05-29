@@ -7,6 +7,7 @@
 
 #include <block_validation_policy.h>
 #include <chain.h>
+#include <chainstate_cache.h>
 #include <chainstate.h>
 #include <consensus/consensus.h>
 #include <tx_check_adapters.h>
@@ -16,7 +17,6 @@
 #include <node/mempool_entry.h>
 #include <kernel/notifications_interface.h>
 #include <node/blockstorage.h>
-#include <node/mempool_chain_sync.h>
 #include <policy/ephemeral_policy.h>
 #include <policy/policy.h>
 #include <policy/rbf.h>
@@ -1593,8 +1593,11 @@ MempoolAcceptResult AcceptToMemoryPool(Chainstate& active_chainstate, CTxMemPool
     }
     // After we've (potentially) uncached entries, ensure our coins cache is still within its size limits
     BlockValidationState state_dummy;
-    node::MempoolChainSync mempool_sync{pool};
-    active_chainstate.FlushStateToDisk(state_dummy, FlushStateMode::PERIODIC, /*nManualPruneHeight=*/0, &mempool_sync);
+    active_chainstate.FlushStateToDisk(
+        state_dummy,
+        FlushStateMode::PERIODIC,
+        /*nManualPruneHeight=*/0,
+        {.max_size_bytes = pool.m_opts.max_size_bytes, .usage_bytes = pool.DynamicMemoryUsage()});
     return result;
 }
 
@@ -1626,8 +1629,11 @@ PackageMempoolAcceptResult ProcessNewPackage(Chainstate& active_chainstate, CTxM
     }
     // Ensure the coins cache is still within limits.
     BlockValidationState state_dummy;
-    node::MempoolChainSync mempool_sync{pool};
-    active_chainstate.FlushStateToDisk(state_dummy, FlushStateMode::PERIODIC, /*nManualPruneHeight=*/0, &mempool_sync);
+    active_chainstate.FlushStateToDisk(
+        state_dummy,
+        FlushStateMode::PERIODIC,
+        /*nManualPruneHeight=*/0,
+        {.max_size_bytes = pool.m_opts.max_size_bytes, .usage_bytes = pool.DynamicMemoryUsage()});
     return result;
 }
 

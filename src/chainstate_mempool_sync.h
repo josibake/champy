@@ -5,10 +5,10 @@
 #ifndef BITCOIN_CHAINSTATE_MEMPOOL_SYNC_H
 #define BITCOIN_CHAINSTATE_MEMPOOL_SYNC_H
 
+#include <chainstate_cache.h>
 #include <kernel/cs_main.h>
 #include <sync.h>
 
-#include <cstddef>
 #include <cstdint>
 
 class CBlock;
@@ -31,8 +31,7 @@ public:
     virtual ~ChainstateMempoolSync() = default;
 
     virtual RecursiveMutex* Mutex() const = 0;
-    virtual size_t MaxSizeBytes() const = 0;
-    virtual size_t DynamicMemoryUsage() const = 0;
+    virtual ExternalCacheUsage CacheUsage() const = 0;
 
     virtual void AddTransactionsUpdated() EXCLUSIVE_LOCKS_REQUIRED(cs_main) = 0;
     virtual void Check(const CCoinsViewCache& coins, int64_t spend_height) const EXCLUSIVE_LOCKS_REQUIRED(cs_main) = 0;

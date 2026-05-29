@@ -6,6 +6,8 @@
 
 #include <kernel/bitcoinkernel.h>
 
+#include <block_data_adapters.h>
+#include <block_index_adapters.h>
 #include <block_validation.h>
 #include <chain.h>
 #include <coins.h>
@@ -1066,8 +1068,10 @@ btck_ChainstateManager* btck_chainstate_manager_create(
 
 const btck_BlockTreeEntry* btck_chainstate_manager_get_block_tree_entry_by_hash(const btck_ChainstateManager* chainman, const btck_BlockHash* block_hash)
 {
-    auto block_index = WITH_LOCK(btck_ChainstateManager::get(chainman).m_chainman->GetMutex(),
-                                 return btck_ChainstateManager::get(chainman).m_chainman->m_blockman.LookupBlockIndex(btck_BlockHash::get(block_hash)));
+    auto& chainman_ref{*btck_ChainstateManager::get(chainman).m_chainman};
+    auto block_index = WITH_LOCK(chainman_ref.GetMutex(),
+                                 CoreBlockIndexStore block_index_store{chainman_ref};
+                                 return block_index_store.LookupBlockIndex(btck_BlockHash::get(block_hash)));
     if (!block_index) {
         LogDebug(BCLog::KERNEL, "A block with the given hash is not indexed.");
         return nullptr;
@@ -1193,8 +1197,9 @@ void btck_block_destroy(btck_Block* block)
 
 btck_Block* btck_block_read(const btck_ChainstateManager* chainman, const btck_BlockTreeEntry* entry)
 {
+    CoreBlockDataStore block_store{btck_ChainstateManager::get(chainman).m_chainman->m_blockman};
     auto block{std::make_shared<CBlock>()};
-    if (!btck_ChainstateManager::get(chainman).m_chainman->m_blockman.ReadBlock(*block, btck_BlockTreeEntry::get(entry))) {
+    if (!block_store.ReadBlock(*block, btck_BlockTreeEntry::get(entry))) {
         LogError("Failed to read block.");
         return nullptr;
     }
@@ -1248,12 +1253,13 @@ void btck_block_hash_destroy(btck_BlockHash* hash)
 
 btck_BlockSpentOutputs* btck_block_spent_outputs_read(const btck_ChainstateManager* chainman, const btck_BlockTreeEntry* entry)
 {
+    CoreBlockDataStore block_store{btck_ChainstateManager::get(chainman).m_chainman->m_blockman};
     auto block_undo{std::make_shared<CBlockUndo>()};
     if (btck_BlockTreeEntry::get(entry).nHeight < 1) {
         LogDebug(BCLog::KERNEL, "The genesis block does not have any spent outputs.");
         return btck_BlockSpentOutputs::create(block_undo);
     }
-    if (!btck_ChainstateManager::get(chainman).m_chainman->m_blockman.ReadBlockUndo(*block_undo, btck_BlockTreeEntry::get(entry))) {
+    if (!block_store.ReadBlockUndo(*block_undo, btck_BlockTreeEntry::get(entry))) {
         LogError("Failed to read block spent outputs data.");
         return nullptr;
     }
@@ -1334,12 +1340,14 @@ int btck_chainstate_manager_process_block(
     const btck_Block* block,
     int* _new_block)
 {
-    bool new_block;
-    auto result = ProcessNewBlock(*btck_ChainstateManager::get(chainman).m_chainman, btck_Block::get(block), /*force_processing=*/true, /*min_pow_checked=*/true, /*new_block=*/&new_block);
+    const NewBlockProcessingResult result{ProcessNewBlock(
+        *btck_ChainstateManager::get(chainman).m_chainman,
+        btck_Block::get(block),
+        {.force_processing = true, .header = {.min_pow_checked = true}})};
     if (_new_block) {
-        *_new_block = new_block ? 1 : 0;
+        *_new_block = result.new_block() ? 1 : 0;
     }
-    return result ? 0 : -1;
+    return result.processed() ? 0 : -1;
 }
 
 btck_BlockValidationState* btck_chainstate_manager_process_block_header(
@@ -1350,8 +1358,12 @@ btck_BlockValidationState* btck_chainstate_manager_process_block_header(
         auto& chainman = btck_ChainstateManager::get(chainstate_manager).m_chainman;
 
         auto state = btck_BlockValidationState::create();
-        bool result{ProcessNewBlockHeaders(*chainman, {&btck_BlockHeader::get(header), 1}, /*min_pow_checked=*/true, btck_BlockValidationState::get(state))};
-        assert(result == btck_BlockValidationState::get(state).IsValid());
+        const NewBlockHeadersResult result{ProcessNewBlockHeaders(
+            *chainman,
+            {&btck_BlockHeader::get(header), 1},
+            {.min_pow_checked = true},
+            btck_BlockValidationState::get(state))};
+        assert(result.accepted == btck_BlockValidationState::get(state).IsValid());
         return state;
     } catch (const std::exception& e) {
         LogError("Failed to process block header: %s", e.what());

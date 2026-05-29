@@ -431,7 +431,11 @@ CBlock TestChain100Setup::CreateAndProcessBlock(
     std::shared_ptr<const CBlock> shared_pblock = std::make_shared<const CBlock>(block);
     std::optional<node::MempoolChainSync> mempool_sync;
     if (m_node.mempool) mempool_sync.emplace(*m_node.mempool);
-    ProcessNewBlock(*Assert(m_node.chainman), mempool_sync ? &*mempool_sync : nullptr, shared_pblock, true, true, nullptr);
+    (void)ProcessNewBlock(
+        *Assert(m_node.chainman),
+        mempool_sync ? &*mempool_sync : nullptr,
+        shared_pblock,
+        {.force_processing = true, .header = {.min_pow_checked = true}});
 
     return block;
 }

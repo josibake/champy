@@ -111,9 +111,9 @@ BOOST_AUTO_TEST_CASE(block_header_check_respects_pow_flag)
     CBlockHeader header;
     header.nBits = UintToArith256(params.powLimit).GetCompact();
 
-    BOOST_CHECK(Consensus::CheckBlockHeader(header, params, /*check_pow=*/false));
+    BOOST_CHECK(Consensus::CheckBlockHeader(header, params, {.check_pow = false}));
 
-    const auto checked_result{Consensus::CheckBlockHeader(header, params, /*check_pow=*/true)};
+    const auto checked_result{Consensus::CheckBlockHeader(header, params, {.check_pow = true})};
     CheckRejectReason(checked_result, Consensus::BlockConsensusIssue::InvalidHeader, "high-hash");
 }
 
@@ -134,31 +134,31 @@ BOOST_AUTO_TEST_CASE(block_header_timewarp_check_applies_to_adjustment_boundarie
     CBlockHeader header;
     header.nTime = 1000 - MAX_TIMEWARP - 1;
 
-    BOOST_CHECK(Consensus::CheckBlockTimewarp(header,
-                                              /*block_height=*/2016,
-                                              /*difficulty_adjustment_interval=*/2016,
-                                              /*previous_block_time=*/1000,
-                                              /*enforce_timewarp_protection=*/false));
+    BOOST_CHECK(Consensus::CheckBlockTimewarp(header, {
+        .block_height = 2016,
+        .difficulty_adjustment_interval = 2016,
+        .previous_block_time = 1000,
+        .enforce_timewarp_protection = false}));
 
-    BOOST_CHECK(Consensus::CheckBlockTimewarp(header,
-                                              /*block_height=*/2015,
-                                              /*difficulty_adjustment_interval=*/2016,
-                                              /*previous_block_time=*/1000,
-                                              /*enforce_timewarp_protection=*/true));
+    BOOST_CHECK(Consensus::CheckBlockTimewarp(header, {
+        .block_height = 2015,
+        .difficulty_adjustment_interval = 2016,
+        .previous_block_time = 1000,
+        .enforce_timewarp_protection = true}));
 
-    const auto active_check{Consensus::CheckBlockTimewarp(header,
-                                                          /*block_height=*/2016,
-                                                          /*difficulty_adjustment_interval=*/2016,
-                                                          /*previous_block_time=*/1000,
-                                                          /*enforce_timewarp_protection=*/true)};
+    const auto active_check{Consensus::CheckBlockTimewarp(header, {
+        .block_height = 2016,
+        .difficulty_adjustment_interval = 2016,
+        .previous_block_time = 1000,
+        .enforce_timewarp_protection = true})};
     CheckRejectReason(active_check, Consensus::BlockConsensusIssue::InvalidHeader, "time-timewarp-attack");
 
     header.nTime = 1000 - MAX_TIMEWARP;
-    BOOST_CHECK(Consensus::CheckBlockTimewarp(header,
-                                              /*block_height=*/2016,
-                                              /*difficulty_adjustment_interval=*/2016,
-                                              /*previous_block_time=*/1000,
-                                              /*enforce_timewarp_protection=*/true));
+    BOOST_CHECK(Consensus::CheckBlockTimewarp(header, {
+        .block_height = 2016,
+        .difficulty_adjustment_interval = 2016,
+        .previous_block_time = 1000,
+        .enforce_timewarp_protection = true}));
 }
 
 BOOST_AUTO_TEST_CASE(block_header_future_time_check_uses_explicit_limit)
@@ -289,15 +289,15 @@ BOOST_AUTO_TEST_CASE(block_version_check_uses_active_deployment_thresholds)
     CBlockHeader header;
     header.nVersion = 1;
 
-    BOOST_CHECK(Consensus::CheckBlockVersion(header,
-                                             /*height_in_coinbase_active=*/false,
-                                             /*der_signature_active=*/false,
-                                             /*cltv_active=*/false));
+    BOOST_CHECK(Consensus::CheckBlockVersion(header, {
+        .height_in_coinbase_active = false,
+        .der_signature_active = false,
+        .cltv_active = false}));
 
-    const auto active_check{Consensus::CheckBlockVersion(header,
-                                                         /*height_in_coinbase_active=*/true,
-                                                         /*der_signature_active=*/false,
-                                                         /*cltv_active=*/false)};
+    const auto active_check{Consensus::CheckBlockVersion(header, {
+        .height_in_coinbase_active = true,
+        .der_signature_active = false,
+        .cltv_active = false})};
     CheckRejectReason(active_check, Consensus::BlockConsensusIssue::InvalidHeader, "bad-version(0x00000001)");
 }
 
@@ -403,7 +403,9 @@ BOOST_AUTO_TEST_CASE(block_transaction_span_checks_accept_minimal_valid_shape)
     BOOST_CHECK(Consensus::CheckBlockContextualTransactionRules(block.vtx, options));
 
     const auto facts{Consensus::ComputeBlockFacts(block)};
-    BOOST_CHECK(Consensus::CheckBlockWitnessRules(block.vtx, facts, /*expect_witness_commitment=*/false, "test-context"));
+    BOOST_CHECK(Consensus::CheckBlockWitnessRules(block.vtx, facts, {
+        .expect_witness_commitment = false,
+        .debug_context = "test-context"}));
 }
 
 BOOST_AUTO_TEST_CASE(block_transaction_span_rejects_mismatched_structural_facts)
@@ -436,7 +438,7 @@ BOOST_AUTO_TEST_CASE(block_witness_check_accepts_valid_commitment)
 
     const auto facts{Consensus::ComputeBlockFacts(block)};
 
-    BOOST_CHECK(Consensus::CheckBlockWitnessMalleation(block, facts, /*expect_witness_commitment=*/true));
+    BOOST_CHECK(Consensus::CheckBlockWitnessMalleation(block, facts, {.expect_witness_commitment = true}));
 }
 
 BOOST_AUTO_TEST_CASE(block_witness_check_rejects_bad_coinbase_nonce)
@@ -450,7 +452,7 @@ BOOST_AUTO_TEST_CASE(block_witness_check_rejects_bad_coinbase_nonce)
 
     const auto facts{Consensus::ComputeBlockFacts(block)};
 
-    const auto result{Consensus::CheckBlockWitnessMalleation(block, facts, /*expect_witness_commitment=*/true)};
+    const auto result{Consensus::CheckBlockWitnessMalleation(block, facts, {.expect_witness_commitment = true})};
     CheckRejectReason(result, Consensus::BlockConsensusIssue::Mutated, "bad-witness-nonce-size");
 }
 
@@ -461,7 +463,7 @@ BOOST_AUTO_TEST_CASE(block_witness_check_rejects_uncommitted_witness)
 
     const auto facts{Consensus::ComputeBlockFacts(block)};
 
-    const auto result{Consensus::CheckBlockWitnessMalleation(block, facts, /*expect_witness_commitment=*/false)};
+    const auto result{Consensus::CheckBlockWitnessMalleation(block, facts, {.expect_witness_commitment = false})};
     CheckRejectReason(result, Consensus::BlockConsensusIssue::Mutated, "unexpected-witness");
 }
 
@@ -473,7 +475,7 @@ BOOST_AUTO_TEST_CASE(block_witness_check_rejects_invalid_commitment_index)
     auto facts{Consensus::ComputeBlockFacts(block)};
     facts.witness_commitment_index = 1;
 
-    const auto result{Consensus::CheckBlockWitnessMalleation(block, facts, /*expect_witness_commitment=*/true)};
+    const auto result{Consensus::CheckBlockWitnessMalleation(block, facts, {.expect_witness_commitment = true})};
     CheckRejectReason(result, Consensus::BlockConsensusIssue::Consensus, "bad-validation-view");
 }
 
@@ -495,7 +497,9 @@ BOOST_AUTO_TEST_CASE(block_witness_rules_check_weight_after_witness_shape)
     auto facts{Consensus::ComputeBlockFacts(block)};
     facts.weight = MAX_BLOCK_WEIGHT + 1;
 
-    const auto result{Consensus::CheckBlockWitnessRules(block, facts, /*expect_witness_commitment=*/false, "test-context")};
+    const auto result{Consensus::CheckBlockWitnessRules(block, facts, {
+        .expect_witness_commitment = false,
+        .debug_context = "test-context"})};
     CheckRejectReason(result, Consensus::BlockConsensusIssue::Consensus, "bad-blk-weight");
 }
 

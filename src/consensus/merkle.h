@@ -13,20 +13,27 @@
 
 #include <span>
 
-uint256 ComputeMerkleRoot(std::vector<uint256> hashes, bool* mutated = nullptr);
+struct MerkleRootResult {
+    uint256 root;
+    bool mutated{false};
+};
+
+[[nodiscard]] uint256 ComputeMerkleRoot(std::vector<uint256> hashes);
+[[nodiscard]] MerkleRootResult ComputeMerkleRootWithMutation(std::vector<uint256> hashes);
 
 /*
  * Compute the Merkle root of the transactions in a block.
- * *mutated is set to true if a duplicated subtree was found.
  */
-uint256 BlockMerkleRoot(std::span<const CTransactionRef> transactions, bool* mutated = nullptr);
-uint256 BlockMerkleRoot(const CBlock& block, bool* mutated = nullptr);
+[[nodiscard]] uint256 BlockMerkleRoot(std::span<const CTransactionRef> transactions);
+[[nodiscard]] uint256 BlockMerkleRoot(const CBlock& block);
+[[nodiscard]] MerkleRootResult BlockMerkleRootWithMutation(std::span<const CTransactionRef> transactions);
+[[nodiscard]] MerkleRootResult BlockMerkleRootWithMutation(const CBlock& block);
 
 /*
  * Compute the Merkle root of the witness transactions in a block.
  */
-uint256 BlockWitnessMerkleRoot(std::span<const CTransactionRef> transactions);
-uint256 BlockWitnessMerkleRoot(const CBlock& block);
+[[nodiscard]] uint256 BlockWitnessMerkleRoot(std::span<const CTransactionRef> transactions);
+[[nodiscard]] uint256 BlockWitnessMerkleRoot(const CBlock& block);
 
 /**
  * Compute merkle path to the specified transaction.

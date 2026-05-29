@@ -904,15 +904,15 @@ void chainman_mainnet_validation_test(TestDirectory& test_directory)
     validation_interface->m_expected_valid_block.emplace(raw_block);
     auto ser_block{block.ToBytes()};
     check_equal(ser_block, raw_block);
-    bool new_block = false;
-    BOOST_CHECK(chainman->ProcessBlock(block, &new_block));
-    BOOST_CHECK(new_block);
+    BlockProcessResult process_result{chainman->ProcessBlock(block)};
+    BOOST_CHECK(process_result.processed);
+    BOOST_CHECK(process_result.new_block);
 
     validation_interface->m_expected_valid_block = std::nullopt;
-    new_block = false;
     Block invalid_block{hex_string_to_byte_vec(REGTEST_BLOCK_DATA[REGTEST_BLOCK_DATA.size() - 1])};
-    BOOST_CHECK(!chainman->ProcessBlock(invalid_block, &new_block));
-    BOOST_CHECK(!new_block);
+    process_result = chainman->ProcessBlock(invalid_block);
+    BOOST_CHECK(!process_result.processed);
+    BOOST_CHECK(!process_result.new_block);
 
     auto chain{chainman->GetChain()};
     BOOST_CHECK_EQUAL(chain.Height(), 1);
@@ -931,8 +931,9 @@ void chainman_mainnet_validation_test(TestDirectory& test_directory)
     BOOST_CHECK(!tip_2.GetPrevious());
 
     // If we try to validate it again, it should be a duplicate
-    BOOST_CHECK(chainman->ProcessBlock(block, &new_block));
-    BOOST_CHECK(!new_block);
+    process_result = chainman->ProcessBlock(block);
+    BOOST_CHECK(process_result.processed);
+    BOOST_CHECK(!process_result.new_block);
 }
 
 BOOST_AUTO_TEST_CASE(btck_check_block_context_free)
@@ -1033,9 +1034,8 @@ BOOST_AUTO_TEST_CASE(btck_block_tree_entry_tests)
     // Process a couple of blocks
     for (size_t i{0}; i < 3; i++) {
         Block block{hex_string_to_byte_vec(REGTEST_BLOCK_DATA[i])};
-        bool new_block{false};
-        chainman->ProcessBlock(block, &new_block);
-        BOOST_CHECK(new_block);
+        const BlockProcessResult process_result{chainman->ProcessBlock(block)};
+        BOOST_CHECK(process_result.new_block);
     }
 
     auto chain{chainman->GetChain()};
@@ -1076,9 +1076,8 @@ BOOST_AUTO_TEST_CASE(btck_chainman_in_memory_tests)
 
     for (auto& raw_block : REGTEST_BLOCK_DATA) {
         Block block{hex_string_to_byte_vec(raw_block)};
-        bool new_block{false};
-        chainman->ProcessBlock(block, &new_block);
-        BOOST_CHECK(new_block);
+        const BlockProcessResult process_result{chainman->ProcessBlock(block)};
+        BOOST_CHECK(process_result.new_block);
     }
 
     BOOST_CHECK(fs::exists(in_memory_test_directory.m_directory / "blocks"));
@@ -1124,9 +1123,9 @@ BOOST_AUTO_TEST_CASE(btck_chainman_regtest_tests)
             /*block_tree_db_in_memory=*/false, /*chainstate_db_in_memory=*/false, context)};
         for (size_t i{0}; i < mid; i++) {
             Block block{hex_string_to_byte_vec(REGTEST_BLOCK_DATA[i])};
-            bool new_block{false};
-            BOOST_CHECK(chainman->ProcessBlock(block, &new_block));
-            BOOST_CHECK(new_block);
+            const BlockProcessResult process_result{chainman->ProcessBlock(block)};
+            BOOST_CHECK(process_result.processed);
+            BOOST_CHECK(process_result.new_block);
         }
     }
 
@@ -1136,9 +1135,9 @@ BOOST_AUTO_TEST_CASE(btck_chainman_regtest_tests)
 
     for (size_t i{mid}; i < REGTEST_BLOCK_DATA.size(); i++) {
         Block block{hex_string_to_byte_vec(REGTEST_BLOCK_DATA[i])};
-        bool new_block{false};
-        BOOST_CHECK(chainman->ProcessBlock(block, &new_block));
-        BOOST_CHECK(new_block);
+        const BlockProcessResult process_result{chainman->ProcessBlock(block)};
+        BOOST_CHECK(process_result.processed);
+        BOOST_CHECK(process_result.new_block);
     }
 
     auto chain = chainman->GetChain();

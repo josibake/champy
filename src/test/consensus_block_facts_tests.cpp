@@ -51,13 +51,12 @@ BOOST_AUTO_TEST_CASE(block_facts_match_existing_helpers_for_empty_block)
 {
     const CBlock block;
 
-    bool mutated{true};
-    const uint256 merkle_root{BlockMerkleRoot(block, &mutated)};
+    const MerkleRootResult merkle{BlockMerkleRootWithMutation(block)};
     const auto facts{Consensus::ComputeBlockFacts(block)};
 
     BOOST_CHECK_EQUAL(facts.structure.transaction_count, 0);
-    BOOST_CHECK(facts.structure.merkle_root == merkle_root);
-    BOOST_CHECK_EQUAL(facts.structure.merkle_mutated, mutated);
+    BOOST_CHECK(facts.structure.merkle_root == merkle.root);
+    BOOST_CHECK_EQUAL(facts.structure.merkle_mutated, merkle.mutated);
     BOOST_CHECK(facts.witness_merkle_root == BlockWitnessMerkleRoot(block));
     BOOST_CHECK(!facts.has_witness);
     BOOST_CHECK(!facts.witness_commitment_index.has_value());
@@ -71,13 +70,12 @@ BOOST_AUTO_TEST_CASE(block_facts_report_merkle_mutation)
     const auto tx{MakeRegularTx()};
     block.vtx = {tx, tx};
 
-    bool mutated{false};
-    const uint256 merkle_root{BlockMerkleRoot(block, &mutated)};
+    const MerkleRootResult merkle{BlockMerkleRootWithMutation(block)};
     const auto facts{Consensus::ComputeBlockFacts(block)};
 
-    BOOST_CHECK(mutated);
+    BOOST_CHECK(merkle.mutated);
     BOOST_CHECK(facts.structure.merkle_mutated);
-    BOOST_CHECK(facts.structure.merkle_root == merkle_root);
+    BOOST_CHECK(facts.structure.merkle_root == merkle.root);
 }
 
 BOOST_AUTO_TEST_CASE(block_facts_capture_witness_and_commitment_shape)

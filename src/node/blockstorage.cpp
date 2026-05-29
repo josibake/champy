@@ -213,6 +213,17 @@ std::vector<CBlockIndex*> BlockManager::GetAllBlockIndices()
     return rv;
 }
 
+std::vector<const CBlockIndex*> BlockManager::GetAllBlockIndices() const
+{
+    AssertLockHeld(cs_main);
+    std::vector<const CBlockIndex*> rv;
+    rv.reserve(m_block_index.size());
+    for (const auto& [_, block_index] : m_block_index) {
+        rv.push_back(&block_index);
+    }
+    return rv;
+}
+
 CBlockIndex* BlockManager::LookupBlockIndex(const uint256& hash)
 {
     AssertLockHeld(cs_main);

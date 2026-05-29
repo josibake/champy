@@ -3,11 +3,12 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #include <sync.h>
+#include <chainstate_cache.h>
+#include <chainstate.h>
 #include <test/util/coins.h>
 #include <test/util/random.h>
 #include <test/util/common.h>
 #include <test/util/setup_common.h>
-#include <chainstate.h>
 
 #include <boost/test/unit_test.hpp>
 
@@ -31,23 +32,24 @@ BOOST_AUTO_TEST_CASE(getcoinscachesizestate)
     constexpr size_t MAX_ATTEMPTS{50'000};
 
     // Run the same growth-path twice: first with 0 head-room, then with extra head-room
-    for (size_t max_mempool_size_bytes : {size_t{0}, MAX_MEMPOOL_BYTES}) {
-        const int64_t full_cap{int64_t(MAX_COINS_BYTES + max_mempool_size_bytes)};
+    for (int64_t max_mempool_size_bytes : {int64_t{0}, int64_t{MAX_MEMPOOL_BYTES}}) {
+        const ExternalCacheUsage external_cache_usage{.max_size_bytes = max_mempool_size_bytes};
+        const int64_t full_cap{int64_t(MAX_COINS_BYTES) + max_mempool_size_bytes};
         const int64_t large_cap{LargeCoinsCacheThreshold(full_cap)};
 
         // OK → LARGE
-        auto state{chainstate.GetCoinsCacheSizeState(MAX_COINS_BYTES, max_mempool_size_bytes)};
+        auto state{chainstate.GetCoinsCacheSizeState(MAX_COINS_BYTES, external_cache_usage)};
         for (size_t i{0}; i < MAX_ATTEMPTS && int64_t(view.DynamicMemoryUsage()) <= large_cap; ++i) {
             BOOST_CHECK_EQUAL(state, CoinsCacheSizeState::OK);
             AddTestCoin(m_rng, view);
-            state = chainstate.GetCoinsCacheSizeState(MAX_COINS_BYTES, max_mempool_size_bytes);
+            state = chainstate.GetCoinsCacheSizeState(MAX_COINS_BYTES, external_cache_usage);
         }
 
         // LARGE → CRITICAL
         for (size_t i{0}; i < MAX_ATTEMPTS && int64_t(view.DynamicMemoryUsage()) <= full_cap; ++i) {
             BOOST_CHECK_EQUAL(state, CoinsCacheSizeState::LARGE);
             AddTestCoin(m_rng, view);
-            state = chainstate.GetCoinsCacheSizeState(MAX_COINS_BYTES, max_mempool_size_bytes);
+            state = chainstate.GetCoinsCacheSizeState(MAX_COINS_BYTES, external_cache_usage);
         }
         BOOST_CHECK_EQUAL(state, CoinsCacheSizeState::CRITICAL);
     }
@@ -59,10 +61,10 @@ BOOST_AUTO_TEST_CASE(getcoinscachesizestate)
     }
 
     // CRITICAL → OK via Flush
-    BOOST_CHECK_EQUAL(chainstate.GetCoinsCacheSizeState(MAX_COINS_BYTES, /*max_mempool_size_bytes=*/0), CoinsCacheSizeState::CRITICAL);
+    BOOST_CHECK_EQUAL(chainstate.GetCoinsCacheSizeState(MAX_COINS_BYTES), CoinsCacheSizeState::CRITICAL);
     view.SetBestBlock(m_rng.rand256());
     view.Flush();
-    BOOST_CHECK_EQUAL(chainstate.GetCoinsCacheSizeState(MAX_COINS_BYTES, /*max_mempool_size_bytes=*/0), CoinsCacheSizeState::OK);
+    BOOST_CHECK_EQUAL(chainstate.GetCoinsCacheSizeState(MAX_COINS_BYTES), CoinsCacheSizeState::OK);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

@@ -49,9 +49,9 @@ static CBlock BuildBlockTestCase(FastRandomContext& ctx) {
     }
     block.vtx[2] = MakeTransactionRef(tx);
 
-    bool mutated;
-    block.hashMerkleRoot = BlockMerkleRoot(block, &mutated);
-    assert(!mutated);
+    const MerkleRootResult merkle{BlockMerkleRootWithMutation(block)};
+    block.hashMerkleRoot = merkle.root;
+    assert(!merkle.mutated);
     while (!CheckProofOfWork(block.GetHash(), block.nBits, Params().GetConsensus())) ++block.nNonce;
     return block;
 }
@@ -106,14 +106,14 @@ BOOST_AUTO_TEST_CASE(SimpleRoundTripTest)
             partialBlock.FillBlock(block2, {block.vtx[2]}, /*segwit_active=*/true); // Current implementation doesn't check txn here, but don't require that
             partialBlock = tmp;
         }
-        bool mutated;
-        BOOST_CHECK(block.hashMerkleRoot != BlockMerkleRoot(block2, &mutated));
+        BOOST_CHECK(block.hashMerkleRoot != BlockMerkleRoot(block2));
 
         CBlock block3;
         BOOST_CHECK(partialBlock.FillBlock(block3, {block.vtx[1]}, /*segwit_active=*/true) == READ_STATUS_OK);
+        const MerkleRootResult merkle{BlockMerkleRootWithMutation(block3)};
         BOOST_CHECK_EQUAL(block.GetHash().ToString(), block3.GetHash().ToString());
-        BOOST_CHECK_EQUAL(block.hashMerkleRoot.ToString(), BlockMerkleRoot(block3, &mutated).ToString());
-        BOOST_CHECK(!mutated);
+        BOOST_CHECK_EQUAL(block.hashMerkleRoot.ToString(), merkle.root.ToString());
+        BOOST_CHECK(!merkle.mutated);
     }
 }
 
@@ -194,15 +194,15 @@ BOOST_AUTO_TEST_CASE(NonCoinbasePreforwardRTTest)
             partialBlock = tmp;
         }
         BOOST_CHECK_EQUAL(pool.get(block.vtx[2]->GetHash()).use_count(), SHARED_TX_OFFSET + 2); // +2 because of partialBlock and block2
-        bool mutated;
-        BOOST_CHECK(block.hashMerkleRoot != BlockMerkleRoot(block2, &mutated));
+        BOOST_CHECK(block.hashMerkleRoot != BlockMerkleRoot(block2));
 
         CBlock block3;
         PartiallyDownloadedBlock partialBlockCopy = partialBlock;
         BOOST_CHECK(partialBlock.FillBlock(block3, {block.vtx[0]}, /*segwit_active=*/true) == READ_STATUS_OK);
+        const MerkleRootResult merkle{BlockMerkleRootWithMutation(block3)};
         BOOST_CHECK_EQUAL(block.GetHash().ToString(), block3.GetHash().ToString());
-        BOOST_CHECK_EQUAL(block.hashMerkleRoot.ToString(), BlockMerkleRoot(block3, &mutated).ToString());
-        BOOST_CHECK(!mutated);
+        BOOST_CHECK_EQUAL(block.hashMerkleRoot.ToString(), merkle.root.ToString());
+        BOOST_CHECK(!merkle.mutated);
 
         BOOST_CHECK_EQUAL(pool.get(block.vtx[2]->GetHash()).use_count(), SHARED_TX_OFFSET + 3); // +2 because of partialBlock and block2 and block3
 
@@ -255,9 +255,9 @@ BOOST_AUTO_TEST_CASE(SufficientPreforwardRTTest)
         PartiallyDownloadedBlock partialBlockCopy = partialBlock;
         BOOST_CHECK(partialBlock.FillBlock(block2, {}, /*segwit_active=*/true) == READ_STATUS_OK);
         BOOST_CHECK_EQUAL(block.GetHash().ToString(), block2.GetHash().ToString());
-        bool mutated;
-        BOOST_CHECK_EQUAL(block.hashMerkleRoot.ToString(), BlockMerkleRoot(block2, &mutated).ToString());
-        BOOST_CHECK(!mutated);
+        const MerkleRootResult merkle{BlockMerkleRootWithMutation(block2)};
+        BOOST_CHECK_EQUAL(block.hashMerkleRoot.ToString(), merkle.root.ToString());
+        BOOST_CHECK(!merkle.mutated);
 
         txhash = block.vtx[1]->GetHash();
         block.vtx.clear();
@@ -280,9 +280,9 @@ BOOST_AUTO_TEST_CASE(EmptyBlockRoundTripTest)
     block.hashPrevBlock = rand_ctx.rand256();
     block.nBits = 0x207fffff;
 
-    bool mutated;
-    block.hashMerkleRoot = BlockMerkleRoot(block, &mutated);
-    assert(!mutated);
+    const MerkleRootResult merkle{BlockMerkleRootWithMutation(block)};
+    block.hashMerkleRoot = merkle.root;
+    assert(!merkle.mutated);
     while (!CheckProofOfWork(block.GetHash(), block.nBits, Params().GetConsensus())) ++block.nNonce;
 
     // Test simple header round-trip with only coinbase
@@ -303,8 +303,9 @@ BOOST_AUTO_TEST_CASE(EmptyBlockRoundTripTest)
         std::vector<CTransactionRef> vtx_missing;
         BOOST_CHECK(partialBlock.FillBlock(block2, vtx_missing, /*segwit_active=*/true) == READ_STATUS_OK);
         BOOST_CHECK_EQUAL(block.GetHash().ToString(), block2.GetHash().ToString());
-        BOOST_CHECK_EQUAL(block.hashMerkleRoot.ToString(), BlockMerkleRoot(block2, &mutated).ToString());
-        BOOST_CHECK(!mutated);
+        const MerkleRootResult block2_merkle{BlockMerkleRootWithMutation(block2)};
+        BOOST_CHECK_EQUAL(block.hashMerkleRoot.ToString(), block2_merkle.root.ToString());
+        BOOST_CHECK(!block2_merkle.mutated);
     }
 }
 

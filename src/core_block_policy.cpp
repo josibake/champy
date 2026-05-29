@@ -4,22 +4,20 @@
 
 #include <core_block_policy.h>
 
+#include <block_index_adapters.h>
 #include <block_validation_policy.h>
 #include <chain.h>
 #include <chainstate.h>
 #include <consensus/consensus.h>
-#include <node/blockstorage.h>
 #include <pow.h>
 #include <util/log.h>
 
 #include <cassert>
 #include <cstdint>
 
-using node::BlockMap;
-
-CoreBlockScriptCheckDecision DetermineCoreBlockScriptChecks(const Chainstate& chainstate, const CBlockIndex& block_index, const Consensus::Params& consensus_params)
+CoreBlockScriptCheckDecision DetermineCoreBlockScriptChecks(Chainstate& chainstate, const CBlockIndex& block_index, const Consensus::Params& consensus_params)
 {
-    const ChainstateManager& chainman{chainstate.m_chainman};
+    ChainstateManager& chainman{chainstate.m_chainman};
     if (chainman.AssumedValidBlock().IsNull()) {
         return {.run_script_checks = true, .reason = "assumevalid=0 (always verify)"};
     }
@@ -27,14 +25,15 @@ CoreBlockScriptCheckDecision DetermineCoreBlockScriptChecks(const Chainstate& ch
     constexpr int64_t TWO_WEEKS_IN_SECONDS{60 * 60 * 24 * 7 * 2};
     // Assumevalid is Core validation policy, not consensus. It decides whether
     // this node executes script checks for ancestors of a configured block.
-    BlockMap::const_iterator it{chainstate.m_blockman.m_block_index.find(chainman.AssumedValidBlock())};
-    if (it == chainstate.m_blockman.m_block_index.end()) {
+    CoreBlockIndexStore block_index_store{chainman};
+    const CBlockIndex* assumed_valid_index{block_index_store.LookupBlockIndex(chainman.AssumedValidBlock())};
+    if (!assumed_valid_index) {
         return {.run_script_checks = true, .reason = "assumevalid hash not in headers"};
     }
-    if (it->second.GetAncestor(block_index.nHeight) != &block_index) {
+    if (assumed_valid_index->GetAncestor(block_index.nHeight) != &block_index) {
         return {
             .run_script_checks = true,
-            .reason = block_index.nHeight > it->second.nHeight ? "block height above assumevalid height" : "block not in assumevalid chain"};
+            .reason = block_index.nHeight > assumed_valid_index->nHeight ? "block height above assumevalid height" : "block not in assumevalid chain"};
     }
     if (chainman.m_best_header->GetAncestor(block_index.nHeight) != &block_index) {
         return {.run_script_checks = true, .reason = "block not in best header chain"};

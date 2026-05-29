@@ -24,8 +24,13 @@ public:
     explicit MempoolChainSync(CTxMemPool& mempool) : m_mempool{mempool} {}
 
     RecursiveMutex* Mutex() const override LOCK_RETURNED(m_mempool.cs) { return &m_mempool.cs; }
-    size_t MaxSizeBytes() const override { return m_mempool.m_opts.max_size_bytes; }
-    size_t DynamicMemoryUsage() const override { return m_mempool.DynamicMemoryUsage(); }
+    ExternalCacheUsage CacheUsage() const override
+    {
+        return {
+            .max_size_bytes = m_mempool.m_opts.max_size_bytes,
+            .usage_bytes = m_mempool.DynamicMemoryUsage(),
+        };
+    }
 
     void AddTransactionsUpdated() override EXCLUSIVE_LOCKS_REQUIRED(cs_main);
     void Check(const CCoinsViewCache& coins, int64_t spend_height) const override EXCLUSIVE_LOCKS_REQUIRED(cs_main);

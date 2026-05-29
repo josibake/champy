@@ -106,9 +106,9 @@ BlockHeaderContext::BlockHeaderContext(int block_height, int64_t previous_median
 {
 }
 
-BlockCheckResult<void> CheckBlockHeader(const CBlockHeader& block, const Params& params, bool check_pow)
+BlockCheckResult<void> CheckBlockHeader(const CBlockHeader& block, const Params& params, const BlockHeaderCheckOptions& options)
 {
-    if (check_pow && !CheckProofOfWorkHash(block.GetHash(), block.nBits, params)) {
+    if (options.check_pow && !CheckProofOfWorkHash(block.GetHash(), block.nBits, params)) {
         return Consensus::Unexpected<BlockCheckError>{InvalidBlockCheck(
             BlockConsensusIssue::InvalidHeader,
             "high-hash",
@@ -130,14 +130,14 @@ BlockCheckResult<void> CheckBlockPreviousMedianTime(const CBlockHeader& block, i
     return {};
 }
 
-BlockCheckResult<void> CheckBlockTimewarp(const CBlockHeader& block, int block_height, int difficulty_adjustment_interval, int64_t previous_block_time, bool enforce_timewarp_protection)
+BlockCheckResult<void> CheckBlockTimewarp(const CBlockHeader& block, const BlockContextualHeaderOptions& options)
 {
-    if (!enforce_timewarp_protection) return {};
+    if (!options.enforce_timewarp_protection) return {};
 
-    assert(difficulty_adjustment_interval > 0);
-    if (block_height % difficulty_adjustment_interval != 0) return {};
+    assert(options.difficulty_adjustment_interval > 0);
+    if (options.block_height % options.difficulty_adjustment_interval != 0) return {};
 
-    if (block.GetBlockTime() < previous_block_time - MAX_TIMEWARP) {
+    if (block.GetBlockTime() < options.previous_block_time - MAX_TIMEWARP) {
         return Consensus::Unexpected<BlockCheckError>{InvalidBlockCheck(
             BlockConsensusIssue::InvalidHeader,
             "time-timewarp-attack",
@@ -159,11 +159,11 @@ BlockCheckResult<void> CheckBlockFutureTime(const CBlockHeader& block, int64_t m
     return {};
 }
 
-BlockCheckResult<void> CheckBlockVersion(const CBlockHeader& block, bool height_in_coinbase_active, bool der_signature_active, bool cltv_active)
+BlockCheckResult<void> CheckBlockVersion(const CBlockHeader& block, const BlockDeploymentContext& deployments)
 {
-    if ((block.nVersion < 2 && height_in_coinbase_active) ||
-        (block.nVersion < 3 && der_signature_active) ||
-        (block.nVersion < 4 && cltv_active)) {
+    if ((block.nVersion < 2 && deployments.height_in_coinbase_active) ||
+        (block.nVersion < 3 && deployments.der_signature_active) ||
+        (block.nVersion < 4 && deployments.cltv_active)) {
         return Consensus::Unexpected<BlockCheckError>{InvalidBlockCheck(
             BlockConsensusIssue::InvalidHeader,
             FormatBlockVersion("bad-version(0x", block.nVersion, ")"),
@@ -205,13 +205,16 @@ BlockCheckResult<void> CheckBlockContextualHeaderRules(const CBlockHeader& block
     const auto median_time{CheckBlockPreviousMedianTime(block, options.previous_median_time_past)};
     if (!median_time) return Consensus::Unexpected<BlockCheckError>{median_time.error()};
 
-    const auto timewarp{CheckBlockTimewarp(block, options.block_height, options.difficulty_adjustment_interval, options.previous_block_time, options.enforce_timewarp_protection)};
+    const auto timewarp{CheckBlockTimewarp(block, options)};
     if (!timewarp) return Consensus::Unexpected<BlockCheckError>{timewarp.error()};
 
     const auto future_time{CheckBlockFutureTime(block, options.max_block_time)};
     if (!future_time) return Consensus::Unexpected<BlockCheckError>{future_time.error()};
 
-    return CheckBlockVersion(block, options.height_in_coinbase_active, options.der_signature_active, options.cltv_active);
+    return CheckBlockVersion(block, {
+        .height_in_coinbase_active = options.height_in_coinbase_active,
+        .der_signature_active = options.der_signature_active,
+        .cltv_active = options.cltv_active});
 }
 
 BlockCheckResult<void> CheckBlockHeaderAdmissionRules(const CBlockHeader& block, const BlockHeaderAdmissionOptions& options)
@@ -304,7 +307,7 @@ BlockCheckResult<void> CheckBlockBody(const CBlock& block, const BlockStructural
 
 BlockCheckResult<void> CheckBlockStructuralRules(const CBlock& block, const Params& params, const BlockCheckOptions& options)
 {
-    const auto header{CheckBlockHeader(block, params, options.check_pow)};
+    const auto header{CheckBlockHeader(block, params, {.check_pow = options.check_pow})};
     if (!header) return Consensus::Unexpected<BlockCheckError>{header.error()};
 
     const BlockStructuralFacts facts{ComputeBlockStructuralFacts(block)};
@@ -316,12 +319,12 @@ BlockCheckResult<void> CheckBlockStructuralRules(const CBlock& block, const Para
     return CheckBlockTransactions(block.vtx, facts);
 }
 
-BlockCheckResult<void> CheckBlockWitnessMalleation(std::span<const CTransactionRef> transactions, const BlockFacts& facts, bool expect_witness_commitment)
+BlockCheckResult<void> CheckBlockWitnessMalleation(std::span<const CTransactionRef> transactions, const BlockFacts& facts, const BlockWitnessMalleationOptions& options)
 {
     const auto validation_view{CheckBlockFactsMatchTransactions(transactions, facts)};
     if (!validation_view) return Consensus::Unexpected<BlockCheckError>{validation_view.error()};
 
-    if (expect_witness_commitment && facts.witness_commitment_index.has_value()) {
+    if (options.expect_witness_commitment && facts.witness_commitment_index.has_value()) {
         const CTransaction& coinbase{*transactions[0]};
         if (coinbase.vin.empty()) {
             return Consensus::Unexpected<BlockCheckError>{InvalidValidationView("witness commitment check requires coinbase input")};
@@ -358,9 +361,9 @@ BlockCheckResult<void> CheckBlockWitnessMalleation(std::span<const CTransactionR
     return {};
 }
 
-BlockCheckResult<void> CheckBlockWitnessMalleation(const CBlock& block, const BlockFacts& facts, bool expect_witness_commitment)
+BlockCheckResult<void> CheckBlockWitnessMalleation(const CBlock& block, const BlockFacts& facts, const BlockWitnessMalleationOptions& options)
 {
-    return CheckBlockWitnessMalleation(block.vtx, facts, expect_witness_commitment);
+    return CheckBlockWitnessMalleation(block.vtx, facts, options);
 }
 
 BlockCheckResult<void> CheckBlockWeight(const BlockFacts& facts, const char* debug_context)
@@ -375,17 +378,18 @@ BlockCheckResult<void> CheckBlockWeight(const BlockFacts& facts, const char* deb
     return {};
 }
 
-BlockCheckResult<void> CheckBlockWitnessRules(std::span<const CTransactionRef> transactions, const BlockFacts& facts, bool expect_witness_commitment, const char* debug_context)
+BlockCheckResult<void> CheckBlockWitnessRules(std::span<const CTransactionRef> transactions, const BlockFacts& facts, const BlockWitnessRulesOptions& options)
 {
-    const auto witness{CheckBlockWitnessMalleation(transactions, facts, expect_witness_commitment)};
+    const auto witness{CheckBlockWitnessMalleation(transactions, facts, {
+        .expect_witness_commitment = options.expect_witness_commitment})};
     if (!witness) return Consensus::Unexpected<BlockCheckError>{witness.error()};
 
-    return CheckBlockWeight(facts, debug_context);
+    return CheckBlockWeight(facts, options.debug_context);
 }
 
-BlockCheckResult<void> CheckBlockWitnessRules(const CBlock& block, const BlockFacts& facts, bool expect_witness_commitment, const char* debug_context)
+BlockCheckResult<void> CheckBlockWitnessRules(const CBlock& block, const BlockFacts& facts, const BlockWitnessRulesOptions& options)
 {
-    return CheckBlockWitnessRules(block.vtx, facts, expect_witness_commitment, debug_context);
+    return CheckBlockWitnessRules(block.vtx, facts, options);
 }
 
 BlockContextualTransactionOptions BuildBlockContextualTransactionOptions(const CBlockHeader& block, const BlockHeaderContext& headers)

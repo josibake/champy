@@ -199,6 +199,9 @@ include(InstallBinaryComponent)
 # Core validation sources shared by bitcoin_node and bitcoinkernel while the
 # consensus boundary is being extracted.
 set(BITCOIN_KERNEL_VALIDATION_SOURCES
+  ${CMAKE_CURRENT_SOURCE_DIR}/block_data_admission.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/block_data_adapters.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/block_index_adapters.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/block_coin_effects.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/block_header_context_adapters.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/block_script_check_adapters.cpp

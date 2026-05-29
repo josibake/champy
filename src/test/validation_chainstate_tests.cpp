@@ -83,7 +83,11 @@ BOOST_FIXTURE_TEST_CASE(connect_tip_does_not_cache_inputs_on_failed_connect, Tes
 
     const auto tip{WITH_LOCK(cs_main, return chainstate.m_chain.Tip()->GetBlockHash())};
     const CBlock block{CreateBlock({tx}, CScript{} << OP_TRUE, chainstate)};
-    BOOST_CHECK(ProcessNewBlock(*Assert(m_node.chainman), std::make_shared<CBlock>(block), true, true, nullptr));
+    BOOST_CHECK(ProcessNewBlock(
+        *Assert(m_node.chainman),
+        std::make_shared<CBlock>(block),
+        {.force_processing = true, .header = {.min_pow_checked = true}})
+        .processed());
 
     LOCK(cs_main);
     BOOST_CHECK_EQUAL(tip, chainstate.m_chain.Tip()->GetBlockHash()); // block rejected

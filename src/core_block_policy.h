@@ -18,7 +18,7 @@ struct CoreBlockScriptCheckDecision {
     const char* reason{nullptr};
 };
 
-[[nodiscard]] CoreBlockScriptCheckDecision DetermineCoreBlockScriptChecks(const Chainstate& chainstate, const CBlockIndex& block_index, const Consensus::Params& consensus_params)
+[[nodiscard]] CoreBlockScriptCheckDecision DetermineCoreBlockScriptChecks(Chainstate& chainstate, const CBlockIndex& block_index, const Consensus::Params& consensus_params)
     EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
 
 void MaybeLogCoreBlockScriptCheckDecision(Chainstate& chainstate, const CBlockIndex& block_index, const uint256& block_hash, const CoreBlockScriptCheckDecision& decision)

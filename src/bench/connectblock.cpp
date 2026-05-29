@@ -7,6 +7,7 @@
 #include <block_validation.h>
 #include <interfaces/chain.h>
 #include <kernel/cs_main.h>
+#include <policy/feerate.h>
 #include <script/interpreter.h>
 #include <sync.h>
 #include <test/util/setup_common.h>

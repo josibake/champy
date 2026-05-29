@@ -110,6 +110,11 @@ enum class BlockCheckFlags : btck_BlockCheckFlags {
     ALL = btck_BlockCheckFlags_ALL
 };
 
+struct BlockProcessResult {
+    bool processed{false};
+    bool new_block{false};
+};
+
 template <typename T>
 struct is_bitmask_enum : std::false_type {
 };
@@ -1301,12 +1306,11 @@ public:
         return btck_chainstate_manager_import_blocks(get(), c_paths.data(), c_paths_lens.data(), c_paths.size()) == 0;
     }
 
-    bool ProcessBlock(const Block& block, bool* new_block)
+    BlockProcessResult ProcessBlock(const Block& block)
     {
         int _new_block;
-        int res = btck_chainstate_manager_process_block(get(), block.get(), &_new_block);
-        if (new_block) *new_block = _new_block == 1;
-        return res == 0;
+        const int res{btck_chainstate_manager_process_block(get(), block.get(), &_new_block)};
+        return {.processed = res == 0, .new_block = _new_block == 1};
     }
 
     BlockValidationState ProcessBlockHeader(const BlockHeader& header)

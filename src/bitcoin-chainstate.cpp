@@ -207,14 +207,13 @@ int main(int argc, char* argv[])
             continue;
         }
 
-        bool new_block = false;
-        bool accepted = chainman->ProcessBlock(*block, &new_block);
-        if (accepted) {
+        const BlockProcessResult process_result{chainman->ProcessBlock(*block)};
+        if (process_result.processed) {
             std::cerr << "Block has not yet been rejected" << std::endl;
         } else {
             std::cerr << "Block was not accepted" << std::endl;
         }
-        if (!new_block) {
+        if (!process_result.new_block) {
             std::cerr << "Block is a duplicate" << std::endl;
         }
     }

@@ -18,7 +18,9 @@ BlockStructuralFacts ComputeBlockStructuralFacts(std::span<const CTransactionRef
 {
     BlockStructuralFacts facts;
     facts.transaction_count = transactions.size();
-    facts.merkle_root = BlockMerkleRoot(transactions, &facts.merkle_mutated);
+    const MerkleRootResult merkle{BlockMerkleRootWithMutation(transactions)};
+    facts.merkle_root = merkle.root;
+    facts.merkle_mutated = merkle.mutated;
     facts.stripped_size = stripped_size;
     return facts;
 }

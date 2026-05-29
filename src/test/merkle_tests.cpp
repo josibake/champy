@@ -25,7 +25,7 @@ static uint256 ComputeMerkleRootFromBranch(const uint256& leaf, const std::vecto
 }
 
 // Older version of the merkle root computation code, for comparison.
-static uint256 BlockBuildMerkleTree(const CBlock& block, bool* fMutated, std::vector<uint256>& vMerkleTree)
+static MerkleRootResult BlockBuildMerkleTree(const CBlock& block, std::vector<uint256>& vMerkleTree)
 {
     vMerkleTree.clear();
     vMerkleTree.reserve(block.vtx.size() * 2 + 16); // Safe upper bound for the number of total nodes.
@@ -46,10 +46,7 @@ static uint256 BlockBuildMerkleTree(const CBlock& block, bool* fMutated, std::ve
         }
         j += nSize;
     }
-    if (fMutated) {
-        *fMutated = mutated;
-    }
-    return (vMerkleTree.empty() ? uint256() : vMerkleTree.back());
+    return {.root = vMerkleTree.empty() ? uint256{} : vMerkleTree.back(), .mutated = mutated};
 }
 
 // Older version of the merkle branch computation code, for comparison.
@@ -102,9 +99,8 @@ BOOST_AUTO_TEST_CASE(merkle_test)
                 block.vtx[j] = MakeTransactionRef(std::move(mtx));
             }
             // Compute the root of the block before mutating it.
-            bool unmutatedMutated = false;
-            uint256 unmutatedRoot = BlockMerkleRoot(block, &unmutatedMutated);
-            BOOST_CHECK(unmutatedMutated == false);
+            const MerkleRootResult unmutated{BlockMerkleRootWithMutation(block)};
+            BOOST_CHECK(!unmutated.mutated);
             // Optionally mutate by duplicating the last transactions, resulting in the same merkle root.
             block.vtx.resize(ntx3);
             for (int j = 0; j < duplicate1; j++) {
@@ -117,17 +113,16 @@ BOOST_AUTO_TEST_CASE(merkle_test)
                 block.vtx[ntx2 + j] = block.vtx[ntx2 + j - duplicate3];
             }
             // Compute the merkle root and merkle tree using the old mechanism.
-            bool oldMutated = false;
             std::vector<uint256> merkleTree;
-            uint256 oldRoot = BlockBuildMerkleTree(block, &oldMutated, merkleTree);
+            const MerkleRootResult old_merkle{BlockBuildMerkleTree(block, merkleTree)};
             // Compute the merkle root using the new mechanism.
-            bool newMutated = false;
-            uint256 newRoot = BlockMerkleRoot(block, &newMutated);
-            BOOST_CHECK(oldRoot == newRoot);
-            BOOST_CHECK(newRoot == unmutatedRoot);
+            const MerkleRootResult computed_merkle{BlockMerkleRootWithMutation(block)};
+            const uint256& newRoot{computed_merkle.root};
+            BOOST_CHECK(old_merkle.root == newRoot);
+            BOOST_CHECK(newRoot == unmutated.root);
             BOOST_CHECK((newRoot == uint256()) == (ntx == 0));
-            BOOST_CHECK(oldMutated == newMutated);
-            BOOST_CHECK(newMutated == !!mutate);
+            BOOST_CHECK(old_merkle.mutated == computed_merkle.mutated);
+            BOOST_CHECK(computed_merkle.mutated == !!mutate);
             // If no mutation was done (once for every ntx value), try up to 16 branches.
             if (mutate == 0) {
                 for (int loop = 0; loop < std::min(ntx, 16); loop++) {
@@ -139,7 +134,7 @@ BOOST_AUTO_TEST_CASE(merkle_test)
                     std::vector<uint256> newBranch = TransactionMerklePath(block, mtx);
                     std::vector<uint256> oldBranch = BlockGetMerkleBranch(block, merkleTree, mtx);
                     BOOST_CHECK(oldBranch == newBranch);
-                    BOOST_CHECK(ComputeMerkleRootFromBranch(block.vtx[mtx]->GetHash().ToUint256(), newBranch, mtx) == oldRoot);
+                    BOOST_CHECK(ComputeMerkleRootFromBranch(block.vtx[mtx]->GetHash().ToUint256(), newBranch, mtx) == old_merkle.root);
                 }
             }
         }
@@ -149,12 +144,11 @@ BOOST_AUTO_TEST_CASE(merkle_test)
 
 BOOST_AUTO_TEST_CASE(merkle_test_empty_block)
 {
-    bool mutated = false;
     CBlock block;
-    uint256 root = BlockMerkleRoot(block, &mutated);
+    const MerkleRootResult merkle{BlockMerkleRootWithMutation(block)};
 
-    BOOST_CHECK_EQUAL(root.IsNull(), true);
-    BOOST_CHECK_EQUAL(mutated, false);
+    BOOST_CHECK_EQUAL(merkle.root.IsNull(), true);
+    BOOST_CHECK_EQUAL(merkle.mutated, false);
 
     // Verify TransactionMerklePath handles empty block correctly
     // This tests the early-return path in MerkleComputation
@@ -164,21 +158,19 @@ BOOST_AUTO_TEST_CASE(merkle_test_empty_block)
 
 BOOST_AUTO_TEST_CASE(merkle_test_oneTx_block)
 {
-    bool mutated = false;
     CBlock block;
 
     block.vtx.resize(1);
     CMutableTransaction mtx;
     mtx.nLockTime = 0;
     block.vtx[0] = MakeTransactionRef(std::move(mtx));
-    uint256 root = BlockMerkleRoot(block, &mutated);
-    BOOST_CHECK_EQUAL(root, block.vtx[0]->GetHash().ToUint256());
-    BOOST_CHECK_EQUAL(mutated, false);
+    const MerkleRootResult merkle{BlockMerkleRootWithMutation(block)};
+    BOOST_CHECK_EQUAL(merkle.root, block.vtx[0]->GetHash().ToUint256());
+    BOOST_CHECK_EQUAL(merkle.mutated, false);
 }
 
 BOOST_AUTO_TEST_CASE(merkle_test_OddTxWithRepeatedLastTx_block)
 {
-    bool mutated;
     CBlock block, blockWithRepeatedLastTx;
 
     block.vtx.resize(3);
@@ -192,12 +184,12 @@ BOOST_AUTO_TEST_CASE(merkle_test_OddTxWithRepeatedLastTx_block)
     blockWithRepeatedLastTx = block;
     blockWithRepeatedLastTx.vtx.push_back(blockWithRepeatedLastTx.vtx.back());
 
-    uint256 rootofBlock = BlockMerkleRoot(block, &mutated);
-    BOOST_CHECK_EQUAL(mutated, false);
+    const MerkleRootResult block_merkle{BlockMerkleRootWithMutation(block)};
+    BOOST_CHECK_EQUAL(block_merkle.mutated, false);
 
-    uint256 rootofBlockWithRepeatedLastTx = BlockMerkleRoot(blockWithRepeatedLastTx, &mutated);
-    BOOST_CHECK_EQUAL(rootofBlock, rootofBlockWithRepeatedLastTx);
-    BOOST_CHECK_EQUAL(mutated, true);
+    const MerkleRootResult repeated_merkle{BlockMerkleRootWithMutation(blockWithRepeatedLastTx)};
+    BOOST_CHECK_EQUAL(block_merkle.root, repeated_merkle.root);
+    BOOST_CHECK_EQUAL(repeated_merkle.mutated, true);
 }
 
 BOOST_AUTO_TEST_CASE(merkle_test_LeftSubtreeRightSubtree)

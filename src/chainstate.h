@@ -9,6 +9,7 @@
 #include <arith_uint256.h>
 #include <block_validation.h>
 #include <chain.h>
+#include <chainstate_cache.h>
 #include <checkqueue.h>
 #include <coins.h>
 #include <consensus/amount.h>
@@ -342,7 +343,7 @@ public:
         BlockValidationState& state,
         FlushStateMode mode,
         int nManualPruneHeight = 0,
-        const ChainstateMempoolSync* mempool_sync = nullptr);
+        ExternalCacheUsage external_cache_usage = {});
 
     //! Flush all changes to disk.
     void ForceFlushStateToDisk(bool wipe_cache = true);
@@ -430,8 +431,7 @@ public:
 
     CoinsCacheSizeState GetCoinsCacheSizeState(
         size_t max_coins_cache_size_bytes,
-        size_t max_mempool_size_bytes,
-        size_t mempool_usage_bytes = 0) EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
+        ExternalCacheUsage external_cache_usage = {}) EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
 
     std::string ToString() EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
 

@@ -44,10 +44,11 @@
 */
 
 
-uint256 ComputeMerkleRoot(std::vector<uint256> hashes, bool* mutated) {
+static MerkleRootResult ComputeMerkleRoot(std::vector<uint256> hashes, bool detect_mutation)
+{
     bool mutation = false;
     while (hashes.size() > 1) {
-        if (mutated) {
+        if (detect_mutation) {
             for (size_t pos = 0; pos + 1 < hashes.size(); pos += 2) {
                 if (hashes[pos] == hashes[pos + 1]) mutation = true;
             }
@@ -58,25 +59,48 @@ uint256 ComputeMerkleRoot(std::vector<uint256> hashes, bool* mutated) {
         SHA256D64(hashes[0].begin(), hashes[0].begin(), hashes.size() / 2);
         hashes.resize(hashes.size() / 2);
     }
-    if (mutated) *mutated = mutation;
-    if (hashes.size() == 0) return uint256();
-    return hashes[0];
+    return {.root = hashes.empty() ? uint256{} : hashes[0], .mutated = mutation};
+}
+
+uint256 ComputeMerkleRoot(std::vector<uint256> hashes)
+{
+    return ComputeMerkleRoot(std::move(hashes), /*detect_mutation=*/false).root;
+}
+
+MerkleRootResult ComputeMerkleRootWithMutation(std::vector<uint256> hashes)
+{
+    return ComputeMerkleRoot(std::move(hashes), /*detect_mutation=*/true);
 }
 
 
-uint256 BlockMerkleRoot(std::span<const CTransactionRef> transactions, bool* mutated)
+static std::vector<uint256> BlockMerkleLeaves(std::span<const CTransactionRef> transactions)
 {
     std::vector<uint256> leaves;
     leaves.reserve((transactions.size() + 1) & ~1ULL); // capacity rounded up to even
     for (const auto& tx : transactions) {
         leaves.push_back(tx->GetHash().ToUint256());
     }
-    return ComputeMerkleRoot(std::move(leaves), mutated);
+    return leaves;
 }
 
-uint256 BlockMerkleRoot(const CBlock& block, bool* mutated)
+uint256 BlockMerkleRoot(std::span<const CTransactionRef> transactions)
 {
-    return BlockMerkleRoot(block.vtx, mutated);
+    return ComputeMerkleRoot(BlockMerkleLeaves(transactions));
+}
+
+uint256 BlockMerkleRoot(const CBlock& block)
+{
+    return BlockMerkleRoot(block.vtx);
+}
+
+MerkleRootResult BlockMerkleRootWithMutation(std::span<const CTransactionRef> transactions)
+{
+    return ComputeMerkleRootWithMutation(BlockMerkleLeaves(transactions));
+}
+
+MerkleRootResult BlockMerkleRootWithMutation(const CBlock& block)
+{
+    return BlockMerkleRootWithMutation(block.vtx);
 }
 
 uint256 BlockWitnessMerkleRoot(std::span<const CTransactionRef> transactions)

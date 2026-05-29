@@ -51,8 +51,9 @@ FUZZ_TARGET(merkle)
     }
 
     // Test ComputeMerkleRoot
-    bool mutated = fuzzed_data_provider.ConsumeBool(); // output param, initial value shouldn't matter
-    const uint256 merkle_root = ComputeMerkleRoot(tx_hashes, fuzzed_data_provider.ConsumeBool() ? &mutated : nullptr);
+    const bool detect_mutation{fuzzed_data_provider.ConsumeBool()};
+    const uint256 merkle_root{
+        detect_mutation ? ComputeMerkleRootWithMutation(tx_hashes).root : ComputeMerkleRoot(tx_hashes)};
 
     // Basic sanity checks for ComputeMerkleRoot
     if (tx_hashes.size() == 1) {
@@ -60,7 +61,7 @@ FUZZ_TARGET(merkle)
     }
 
 
-    const uint256 block_merkle_root = BlockMerkleRoot(*block, &mutated);
+    const uint256 block_merkle_root = BlockMerkleRootWithMutation(*block).root;
     if (tx_hashes.size() == 1) {
         assert(block_merkle_root == tx_hashes[0]);
     }

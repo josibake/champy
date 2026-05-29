@@ -676,6 +676,15 @@ have both header and body context in one place. The Core wrappers keep existing
 behavior around cache flags, signet checks, locks, logging, and validation-state
 mapping.
 
+Unrequested block-data admission is a small policy step before Core writes block
+data. `AcceptBlock()` copies the relevant block-index facts into
+`BlockDataAdmissionContext`; `GetBlockDataAdmissionResult()` decides whether the
+block should be stored. The helper does not read Core storage or locks.
+Core block data access in validation and chainstate code goes through
+`BlockDataStore`; Core's implementation still uses `BlockManager` underneath.
+Block-index lookup and iteration use `BlockIndexView` and `BlockIndexStore`
+adapters at the validation boundary.
+
 Assumevalid is Core validation policy, not consensus policy. Core evaluates it
 when constructing the production `BlockScriptChecker`; consensus always
 uses the checker capability to decide whether non-coinbase script work should
@@ -992,6 +1001,12 @@ Current limitations:
 
 These are intentional migration points. The current design makes the boundaries
 explicit without requiring a full rewrite.
+
+### Boundary Notes
+
+The C ABI may use caller-owned output buffers where required by ABI style.
+C++ validation and kernel APIs should return named result values and keep
+admission, activation, and storage outcomes explicit.
 
 ## Review Checklist
 

@@ -226,7 +226,10 @@ std::unique_ptr<CBlockTemplate> BlockAssembler::CreateNewBlock()
     pblock->nNonce         = 0;
 
     if (m_options.test_block_validity) {
-        if (BlockValidationState state{TestBlockValidity(m_chainstate, *pblock, /*check_pow=*/false, /*check_merkle_root=*/false)}; !state.IsValid()) {
+        const Consensus::BlockCheckOptions validity_options{
+            .check_pow = false,
+            .check_merkle_root = false};
+        if (BlockValidationState state{TestBlockValidity(m_chainstate, *pblock, validity_options)}; !state.IsValid()) {
             throw std::runtime_error(strprintf("TestBlockValidity failed: %s", state.ToString()));
         }
     }

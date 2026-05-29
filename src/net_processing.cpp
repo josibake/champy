@@ -2976,9 +2976,13 @@ void PeerManagerImpl::ProcessHeadersMessage(CNode& pfrom, Peer& peer,
 
     // Now process all the headers.
     BlockValidationState state;
-    const bool processed{ProcessNewBlockHeaders(m_chainman, headers,
-                                                /*min_pow_checked=*/true,
-                                                state, &pindexLast)};
+    const NewBlockHeadersResult headers_result{ProcessNewBlockHeaders(
+        m_chainman,
+        headers,
+        {.min_pow_checked = true},
+        state)};
+    const bool processed{headers_result.accepted};
+    pindexLast = headers_result.last_accepted;
     if (!processed) {
         if (state.IsInvalid()) {
             if (!pfrom.IsInboundConn() && state.GetResult() == BlockValidationResult::BLOCK_CACHED_INVALID) {
@@ -3159,10 +3163,13 @@ bool PeerManagerImpl::ProcessOrphanTx(Peer& peer)
 
 void PeerManagerImpl::ProcessBlock(CNode& node, const std::shared_ptr<const CBlock>& block, bool force_processing, bool min_pow_checked)
 {
-    bool new_block{false};
     node::MempoolChainSync mempool_sync{m_mempool};
-    ProcessNewBlock(m_chainman, &mempool_sync, block, force_processing, min_pow_checked, &new_block);
-    if (new_block) {
+    const NewBlockProcessingResult result{ProcessNewBlock(
+        m_chainman,
+        &mempool_sync,
+        block,
+        {.force_processing = force_processing, .header = {.min_pow_checked = min_pow_checked}})};
+    if (result.new_block()) {
         node.m_last_block_time = GetTime<std::chrono::seconds>();
         // In case this block came from a different peer than we requested
         // from, we can erase the block request now anyway (as we just stored
@@ -4238,12 +4245,14 @@ void PeerManagerImpl::ProcessMessage(Peer& peer, CNode& pfrom, const std::string
 
         const CBlockIndex *pindex = nullptr;
         BlockValidationState state;
-        if (!ProcessNewBlockHeaders(m_chainman, {{cmpctblock.header}}, /*min_pow_checked=*/true, state, &pindex)) {
+        const NewBlockHeadersResult headers_result{ProcessNewBlockHeaders(m_chainman, {{cmpctblock.header}}, {.min_pow_checked = true}, state)};
+        if (!headers_result.accepted) {
             if (state.IsInvalid()) {
                 MaybePunishNodeForBlock(pfrom.GetId(), state, /*via_compact_block=*/true, "invalid header via cmpctblock");
                 return;
             }
         }
+        pindex = headers_result.last_accepted;
 
         // If AcceptBlockHeader returned true, it set pindex
         Assert(pindex);
@@ -4520,12 +4529,15 @@ void PeerManagerImpl::ProcessMessage(Peer& peer, CNode& pfrom, const std::string
         const CBlockIndex* prev_block{WITH_LOCK(m_chainman.GetMutex(), return m_chainman.m_blockman.LookupBlockIndex(pblock->hashPrevBlock))};
 
         // Check for possible mutation if it connects to something we know so we can check for DEPLOYMENT_SEGWIT being active
-        if (prev_block && IsBlockMutated(/*block=*/*pblock,
-                           /*check_witness_root=*/DeploymentActiveAfter(prev_block, m_chainman, Consensus::DEPLOYMENT_SEGWIT))) {
-            LogDebug(BCLog::NET, "Received mutated block from peer=%d\n", peer.m_id);
-            Misbehaving(peer, "mutated block");
-            WITH_LOCK(cs_main, RemoveBlockRequest(pblock->GetHash(), peer.m_id));
-            return;
+        if (prev_block) {
+            const BlockMutationOptions mutation_options{
+                .check_witness_root = DeploymentActiveAfter(prev_block, m_chainman, Consensus::DEPLOYMENT_SEGWIT)};
+            if (IsBlockMutated(*pblock, mutation_options)) {
+                LogDebug(BCLog::NET, "Received mutated block from peer=%d\n", peer.m_id);
+                Misbehaving(peer, "mutated block");
+                WITH_LOCK(cs_main, RemoveBlockRequest(pblock->GetHash(), peer.m_id));
+                return;
+            }
         }
 
         bool forceProcessing = false;

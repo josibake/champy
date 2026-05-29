@@ -37,6 +37,31 @@ struct MinerTestingSetup : public RegTestingSetup {
 
 BOOST_FIXTURE_TEST_SUITE(validation_block_tests, MinerTestingSetup)
 
+BOOST_AUTO_TEST_CASE(block_acceptance_result_predicates_keep_admission_reason_visible)
+{
+    const BlockAcceptanceResult stored{.status = BlockAcceptanceStatus::BlockDataStored};
+    BOOST_CHECK(stored.accepted_for_processing());
+    BOOST_CHECK(stored.stored_block_data());
+
+    const BlockAcceptanceResult duplicate{.status = BlockAcceptanceStatus::BlockDataAlreadyKnown};
+    BOOST_CHECK(duplicate.accepted_for_processing());
+    BOOST_CHECK(!duplicate.stored_block_data());
+
+    const BlockAcceptanceResult unrequested{.status = BlockAcceptanceStatus::BlockDataUnrequestedLessWorkThanTip};
+    BOOST_CHECK(unrequested.accepted_for_processing());
+    BOOST_CHECK(!unrequested.stored_block_data());
+
+    const BlockAcceptanceResult rejected{.status = BlockAcceptanceStatus::BlockRejected};
+    BOOST_CHECK(!rejected.accepted_for_processing());
+    BOOST_CHECK(!rejected.stored_block_data());
+
+    const NewBlockProcessingResult activation_failed{
+        .status = NewBlockProcessingStatus::ActivationFailed,
+        .block_acceptance_status = BlockAcceptanceStatus::BlockDataStored};
+    BOOST_CHECK(!activation_failed.processed());
+    BOOST_CHECK(activation_failed.new_block());
+}
+
 struct TestSubscriber final : public CValidationInterface {
     uint256 m_expected_tip;
 
@@ -108,7 +133,7 @@ std::shared_ptr<CBlock> MinerTestingSetup::FinalizeBlock(std::shared_ptr<CBlock>
     // submit block header, so that miner can get the block height from the
     // global state and the node has the topology of the chain
     BlockValidationState ignored;
-    BOOST_CHECK(ProcessNewBlockHeaders(*Assert(m_node.chainman), {{*pblock}}, true, ignored));
+    BOOST_CHECK(ProcessNewBlockHeaders(*Assert(m_node.chainman), {{*pblock}}, {.min_pow_checked = true}, ignored).accepted);
 
     return pblock;
 }
@@ -164,9 +189,12 @@ BOOST_AUTO_TEST_CASE(processnewblock_signals_ordering)
         BuildChain(Params().GenesisBlock().GetHash(), 100, 15, 10, 500, blocks);
     }
 
-    bool ignored;
     // Connect the genesis block and drain any outstanding events
-    BOOST_CHECK(ProcessNewBlock(*Assert(m_node.chainman), std::make_shared<CBlock>(Params().GenesisBlock()), true, true, &ignored));
+    BOOST_CHECK(ProcessNewBlock(
+        *Assert(m_node.chainman),
+        std::make_shared<CBlock>(Params().GenesisBlock()),
+        {.force_processing = true, .header = {.min_pow_checked = true}})
+        .processed());
     m_node.validation_signals->SyncWithValidationInterfaceQueue();
 
     // subscribe to events (this subscriber will validate event ordering)
@@ -185,18 +213,23 @@ BOOST_AUTO_TEST_CASE(processnewblock_signals_ordering)
     threads.reserve(10);
     for (int i = 0; i < 10; i++) {
         threads.emplace_back([&]() {
-            bool ignored;
             FastRandomContext insecure;
             for (int i = 0; i < 1000; i++) {
                 const auto& block = blocks[insecure.randrange(blocks.size() - 1)];
-                ProcessNewBlock(*Assert(m_node.chainman), block, true, true, &ignored);
+                (void)ProcessNewBlock(
+                    *Assert(m_node.chainman),
+                    block,
+                    {.force_processing = true, .header = {.min_pow_checked = true}});
             }
 
             // to make sure that eventually we process the full chain - do it here
             for (const auto& block : blocks) {
                 if (block->vtx.size() == 1) {
-                    bool processed = ProcessNewBlock(*Assert(m_node.chainman), block, true, true, &ignored);
-                    assert(processed);
+                    const NewBlockProcessingResult result{ProcessNewBlock(
+                        *Assert(m_node.chainman),
+                        block,
+                        {.force_processing = true, .header = {.min_pow_checked = true}})};
+                    assert(result.processed());
                 }
             }
         });
@@ -232,10 +265,14 @@ BOOST_AUTO_TEST_CASE(processnewblock_signals_ordering)
  */
 BOOST_AUTO_TEST_CASE(mempool_locks_reorg)
 {
-    bool ignored;
     node::MempoolChainSync mempool_sync{*Assert(m_node.mempool)};
     auto ProcessBlock = [&](std::shared_ptr<const CBlock> block) -> bool {
-        return ProcessNewBlock(*Assert(m_node.chainman), &mempool_sync, block, /*force_processing=*/true, /*min_pow_checked=*/true, /*new_block=*/&ignored);
+        return ProcessNewBlock(
+            *Assert(m_node.chainman),
+            &mempool_sync,
+            block,
+            {.force_processing = true, .header = {.min_pow_checked = true}})
+            .processed();
     };
 
     // Process all mined blocks

@@ -183,8 +183,10 @@ BlockCheckResult<BlockContextualBodyValidation> ValidateBlockContextualBodyStage
     const auto witness{CheckBlockWitnessRules(
         input.Transactions(),
         input.Facts(),
-        options.expect_witness_commitment,
-        debug_context)};
+        {
+            .expect_witness_commitment = options.expect_witness_commitment,
+            .debug_context = debug_context,
+        })};
     if (!witness) return Consensus::Unexpected<BlockCheckError>{witness.error()};
 
     return BlockContextualBodyValidation{
