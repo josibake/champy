@@ -37,6 +37,10 @@ foreach(relative_path IN ITEMS
     src/validation/block_index_adapters.h
     src/validation/block_connection.cpp
     src/validation/block_connection.h
+    src/validation/block_connection_trace.cpp
+    src/validation/block_connection_trace.h
+    src/validation/core_block_connection_context.cpp
+    src/validation/core_block_connection_context.h
     src/validation/block_validation_internal.h
     src/validation/chain_validation.cpp
     src/validation/chain_validation.h)
@@ -45,6 +49,8 @@ endforeach()
 
 require_text("src/CMakeLists.txt" "block_data_adapters.cpp")
 require_text("src/CMakeLists.txt" "block_data_admission.cpp")
+require_text("src/CMakeLists.txt" "block_connection_trace.cpp")
+require_text("src/CMakeLists.txt" "core_block_connection_context.cpp")
 require_text("src/CMakeLists.txt" "add_library(bitcoin_chain_validation")
 require_text("src/CMakeLists.txt" "BITCOIN_CHAIN_VALIDATION_SOURCES")
 require_text("src/CMakeLists.txt" "target_link_libraries(bitcoin_chain_validation")
@@ -52,8 +58,27 @@ require_text("src/CMakeLists.txt" "bitcoin_chain_validation")
 require_text("src/kernel/CMakeLists.txt" "bitcoin_chain_validation")
 require_text("src/validation/block_validation.cpp" "#include <validation/block_validation_internal.h>")
 require_text("src/validation/block_validation.cpp" "validation::BlockConnectionEngine")
+require_text("src/validation/block_connection.h" "struct BlockConnectionContext")
+require_text("src/validation/block_connection.h" "Consensus::BlockConsensusContext consensus_context")
+require_text("src/validation/block_connection.h" "Consensus::BlockSpendConsensusOptions spend_options")
+require_text("src/validation/block_connection.h" "struct BlockConnectionRuntime")
+require_text("src/validation/block_connection.h" "kernel::Notifications& notifications")
+require_text("src/validation/block_connection.h" "BlockDataStore& block_store")
+require_text("src/validation/block_connection.h" "BlockIndexStore& block_index_store")
+require_text("src/validation/block_connection.h" "Consensus::BlockScriptChecker& script_checker")
+require_text("src/validation/block_connection.h" "BlockConnectionTrace& trace")
+require_text("src/validation/block_connection_trace.h" "struct BlockConnectionTraceCounters")
+require_text("src/validation/block_connection_trace.h" "BlockConnectionTraceCountersFor")
+require_text("src/validation/block_connection_trace.h" "BlockConnectionTraceCounters m_counters")
 require_text("src/validation/block_connection.h" "struct BlockConnectionRequest")
 require_text("src/validation/block_connection.h" "class BlockConnectionEngine")
+forbid_text("src/validation/block_connection.h" "Chainstate&")
+forbid_text("src/validation/block_connection.h" "ChainstateManager&")
+forbid_text("src/validation/block_connection.h" "BlockManager")
+forbid_text("src/validation/block_connection.h" "CCheckQueue")
+forbid_text("src/validation/block_connection.h" "CScriptCheck")
+forbid_text("src/validation/block_connection.h" "ValidationCache")
+forbid_text("src/validation/block_connection_trace.h" "ChainstateManager& m_chainman")
 require_text("src/validation/chain_validation.cpp" "#include <validation/block_validation_internal.h>")
 require_text("src/validation/chain_validation.h" "class ChainValidationService")
 require_text("src/validation/block_validation_internal.h" "ProcessNewBlockHeaders(")
@@ -73,7 +98,10 @@ require_text("src/validation/block_validation.cpp" "CoreBlockDataStore")
 require_text("src/validation/block_validation.cpp" "CoreBlockIndexStore")
 require_text("src/chainstate.cpp" "CoreBlockDataStore")
 require_text("src/chainstate.cpp" "CoreBlockIndexStore")
-require_text("src/validation/core_block_policy.cpp" "CoreBlockIndexStore")
+require_text("src/validation/core_block_policy.cpp" "BlockIndexStore&")
+require_text("src/validation/core_block_connection_context.h" "PlanCoreBlockConnection")
+require_text("src/validation/core_block_connection_context.h" "MaybeLogCoreBlockConnectionScriptPolicy")
+require_text("src/chainstate.cpp" "PlanCoreBlockConnection")
 require_text("src/kernel/bitcoinkernel.cpp" "CoreBlockDataStore")
 require_text("src/kernel/bitcoinkernel.cpp" "CoreBlockIndexStore")
 

@@ -9,6 +9,7 @@
 #include <validation/block_data_admission.h>
 #include <validation/block_data_adapters.h>
 #include <validation/block_connection.h>
+#include <validation/block_connection_trace.h>
 #include <validation/block_index_adapters.h>
 #include <validation/block_script_check_adapters.h>
 #include <validation/block_validation_adapters.h>
@@ -22,7 +23,6 @@
 #include <consensus/block_spend.h>
 #include <consensus/consensus.h>
 #include <consensus/merkle.h>
-#include <validation/connect_block_bench.h>
 #include <validation/coins_view_spend_state.h>
 #include <flatfile.h>
 #include <hash.h>
@@ -45,6 +45,7 @@
 #include <util/time.h>
 #include <util/trace.h>
 #include <util/translation.h>
+#include <validation/core_block_connection_context.h>
 #include <validation_state.h>
 #include <validationinterface.h>
 
@@ -85,7 +86,7 @@ static DisconnectResult DisconnectBlock(BlockDataStore& block_store, const CBloc
     // Ignore blocks that contain transactions which are 'overwritten' by later transactions,
     // unless those are already completely spent.
     // See https://github.com/bitcoin/bitcoin/issues/22596 for additional information.
-    // Note: the blocks specified here are different than the ones used in ConnectBlock because DisconnectBlock
+    // Note: the blocks specified here are different than the ones used in block connection because DisconnectBlock
     // unwinds the blocks in reverse. As a result, the inconsistency is not discovered until the earlier
     // blocks with the duplicate coinbase transactions are disconnected.
     bool fEnforceBIP30 = !((pindex->nHeight == 91722 && pindex->GetBlockHash() == uint256{"00000000000271a2dc26e7667f8419f2e15416dc6955e5a6c6cdf3f2574dd08e"}) ||
@@ -141,22 +142,6 @@ DisconnectResult DisconnectBlock(Chainstate& chainstate, const CBlock& block, co
 {
     CoreBlockDataStore block_store{chainstate.m_blockman};
     return DisconnectBlock(block_store, block, pindex, view);
-}
-
-bool ConnectBlock(Chainstate& chainstate, const CBlock& block, BlockValidationState& state, CBlockIndex* pindex,
-                  CCoinsViewCache& view, ConnectBlockOptions options)
-{
-    AssertLockHeld(cs_main);
-    assert(pindex);
-    // Legacy Core entry point. New orchestration belongs in
-    // validation::BlockConnectionEngine; see doc/legacy-compatibility.md.
-    return validation::BlockConnectionEngine{}.Connect({
-        .chainstate = chainstate,
-        .block = block,
-        .block_index = *pindex,
-        .coins_view = view,
-        .options = options,
-    }, state);
 }
 
 static bool CheckMerkleRoot(const CBlock& block, const Consensus::BlockStructuralFacts& facts, BlockValidationState& state)
@@ -321,11 +306,11 @@ arith_uint256 CalculateClaimedHeadersWork(std::span<const CBlockHeader> headers)
 
 /** Context-dependent validity checks.
  *  By "context", we mean only the previous block headers, but not the UTXO
- *  set; UTXO-related validity checks are done in ConnectBlock().
- *  NOTE: This function is not currently invoked by ConnectBlock(), so we
+ *  set; UTXO-related validity checks are done during block connection.
+ *  NOTE: This function is not currently invoked by block connection, so we
  *  should consider upgrade issues if we change which consensus rules are
  *  enforced in this function (eg by adding a new consensus rule). See comment
- *  in ConnectBlock().
+ *  during block connection.
  *  Note that -reindex-chainstate skips the validation that happens here!
  *
  *  NOTE: failing to check the header's height against the last checkpoint's opened a DoS vector between
@@ -369,10 +354,10 @@ static bool ContextualCheckBlockHeader(
     return true;
 }
 
-/** NOTE: This function is not currently invoked by ConnectBlock(), so we
+/** NOTE: This function is not currently invoked by block connection, so we
  *  should consider upgrade issues if we change which consensus rules are
  *  enforced in this function (eg by adding a new consensus rule). See comment
- *  in ConnectBlock().
+ *  during block connection.
  *  Note that -reindex-chainstate skips the validation that happens here!
  */
 static bool ContextualCheckBlock(const CBlock& block, BlockValidationState& state, const ChainstateManager& chainman, const CBlockIndex* pindexPrev)
@@ -510,8 +495,9 @@ BlockAcceptanceResult AcceptBlock(ChainstateManager& chainman, const std::shared
     }
     CBlockIndex& block_index_entry{*Assert(accepted_header.block_index)};
 
-    // TODO: Decouple this function from block-download policy by replacing
-    // options.block_data_requested with a chain-candidate query.
+    // Compatibility note: this still carries block-download policy into block
+    // admission; see doc/legacy-compatibility.md.
+    // TODO: Replace options.block_data_requested with a chain-candidate query.
     // This requires some new chain data structure to efficiently look up if a
     // block is in a chain leading to a candidate for best tip, despite not
     // being such a candidate itself.
@@ -569,9 +555,10 @@ BlockAcceptanceResult AcceptBlock(ChainstateManager& chainman, const std::shared
         return {.status = BlockAcceptanceStatus::StorageFailed, .block_index = &block_index_entry};
     }
 
-    // TODO: FlushStateToDisk() handles flushing of both block and chainstate
-    // data, so we should move this to ChainstateManager so that we can be more
-    // intelligent about how we flush.
+    // Compatibility note: FlushStateToDisk() still handles both block and
+    // chainstate data; see doc/legacy-compatibility.md.
+    // TODO: Move mixed flushing to ChainstateManager so it can make an explicit
+    // storage decision.
     // For now, since FlushStateMode::NONE is used, all that can happen is that
     // the block files may be pruned, so we can just call this on one
     // chainstate (particularly if we haven't implemented pruning with
@@ -694,7 +681,7 @@ BlockValidationState TestBlockValidity(
         return state;
     }
 
-    // We don't want ConnectBlock to update the actual chainstate, so create
+    // We don't want test validation to update the actual chainstate, so create
     // a cache on top of it, along with a dummy block index.
     CBlockIndex index_dummy{block};
     uint256 block_hash(block.GetHash());
@@ -706,15 +693,38 @@ BlockValidationState TestBlockValidity(
     // Test validation uses the normal connection path with commit disabled. It
     // may update reusable script caches, but staged coin effects stay local to
     // view_dummy.
-    const ConnectBlockOptions connect_options{
+    const BlockConnectionOptions connect_options{
         .block_check_options = Consensus::BlockCheckOptions{
             .check_pow = false,
             .check_merkle_root = false,
         },
-        .cache_script_results = true,
         .commit = false,
     };
-    if (!ConnectBlock(chainstate, block, state, &index_dummy, view_dummy, connect_options)) {
+    CoreBlockDataStore block_store{chainstate.m_blockman};
+    CoreBlockIndexStore block_index_store{chainstate.m_chainman};
+    const CoreBlockConnectionPlan connection_plan{PlanCoreBlockConnection(chainstate.m_chainman, block_index_store, index_dummy)};
+    MaybeLogCoreBlockConnectionScriptPolicy(chainstate.LastScriptCheckReasonLogged(), index_dummy, block_hash, connection_plan);
+    CoreBlockScriptChecks script_checks{
+        chainstate.m_chainman.GetCheckQueue(),
+        connection_plan.script_check_decision.run_script_checks,
+        /*cache_results=*/true,
+        chainstate.m_chainman.m_validation_cache};
+    BlockConnectionTrace trace{BlockConnectionTraceCountersFor(chainstate.m_chainman)};
+    const validation::BlockConnectionRequest request{
+        .runtime = {
+            .notifications = chainstate.m_chainman.GetNotifications(),
+            .block_store = block_store,
+            .block_index_store = block_index_store,
+            .script_checker = script_checks.Checker(),
+            .trace = trace,
+        },
+        .context = connection_plan.context,
+        .block = block,
+        .block_index = index_dummy,
+        .coins_view = view_dummy,
+        .options = connect_options,
+    };
+    if (!validation::BlockConnectionEngine{}.Connect(request, state)) {
         if (state.IsValid()) NONFATAL_UNREACHABLE();
         return state;
     }
@@ -854,7 +864,30 @@ VerifyDBResult CVerifyDB::VerifyDB(
                 LogError("Verification error: ReadBlock failed at %d, hash=%s", pindex->nHeight, pindex->GetBlockHash().ToString());
                 return VerifyDBResult::CORRUPTED_BLOCK_DB;
             }
-            if (!ConnectBlock(chainstate, block, state, pindex, coins)) {
+            CoreBlockIndexStore block_index_store{chainstate.m_chainman};
+            const uint256 block_hash{block.GetHash()};
+            const CoreBlockConnectionPlan connection_plan{PlanCoreBlockConnection(chainstate.m_chainman, block_index_store, *pindex)};
+            MaybeLogCoreBlockConnectionScriptPolicy(chainstate.LastScriptCheckReasonLogged(), *pindex, block_hash, connection_plan);
+            CoreBlockScriptChecks script_checks{
+                chainstate.m_chainman.GetCheckQueue(),
+                connection_plan.script_check_decision.run_script_checks,
+                /*cache_results=*/false,
+                chainstate.m_chainman.m_validation_cache};
+            BlockConnectionTrace trace{BlockConnectionTraceCountersFor(chainstate.m_chainman)};
+            const validation::BlockConnectionRequest request{
+                .runtime = {
+                    .notifications = chainstate.m_chainman.GetNotifications(),
+                    .block_store = block_store,
+                    .block_index_store = block_index_store,
+                    .script_checker = script_checks.Checker(),
+                    .trace = trace,
+                },
+                .context = connection_plan.context,
+                .block = block,
+                .block_index = *pindex,
+                .coins_view = coins,
+            };
+            if (!validation::BlockConnectionEngine{}.Connect(request, state)) {
                 LogError("Verification error: found unconnectable block at %d, hash=%s (%s)", pindex->nHeight, pindex->GetBlockHash().ToString(), state.ToString());
                 return VerifyDBResult::CORRUPTED_BLOCK_DB;
             }
@@ -878,7 +911,9 @@ static bool RollforwardBlock(BlockDataStore& block_store, const CBlockIndex* pin
     EXCLUSIVE_LOCKS_REQUIRED(cs_main)
 {
     AssertLockHeld(cs_main);
-    // TODO: merge with ConnectBlock
+    // Compatibility note: roll-forward replay still mutates the coins cache
+    // directly instead of using block connection effects; see
+    // doc/legacy-compatibility.md.
     CBlock block;
     if (!block_store.ReadBlock(block, *pindex)) {
         LogError("ReplayBlock(): ReadBlock failed at %d, hash=%s\n", pindex->nHeight, pindex->GetBlockHash().ToString());

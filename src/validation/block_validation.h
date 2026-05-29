@@ -8,11 +8,11 @@
 #include <arith_uint256.h>
 #include <coins.h>
 #include <consensus/amount.h>
+#include <consensus/block_check.h>
 #include <consensus/params.h>
 #include <validation_state.h>
 #include <kernel/cs_main.h>
 #include <primitives/block.h>
-#include <validation/block_connection.h>
 
 #include <cstdint>
 #include <memory>
@@ -124,7 +124,6 @@ struct BlockMutationOptions {
 };
 
 DisconnectResult DisconnectBlock(Chainstate& chainstate, const CBlock& block, const CBlockIndex* pindex, CCoinsViewCache& view) EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
-bool ConnectBlock(Chainstate& chainstate, const CBlock& block, BlockValidationState& state, CBlockIndex* pindex, CCoinsViewCache& view, ConnectBlockOptions options = {}) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
 bool RollforwardBlock(Chainstate& chainstate, const CBlockIndex* pindex, CCoinsViewCache& inputs) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
 bool ReplayBlocks(Chainstate& chainstate);
 void UpdateUncommittedBlockStructures(const ChainstateManager& chainman, CBlock& block, const CBlockIndex* pindexPrev);

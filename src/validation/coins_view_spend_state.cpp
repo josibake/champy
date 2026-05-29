@@ -25,7 +25,7 @@ std::optional<int64_t> PreviousMedianTimePastForCoin(const CBlockIndex& block_in
     const int ancestor_height{std::max(coin_height - 1, 0)};
     const CBlockIndex* ancestor{nullptr};
 
-    // Production ConnectBlock has a full block index with skip pointers. Use
+    // Production block connection has a full block index with skip pointers. Use
     // that path for old spends; walking pprev from the tip for every input is
     // quadratic in the common case where old coins are spent in later blocks.
     if (block_index.pskip) {

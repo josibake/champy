@@ -143,7 +143,7 @@ provide equivalent capabilities without changing consensus code.
 
 ## Example: Spend Validation
 
-The old `ConnectBlock` path mixed several jobs:
+The historical block-connection path mixed several jobs:
 
 - read UTXOs
 - validate spends

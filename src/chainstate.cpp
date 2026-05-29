@@ -9,10 +9,14 @@
 
 #include <arith_uint256.h>
 #include <validation/block_data_adapters.h>
+#include <validation/block_connection.h>
+#include <validation/block_connection_trace.h>
 #include <validation/block_index_adapters.h>
+#include <validation/block_script_check_adapters.h>
 #include <validation/block_validation.h>
 #include <chain.h>
 #include <validation/chain_validation.h>
+#include <validation/core_block_connection_context.h>
 #include <chainstate_event_sink.h>
 #include <clientversion.h>
 #include <consensus/amount.h>
@@ -168,7 +172,7 @@ void CoinsViews::InitCache()
 {
     AssertLockHeld(::cs_main);
     m_cacheview = std::make_unique<CCoinsViewCache>(&m_catcherview);
-    m_connect_block_view = std::make_unique<CoinsViewOverlay>(&*m_cacheview);
+    m_block_connection_view = std::make_unique<CoinsViewOverlay>(&*m_cacheview);
 }
 
 Chainstate::Chainstate(
@@ -627,20 +631,43 @@ bool Chainstate::ConnectTip(
     const auto time_2{SteadyClock::now()};
     SteadyClock::time_point time_3;
     // When adding aggregate statistics in the future, keep in mind that
-    // num_blocks_total may be zero until the ConnectBlock() call below.
+    // num_blocks_total may be zero until the block connection call below.
     LogDebug(BCLog::BENCH, "  - Load block from disk: %.2fms\n",
              Ticks<MillisecondsDouble>(time_2 - time_1));
     {
-        CCoinsViewCache& view{*m_coins_views->m_connect_block_view};
+        CCoinsViewCache& view{*m_coins_views->m_block_connection_view};
         const auto reset_guard{view.CreateResetGuard()};
-        bool rv = ConnectBlock(*this, *block_to_connect, state, pindexNew, view);
+        CoreBlockIndexStore block_index_store{m_chainman};
+        const uint256 block_hash{block_to_connect->GetHash()};
+        const CoreBlockConnectionPlan connection_plan{PlanCoreBlockConnection(m_chainman, block_index_store, *pindexNew)};
+        MaybeLogCoreBlockConnectionScriptPolicy(LastScriptCheckReasonLogged(), *pindexNew, block_hash, connection_plan);
+        CoreBlockScriptChecks script_checks{
+            m_chainman.GetCheckQueue(),
+            connection_plan.script_check_decision.run_script_checks,
+            /*cache_results=*/false,
+            m_chainman.m_validation_cache};
+        BlockConnectionTrace trace{BlockConnectionTraceCountersFor(m_chainman)};
+        const validation::BlockConnectionRequest request{
+            .runtime = {
+                .notifications = m_chainman.GetNotifications(),
+                .block_store = block_store,
+                .block_index_store = block_index_store,
+                .script_checker = script_checks.Checker(),
+                .trace = trace,
+            },
+            .context = connection_plan.context,
+            .block = *block_to_connect,
+            .block_index = *pindexNew,
+            .coins_view = view,
+        };
+        bool rv = validation::BlockConnectionEngine{}.Connect(request, state);
         if (m_chainman.m_options.signals) {
             m_chainman.m_options.signals->BlockChecked(block_to_connect, state);
         }
         if (!rv) {
             if (state.IsInvalid())
                 InvalidBlockFound(pindexNew, state);
-            LogError("%s: ConnectBlock %s failed, %s\n", __func__, pindexNew->GetBlockHash().ToString(), state.ToString());
+            LogError("%s: Block connection %s failed, %s\n", __func__, pindexNew->GetBlockHash().ToString(), state.ToString());
             return false;
         }
         time_3 = SteadyClock::now();

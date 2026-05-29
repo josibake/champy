@@ -43,7 +43,10 @@ bool CheckInputScriptsWithPreparedOutputs(const CTransaction& tx, TxValidationSt
     uint256 hashCacheEntry;
     CSHA256 hasher = validation_cache.ScriptExecutionCacheHasher();
     hasher.Write(UCharCast(tx.GetWitnessHash().begin()), 32).Write((unsigned char*)&flags, sizeof(flags)).Finalize(hashCacheEntry.begin());
-    AssertLockHeld(cs_main); // TODO: Remove this requirement by making CuckooCache not require external locks
+    // Compatibility note: script-cache access still relies on Core's external
+    // `cs_main` lock. Track this in doc/legacy-compatibility.md instead of
+    // expanding the lock contract into consensus code.
+    AssertLockHeld(cs_main);
     if (validation_cache.m_script_execution_cache.contains(hashCacheEntry, !cacheFullScriptStore)) {
         return true;
     }
@@ -129,7 +132,7 @@ Consensus::BlockSpendResult<void> CheckTransactionScriptsForBlock(const Consensu
         tx_ok = CheckInputScriptsFromPlan(check, tx_state, cache_results, cache_results, txdata, validation_cache, nullptr);
     }
     if (!tx_ok) {
-        // Any transaction validation failure in ConnectBlock is a block consensus failure.
+        // Any transaction validation failure during block connection is a block consensus failure.
         return Consensus::Unexpected<Consensus::BlockSpendError>{Consensus::BlockSpendError{
             .issue = Consensus::BlockConsensusIssue::Consensus,
             .reject_reason = tx_state.GetRejectReason(),

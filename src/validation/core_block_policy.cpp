@@ -15,9 +15,8 @@
 #include <cassert>
 #include <cstdint>
 
-CoreBlockScriptCheckDecision DetermineCoreBlockScriptChecks(Chainstate& chainstate, const CBlockIndex& block_index, const Consensus::Params& consensus_params)
+CoreBlockScriptCheckDecision DetermineCoreBlockScriptChecks(ChainstateManager& chainman, BlockIndexStore& block_index_store, const CBlockIndex& block_index, const Consensus::Params& consensus_params)
 {
-    ChainstateManager& chainman{chainstate.m_chainman};
     if (chainman.AssumedValidBlock().IsNull()) {
         return {.run_script_checks = true, .reason = "assumevalid=0 (always verify)"};
     }
@@ -25,7 +24,6 @@ CoreBlockScriptCheckDecision DetermineCoreBlockScriptChecks(Chainstate& chainsta
     constexpr int64_t TWO_WEEKS_IN_SECONDS{60 * 60 * 24 * 7 * 2};
     // Assumevalid is Core validation policy, not consensus. It decides whether
     // this node executes script checks for ancestors of a configured block.
-    CoreBlockIndexStore block_index_store{chainman};
     const CBlockIndex* assumed_valid_index{block_index_store.LookupBlockIndex(chainman.AssumedValidBlock())};
     if (!assumed_valid_index) {
         return {.run_script_checks = true, .reason = "assumevalid hash not in headers"};
@@ -51,9 +49,9 @@ CoreBlockScriptCheckDecision DetermineCoreBlockScriptChecks(Chainstate& chainsta
     return {};
 }
 
-void MaybeLogCoreBlockScriptCheckDecision(Chainstate& chainstate, const CBlockIndex& block_index, const uint256& block_hash, const CoreBlockScriptCheckDecision& decision)
+void MaybeLogCoreBlockScriptCheckDecision(std::optional<const char*>& last_reason_logged, const CBlockIndex& block_index, const uint256& block_hash, const CoreBlockScriptCheckDecision& decision)
 {
-    if (decision.reason == chainstate.LastScriptCheckReasonLogged()) return;
+    if (decision.reason == last_reason_logged) return;
 
     if (decision.run_script_checks) {
         LogInfo("Enabling script verification at block #%d (%s): %s.",
@@ -62,7 +60,7 @@ void MaybeLogCoreBlockScriptCheckDecision(Chainstate& chainstate, const CBlockIn
         LogInfo("Disabling script verification at block #%d (%s).",
                 block_index.nHeight, block_hash.ToString());
     }
-    chainstate.LastScriptCheckReasonLogged() = decision.reason;
+    last_reason_logged = decision.reason;
 }
 
 namespace {

@@ -4,27 +4,23 @@
 
 #include <validation/block_connection.h>
 
-#include <chainstate.h>
+#include <chain.h>
 #include <consensus/block_consensus_pipeline.h>
-#include <kernel/chainparams.h>
+#include <consensus/params.h>
+#include <kernel/notifications_interface.h>
 #include <primitives/block.h>
 #include <uint256.h>
 #include <util/check.h>
 #include <util/log.h>
 #include <util/trace.h>
 #include <util/translation.h>
-#include <validation/block_data_adapters.h>
-#include <validation/block_header_context_adapters.h>
-#include <validation/block_index_adapters.h>
-#include <validation/block_script_check_adapters.h>
+#include <validation/block_connection_trace.h>
 #include <validation/block_validation.h>
 #include <validation/block_validation_error.h>
 #include <validation/block_validation_policy.h>
 #include <validation/coins_view_spend_state.h>
-#include <validation/connect_block_bench.h>
 #include <validation/core_block_commit_adapters.h>
 #include <validation/core_block_connection_attempt.h>
-#include <validation/core_block_policy.h>
 #include <validation_state.h>
 
 #include <cassert>
@@ -38,25 +34,28 @@ bool BlockConnectionEngine::Connect(const BlockConnectionRequest& request, Block
 {
     AssertLockHeld(cs_main);
 
-    Chainstate& chainstate{request.chainstate};
+    const BlockConnectionRuntime& runtime{request.runtime};
+    const BlockConnectionContext& context{request.context};
     const CBlock& block{request.block};
     CBlockIndex& block_index{request.block_index};
     CCoinsViewCache& view{request.coins_view};
-    const ConnectBlockOptions& options{request.options};
+    const BlockConnectionOptions& options{request.options};
 
     const uint256 block_hash{block.GetHash()};
     assert(*block_index.phashBlock == block_hash);
 
-    ConnectBlockBench bench{chainstate.m_chainman};
-    const CChainParams& params{chainstate.m_chainman.GetParams()};
+    BlockConnectionTrace& trace{runtime.trace};
+    const Consensus::Params& consensus_params{context.consensus_params};
 
     // Check it again in case a previous version let a bad block in.
-    if (!CheckBlock(block, state, params.GetConsensus(), options.block_check_options)) {
+    if (!CheckBlock(block, state, consensus_params, options.block_check_options)) {
         if (state.GetResult() == BlockValidationResult::BLOCK_MUTATED) {
             // We don't write down blocks to disk if they may have been
             // corrupted, so this should be impossible unless we're having hardware
             // problems.
-            return FatalError(chainstate.m_chainman.GetNotifications(), state, _("Corrupt block found indicating potential hardware failure."));
+            const bilingual_str message = _("Corrupt block found indicating potential hardware failure.");
+            runtime.notifications.fatalError(message);
+            return state.Error(message.original);
         }
         LogError("%s: Consensus::CheckBlock: %s\n", __func__, state.ToString());
         return false;
@@ -66,37 +65,23 @@ bool BlockConnectionEngine::Connect(const BlockConnectionRequest& request, Block
     const uint256 hashPrevBlock{block_index.pprev == nullptr ? uint256{} : block_index.pprev->GetBlockHash()};
     assert(hashPrevBlock == view.GetBestBlock());
 
-    bench.CountBlock();
+    trace.CountBlock();
 
     // Special case for the genesis block, skipping connection of its
     // transactions. Its coinbase is unspendable.
-    if (block_hash == params.GetConsensus().hashGenesisBlock) {
+    if (block_hash == consensus_params.hashGenesisBlock) {
         if (options.commit) {
             view.SetBestBlock(block_index.GetBlockHash());
         }
         return true;
     }
 
-    const CoreBlockScriptCheckDecision script_check_decision{DetermineCoreBlockScriptChecks(chainstate, block_index, params.GetConsensus())};
+    BlockDataStore& block_store{runtime.block_store};
+    BlockIndexStore& block_index_store{runtime.block_index_store};
 
-    bench.SanityChecksDone();
+    trace.SanityChecksDone();
+    trace.ForkChecksDone();
 
-    const Consensus::BlockSpendConsensusOptions spend_options{BuildCoreBlockSpendConsensusOptions(
-        block_index,
-        chainstate.m_chainman)};
-
-    bench.ForkChecksDone();
-
-    MaybeLogCoreBlockScriptCheckDecision(chainstate, block_index, block_hash, script_check_decision);
-
-    CoreBlockScriptChecks script_checks{
-        chainstate.m_chainman.GetCheckQueue(),
-        script_check_decision.run_script_checks,
-        options.cache_script_results,
-        chainstate.m_chainman.m_validation_cache};
-    CoreBlockDataStore block_store{chainstate.m_blockman};
-    CoreBlockIndexStore block_index_store{chainstate.m_chainman};
-    const Consensus::BlockConsensusContext consensus_context{BuildCoreBlockConsensusContext(block_index, chainstate.m_chainman, params.GetConsensus())};
     Consensus::CoinsViewBlockSpendWorkspace spend_workspace{view, block_index};
     CoreBlockSpendStateCommitter spend_state_committer{spend_workspace.StagedCoins(), view};
     CoreBlockConnectionAttempt connection_attempt{
@@ -107,15 +92,15 @@ bool BlockConnectionEngine::Connect(const BlockConnectionRequest& request, Block
         block_index_store,
         spend_workspace,
         spend_state_committer,
-        consensus_context,
-        spend_options};
-    auto spend_effects{connection_attempt.ValidateAndStageSpend(script_checks.Checker())};
+        context.consensus_context,
+        context.spend_options};
+    auto spend_effects{connection_attempt.ValidateAndStageSpend(runtime.script_checker)};
     const int spend_inputs{spend_effects ? spend_effects->inputs : 0};
-    bench.SpendStageValidated(block.vtx.size(), spend_inputs);
+    trace.SpendStageValidated(block.vtx.size(), spend_inputs);
 
     // Complete any queued script work before leaving the spend stage so cache
     // updates and script diagnostics stay inside the script-checker boundary.
-    spend_effects = connection_attempt.CompleteSpendStage(std::move(spend_effects), script_checks.Checker());
+    spend_effects = connection_attempt.CompleteSpendStage(std::move(spend_effects), runtime.script_checker);
     if (!spend_effects) {
         ApplyBlockSpendError(state, spend_effects.error());
         LogInfo("Block validation error: %s", state.ToString());
@@ -123,7 +108,7 @@ bool BlockConnectionEngine::Connect(const BlockConnectionRequest& request, Block
     }
     assert(spend_effects);
     const Consensus::BlockSpendEffects& effects{*spend_effects};
-    bench.SpendStageCompleted(effects.inputs);
+    trace.SpendStageCompleted(effects.inputs);
 
     if (!options.commit) {
         return true;
@@ -133,13 +118,13 @@ bool BlockConnectionEngine::Connect(const BlockConnectionRequest& request, Block
         return ApplyBlockCommitError(state, spend_state_commit.error());
     }
 
-    bench.UndoWritten();
+    trace.UndoWritten();
 
     if (const auto index_commit{connection_attempt.CommitBlockIndex(effects)}; !index_commit) {
         return ApplyBlockCommitError(state, index_commit.error());
     }
 
-    bench.IndexCommitted();
+    trace.IndexCommitted();
 
     TRACEPOINT(validation, block_connected,
                block_hash.data(),
@@ -147,7 +132,7 @@ bool BlockConnectionEngine::Connect(const BlockConnectionRequest& request, Block
                block.vtx.size(),
                effects.inputs,
                effects.sigop_cost,
-               bench.TraceDuration().count());
+               trace.TraceDuration().count());
 
     return true;
 }

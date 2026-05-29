@@ -10,7 +10,12 @@
 #include <script/interpreter.h>
 #include <sync.h>
 #include <test/util/setup_common.h>
+#include <validation/block_data_adapters.h>
 #include <validation/block_connection.h>
+#include <validation/block_connection_trace.h>
+#include <validation/block_index_adapters.h>
+#include <validation/block_script_check_adapters.h>
+#include <validation/core_block_connection_context.h>
 #include <validation_state.h>
 #include <chainstate.h>
 
@@ -102,9 +107,27 @@ void BenchmarkBlockConnectionEngine(benchmark::Bench& bench, std::vector<CKey>& 
         BlockValidationState test_block_state;
         auto* pindex{chainman->m_blockman.AddToBlockIndex(test_block, chainman->m_best_header)}; // Doing this here doesn't impact the benchmark
         CCoinsViewCache viewNew{&chainstate.CoinsTip()};
+        CoreBlockDataStore block_store{chainstate.m_blockman};
+        CoreBlockIndexStore block_index_store{chainstate.m_chainman};
+        const uint256 block_hash{test_block.GetHash()};
+        const CoreBlockConnectionPlan connection_plan{PlanCoreBlockConnection(chainstate.m_chainman, block_index_store, *pindex)};
+        MaybeLogCoreBlockConnectionScriptPolicy(chainstate.LastScriptCheckReasonLogged(), *pindex, block_hash, connection_plan);
+        CoreBlockScriptChecks script_checks{
+            chainstate.m_chainman.GetCheckQueue(),
+            connection_plan.script_check_decision.run_script_checks,
+            /*cache_results=*/false,
+            chainstate.m_chainman.m_validation_cache};
+        BlockConnectionTrace trace{BlockConnectionTraceCountersFor(chainstate.m_chainman)};
 
         const validation::BlockConnectionRequest request{
-            .chainstate = chainstate,
+            .runtime = {
+                .notifications = chainstate.m_chainman.GetNotifications(),
+                .block_store = block_store,
+                .block_index_store = block_index_store,
+                .script_checker = script_checks.Checker(),
+                .trace = trace,
+            },
+            .context = connection_plan.context,
             .block = test_block,
             .block_index = *pindex,
             .coins_view = viewNew,

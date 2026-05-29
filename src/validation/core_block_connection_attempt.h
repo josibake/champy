@@ -9,8 +9,7 @@
 #include <consensus/block_consensus_pipeline.h>
 #include <consensus/block_spend.h>
 #include <kernel/cs_main.h>
-
-#include <memory>
+#include <validation/core_block_commit_adapters.h>
 
 class BlockDataStore;
 class CBlock;
@@ -30,12 +29,11 @@ public:
         Consensus::BlockSpendStateCommitter& spend_state_committer,
         Consensus::BlockConsensusContext consensus_context,
         Consensus::BlockSpendConsensusOptions spend_options);
-    ~CoreBlockConnectionAttempt();
 
     CoreBlockConnectionAttempt(const CoreBlockConnectionAttempt&) = delete;
     CoreBlockConnectionAttempt& operator=(const CoreBlockConnectionAttempt&) = delete;
-    CoreBlockConnectionAttempt(CoreBlockConnectionAttempt&&) noexcept;
-    CoreBlockConnectionAttempt& operator=(CoreBlockConnectionAttempt&&) noexcept;
+    CoreBlockConnectionAttempt(CoreBlockConnectionAttempt&&) = delete;
+    CoreBlockConnectionAttempt& operator=(CoreBlockConnectionAttempt&&) = delete;
 
     [[nodiscard]] Consensus::BlockSpendResult<Consensus::BlockSpendEffects> ValidateAndStageSpend(Consensus::BlockScriptChecker& script_checker)
         EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
@@ -48,8 +46,12 @@ public:
         EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
 
 private:
-    class Impl;
-    std::unique_ptr<Impl> m_impl;
+    Consensus::BlockSpendWorkspace& m_spend_workspace;
+    Consensus::BlockCommitContext m_commit_context;
+    Consensus::BlockConsensusPipeline m_pipeline;
+    Consensus::BlockSpendStateCommitter& m_spend_state_committer;
+    CoreBlockEffectsWriter m_effects_writer;
+    Consensus::BlockSpendConsensusOptions m_spend_options;
 };
 
 #endif // BITCOIN_CORE_BLOCK_CONNECTION_ATTEMPT_H

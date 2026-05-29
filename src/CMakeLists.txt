@@ -211,8 +211,9 @@ set(BITCOIN_CHAIN_VALIDATION_SOURCES
   ${CMAKE_CURRENT_SOURCE_DIR}/validation/block_validation_policy.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/validation/chain_validation.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/validation/coins_view_spend_state.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/validation/connect_block_bench.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/validation/block_connection_trace.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/validation/core_block_commit_adapters.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/validation/core_block_connection_context.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/validation/core_block_connection_attempt.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/validation/core_block_policy.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/validation/sequence_locks_adapters.cpp

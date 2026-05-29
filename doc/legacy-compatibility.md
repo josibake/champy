@@ -6,26 +6,10 @@ staged.
 Do not build new architecture around these shapes unless the compatibility
 reason still applies.
 
-## `ConnectBlock`
-
-`ConnectBlock` remains as the historical Core entry point used by `Chainstate`.
-
-Current role:
-
-- preserve existing callers
-- preserve existing lock annotations and failure mapping
-- delegate block connection to `validation::BlockConnectionEngine`
-
-Target:
-
-- callers use a validation service or engine request directly
-- `Chainstate` owns active-chain state and commit coordination only
-- block connection orchestration lives in validation, not in `Chainstate`
-
 ## Core Runtime Capabilities
 
-Some validation requests still carry broad Core objects such as `Chainstate`,
-`CBlockIndex`, and `CCoinsViewCache`.
+Some validation requests still carry broad Core objects or runtime capabilities
+such as `ChainstateManager`, `CBlockIndex`, and `CCoinsViewCache`.
 
 Current role:
 
@@ -70,6 +54,65 @@ Target:
 - replace the dynamic event mutex with explicit execution/commit contracts
 - publish node events from a narrower post-commit boundary
 - keep mempool-specific replay and repair entirely in node orchestration
+
+## Block Data Admission
+
+`AcceptBlock` still carries block-download policy through
+`BlockAcceptanceOptions::block_data_requested`.
+
+Current role:
+
+- preserve block download behavior and `getblockfrompeer` compatibility
+- decide whether block bytes should be stored before chain activation
+
+Target:
+
+- replace the policy flag with a validation-facing chain-candidate query
+- keep download/orphan/peer policy in node orchestration
+
+## Mixed Storage Flush
+
+`FlushStateToDisk()` still flushes block storage and chainstate storage through
+one validation call.
+
+Current role:
+
+- preserve pruning and cache-flush behavior while block storage remains Core's
+  default implementation
+
+Target:
+
+- move mixed storage coordination behind a ChainstateManager/runtime boundary
+- let alternate storage implementations make equivalent flush decisions
+  without changing consensus code
+
+## Script Cache Locking
+
+Script-cache lookup still requires `cs_main` because Core's CuckooCache is
+externally synchronized.
+
+Current role:
+
+- preserve script-cache behavior and validation-cache sharing
+
+Target:
+
+- give script execution an explicit cache capability with its own lock contract
+- remove `cs_main` from script-cache-only paths
+
+## Roll-Forward Replay
+
+`RollforwardBlock()` still mutates a coins cache directly when replaying block
+effects during database verification.
+
+Current role:
+
+- preserve existing chainstate recovery and verification behavior
+
+Target:
+
+- reuse block-connection effects for replay
+- keep direct UTXO mutation isolated to commit/recovery code
 
 ## Kernel Runtime
 

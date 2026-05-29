@@ -93,7 +93,7 @@ std::optional<LockPoints> CalculateLockPointsAtTip(
 
     CBlockIndex next_tip;
     next_tip.pprev = tip;
-    // When SequenceLocks() is called within ConnectBlock(), the height
+    // When SequenceLocks() is called during block connection, the height
     // of the block *being* evaluated is what is used.
     // Thus if we want to know if a transaction can be part of the
     // *next* block, we need to use one more than active_chainstate.m_chain.Height()
@@ -141,7 +141,7 @@ bool CheckSequenceLocksAtTip(CBlockIndex* tip,
     index.pprev = tip;
     // CheckSequenceLocksAtTip() uses active_chainstate.m_chain.Height()+1 to evaluate
     // height based locks because when SequenceLocks() is called within
-    // ConnectBlock(), the height of the block *being*
+    // block connection, the height of the block *being*
     // evaluated is what is used.
     // Thus if we want to know if a transaction can be part of the
     // *next* block, we need to use one more than active_chainstate.m_chain.Height()

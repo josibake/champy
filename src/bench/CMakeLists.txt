@@ -20,7 +20,7 @@ add_executable(bench_bitcoin
   checkqueue.cpp
   cluster_linearize.cpp
   consensus_spend_backend.cpp
-  connectblock.cpp
+  block_connection.cpp
   crypto_hash.cpp
   descriptors.cpp
   disconnected_transactions.cpp

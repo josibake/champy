@@ -284,7 +284,7 @@ BlockCheckResult<void> CheckBlockTransactions(std::span<const CTransactionRef> t
         }
     }
 
-    // This underestimates the number of sigops, because unlike ConnectBlock it
+    // This underestimates the number of sigops, because unlike full block connection it
     // does not count witness and p2sh sigops.
     unsigned int nSigOps = 0;
     for (const auto& tx : transactions) {
