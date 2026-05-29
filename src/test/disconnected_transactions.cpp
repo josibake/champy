@@ -4,8 +4,11 @@
 //
 #include <boost/test/unit_test.hpp>
 #include <core_memusage.h>
-#include <kernel/disconnected_transactions.h>
+#include <node/disconnected_transactions.h>
 #include <test/util/setup_common.h>
+
+using node::DisconnectedBlockTransactions;
+using node::MAX_DISCONNECTED_TX_POOL_BYTES;
 
 BOOST_AUTO_TEST_SUITE(disconnected_transactions)
 

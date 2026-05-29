@@ -6,6 +6,7 @@
 #define BITCOIN_NODE_MEMPOOL_CHAIN_SYNC_H
 
 #include <chainstate_mempool_sync.h>
+#include <node/disconnected_transactions.h>
 #include <node/txmempool.h>
 #include <sync.h>
 
@@ -14,7 +15,6 @@
 class Chainstate;
 class CBlock;
 class CCoinsViewCache;
-class DisconnectedBlockTransactions;
 
 namespace node {
 
@@ -43,14 +43,12 @@ public:
      * a half-repaired mempool after the locks are released.
      */
     void UpdateForDisconnectedBlock(
-        DisconnectedBlockTransactions& disconnectpool,
         const CBlock& block) override EXCLUSIVE_LOCKS_REQUIRED(cs_main);
 
     /**
      * Remove transactions confirmed by a connected block from mempool state.
      */
     void UpdateForConnectedBlock(
-        DisconnectedBlockTransactions& disconnectpool,
         const CBlock& block,
         unsigned int block_height) override EXCLUSIVE_LOCKS_REQUIRED(cs_main);
 
@@ -61,11 +59,11 @@ public:
      */
     void UpdateForReorg(
         Chainstate& chainstate,
-        DisconnectedBlockTransactions& disconnectpool,
         bool add_to_mempool) override EXCLUSIVE_LOCKS_REQUIRED(cs_main);
 
 private:
     CTxMemPool& m_mempool;
+    DisconnectedBlockTransactions m_disconnectpool{MAX_DISCONNECTED_TX_POOL_BYTES};
 };
 
 } // namespace node

@@ -14,7 +14,6 @@
 class CBlock;
 class CCoinsViewCache;
 class Chainstate;
-class DisconnectedBlockTransactions;
 
 /**
  * Optional side-effect boundary for keeping node-owned mempool state consistent
@@ -35,9 +34,9 @@ public:
 
     virtual void AddTransactionsUpdated() EXCLUSIVE_LOCKS_REQUIRED(cs_main) = 0;
     virtual void Check(const CCoinsViewCache& coins, int64_t spend_height) const EXCLUSIVE_LOCKS_REQUIRED(cs_main) = 0;
-    virtual void UpdateForDisconnectedBlock(DisconnectedBlockTransactions& disconnectpool, const CBlock& block) EXCLUSIVE_LOCKS_REQUIRED(cs_main) = 0;
-    virtual void UpdateForConnectedBlock(DisconnectedBlockTransactions& disconnectpool, const CBlock& block, unsigned int block_height) EXCLUSIVE_LOCKS_REQUIRED(cs_main) = 0;
-    virtual void UpdateForReorg(Chainstate& chainstate, DisconnectedBlockTransactions& disconnectpool, bool add_to_mempool) EXCLUSIVE_LOCKS_REQUIRED(cs_main) = 0;
+    virtual void UpdateForDisconnectedBlock(const CBlock& block) EXCLUSIVE_LOCKS_REQUIRED(cs_main) = 0;
+    virtual void UpdateForConnectedBlock(const CBlock& block, unsigned int block_height) EXCLUSIVE_LOCKS_REQUIRED(cs_main) = 0;
+    virtual void UpdateForReorg(Chainstate& chainstate, bool add_to_mempool) EXCLUSIVE_LOCKS_REQUIRED(cs_main) = 0;
 };
 
 #endif // BITCOIN_CHAINSTATE_MEMPOOL_SYNC_H

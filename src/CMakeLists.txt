@@ -233,6 +233,7 @@ target_include_directories(bitcoin_chain_validation PRIVATE $<BUILD_INTERFACE:${
 
 # Local transaction admission, mempool state, and mempool-specific policy.
 add_library(bitcoin_mempool_policy OBJECT EXCLUDE_FROM_ALL
+  node/disconnected_transactions.cpp
   node/mempool_chain_sync.cpp
   node/mempool_removal_reason.cpp
   node/mempool_validation.cpp
@@ -271,7 +272,6 @@ add_library(bitcoin_node STATIC EXCLUDE_FROM_ALL
   kernel/coinstats.cpp
   kernel/context.cpp
   kernel/cs_main.cpp
-  kernel/disconnected_transactions.cpp
   mapport.cpp
   net.cpp
   net_processing.cpp

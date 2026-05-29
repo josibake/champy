@@ -2,8 +2,8 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#ifndef BITCOIN_KERNEL_DISCONNECTED_TRANSACTIONS_H
-#define BITCOIN_KERNEL_DISCONNECTED_TRANSACTIONS_H
+#ifndef BITCOIN_NODE_DISCONNECTED_TRANSACTIONS_H
+#define BITCOIN_NODE_DISCONNECTED_TRANSACTIONS_H
 
 #include <primitives/transaction.h>
 #include <util/hasher.h>
@@ -13,6 +13,8 @@
 #include <list>
 #include <unordered_map>
 #include <vector>
+
+namespace node {
 
 /** Maximum bytes for transactions to store for processing during reorg */
 static const unsigned int MAX_DISCONNECTED_TX_POOL_BYTES{20'000'000};
@@ -75,4 +77,7 @@ public:
     /** Clear all data structures and return the list of transactions. */
     std::list<CTransactionRef> take();
 };
-#endif // BITCOIN_KERNEL_DISCONNECTED_TRANSACTIONS_H
+
+} // namespace node
+
+#endif // BITCOIN_NODE_DISCONNECTED_TRANSACTIONS_H

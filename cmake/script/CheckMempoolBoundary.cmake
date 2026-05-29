@@ -61,6 +61,8 @@ endfunction()
 
 foreach(relative_path IN ITEMS
     src/chainstate_mempool_sync.h
+    src/node/disconnected_transactions.cpp
+    src/node/disconnected_transactions.h
     src/node/mempool_chain_sync.cpp
     src/node/mempool_chain_sync.h
     src/node/mempool_entry.h
@@ -77,6 +79,7 @@ foreach(relative_path IN ITEMS
 endforeach()
 
 set(expected_mempool_policy_sources
+  "node/disconnected_transactions.cpp"
   "node/mempool_chain_sync.cpp"
   "node/mempool_removal_reason.cpp"
   "node/mempool_validation.cpp"
@@ -112,6 +115,8 @@ foreach(source IN LISTS expected_mempool_policy_sources)
 endforeach()
 
 foreach(relative_path IN ITEMS
+    src/kernel/disconnected_transactions.cpp
+    src/kernel/disconnected_transactions.h
     src/mempool_validation.cpp
     src/mempool_validation.h
     src/txmempool.cpp

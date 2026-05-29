@@ -24,7 +24,6 @@ class Chainstate;
 class ChainstateManager;
 class CCoinsView;
 class CCoinsViewCache;
-class DisconnectedBlockTransactions;
 
 /**
  * Validation result for a transaction evaluated by MemPoolAccept (single or package).

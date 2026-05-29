@@ -51,7 +51,6 @@ class Chainstate;
 class ChainstateManager;
 struct ChainTxData;
 class ChainstateMempoolSync;
-class DisconnectedBlockTransactions;
 struct LockPoints;
 namespace Consensus {
 struct Params;
@@ -377,7 +376,6 @@ public:
     // Apply the effects of a block disconnection on the UTXO set.
     bool DisconnectTip(
         BlockValidationState& state,
-        DisconnectedBlockTransactions* disconnectpool,
         ChainstateMempoolSync* mempool_sync) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
 
     // Manual block validity manipulation:
@@ -453,7 +451,6 @@ protected:
         CBlockIndex* pindexNew,
         std::shared_ptr<const CBlock> block_to_connect,
         std::vector<ConnectedBlock>& connected_blocks,
-        DisconnectedBlockTransactions& disconnectpool,
         ChainstateMempoolSync* mempool_sync) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
 
     CBlockIndex* FindMostWorkChain() EXCLUSIVE_LOCKS_REQUIRED(cs_main);

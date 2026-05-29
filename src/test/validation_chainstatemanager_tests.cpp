@@ -4,7 +4,6 @@
 //
 #include <chainparams.h>
 #include <validation_state.h>
-#include <kernel/disconnected_transactions.h>
 #include <node/chainstatemanager_args.h>
 #include <node/kernel_notifications.h>
 #include <random.h>

@@ -8,7 +8,6 @@
 #include <chainstate.h>
 #include <coins.h>
 #include <consensus/consensus.h>
-#include <kernel/disconnected_transactions.h>
 #include <node/mempool_validation.h>
 #include <node/txmempool.h>
 #include <primitives/block.h>
@@ -36,7 +35,6 @@ void MempoolChainSync::Check(const CCoinsViewCache& coins, int64_t spend_height)
 }
 
 void MempoolChainSync::UpdateForDisconnectedBlock(
-    DisconnectedBlockTransactions& disconnectpool,
     const CBlock& block) NO_THREAD_SAFETY_ANALYSIS
 {
     AssertLockHeld(cs_main);
@@ -44,13 +42,12 @@ void MempoolChainSync::UpdateForDisconnectedBlock(
 
     // Save transactions to re-add to mempool at end of reorg. If any entries are evicted for
     // exceeding memory limits, remove them and their descendants from the mempool.
-    for (auto&& evicted_tx : disconnectpool.AddTransactionsFromBlock(block.vtx)) {
+    for (auto&& evicted_tx : m_disconnectpool.AddTransactionsFromBlock(block.vtx)) {
         m_mempool.removeRecursive(*evicted_tx, MemPoolRemovalReason::REORG);
     }
 }
 
 void MempoolChainSync::UpdateForConnectedBlock(
-    DisconnectedBlockTransactions& disconnectpool,
     const CBlock& block,
     unsigned int block_height) NO_THREAD_SAFETY_ANALYSIS
 {
@@ -58,12 +55,11 @@ void MempoolChainSync::UpdateForConnectedBlock(
     AssertLockHeld(m_mempool.cs);
 
     m_mempool.removeForBlock(block.vtx, block_height);
-    disconnectpool.removeForBlock(block.vtx);
+    m_disconnectpool.removeForBlock(block.vtx);
 }
 
 void MempoolChainSync::UpdateForReorg(
     Chainstate& chainstate,
-    DisconnectedBlockTransactions& disconnectpool,
     bool add_to_mempool) NO_THREAD_SAFETY_ANALYSIS
 {
     AssertLockHeld(cs_main);
@@ -76,7 +72,7 @@ void MempoolChainSync::UpdateForReorg(
         // Iterate disconnectpool in reverse, so that we add transactions
         // back to the mempool starting with the earliest transaction that had
         // been previously seen in a block.
-        const auto queuedTx = disconnectpool.take();
+        const auto queuedTx = m_disconnectpool.take();
         auto it = queuedTx.rbegin();
         while (it != queuedTx.rend()) {
             // ignore validation errors in resurrected transactions

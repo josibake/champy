@@ -21,7 +21,6 @@
 #include <flatfile.h>
 #include <kernel/chainparams.h>
 #include <kernel/coinstats.h>
-#include <kernel/disconnected_transactions.h>
 #include <kernel/messagestartchars.h>
 #include <kernel/notifications_interface.h>
 #include <kernel/warning.h>
@@ -527,19 +526,9 @@ void Chainstate::UpdateTip(const CBlockIndex* pindexNew, ChainstateMempoolSync* 
                  util::Join(warning_messages, Untranslated(", ")).original);
 }
 
-/** Disconnect m_chain's tip.
-  * After calling, the mempool will be in an inconsistent state, with
-  * transactions from disconnected blocks being added to disconnectpool.  You
-  * should make the mempool consistent again through MempoolChainSync.
-  * with cs_main held.
-  *
-  * If disconnectpool is nullptr, then no disconnected transactions are added to
-  * disconnectpool (note that the caller is responsible for mempool consistency
-  * in any case).
-  */
+/** Disconnect m_chain's tip. */
 bool Chainstate::DisconnectTip(
     BlockValidationState& state,
-    DisconnectedBlockTransactions* disconnectpool,
     ChainstateMempoolSync* mempool_sync)
 {
     AssertLockHeld(cs_main);
@@ -585,8 +574,8 @@ bool Chainstate::DisconnectTip(
         return false;
     }
 
-    if (disconnectpool && mempool_sync) {
-        mempool_sync->UpdateForDisconnectedBlock(*disconnectpool, block);
+    if (mempool_sync) {
+        mempool_sync->UpdateForDisconnectedBlock(block);
     }
 
     m_chain.SetTip(*pindexDelete->pprev);
@@ -617,7 +606,6 @@ bool Chainstate::ConnectTip(
     CBlockIndex* pindexNew,
     std::shared_ptr<const CBlock> block_to_connect,
     std::vector<ConnectedBlock>& connected_blocks,
-    DisconnectedBlockTransactions& disconnectpool,
     ChainstateMempoolSync* mempool_sync)
 {
     AssertLockHeld(cs_main);
@@ -682,7 +670,7 @@ bool Chainstate::ConnectTip(
              Ticks<MillisecondsDouble>(m_chainman.time_chainstate) / m_chainman.num_blocks_total);
     // Remove confirmed transactions from node-owned mempool state.
     if (mempool_sync) {
-        mempool_sync->UpdateForConnectedBlock(disconnectpool, *block_to_connect, pindexNew->nHeight);
+        mempool_sync->UpdateForConnectedBlock(*block_to_connect, pindexNew->nHeight);
     }
     // Update m_chain & related variables.
     m_chain.SetTip(*pindexNew);
@@ -794,12 +782,11 @@ bool Chainstate::ActivateBestChainStep(
 
     // Disconnect active blocks which are no longer in the best chain.
     bool fBlocksDisconnected = false;
-    DisconnectedBlockTransactions disconnectpool{MAX_DISCONNECTED_TX_POOL_BYTES};
     while (m_chain.Tip() && m_chain.Tip() != pindexFork) {
-        if (!DisconnectTip(state, &disconnectpool, mempool_sync)) {
+        if (!DisconnectTip(state, mempool_sync)) {
             // This is likely a fatal error, but keep the mempool consistent,
             // just in case. Only remove from the mempool in this case.
-            if (mempool_sync) mempool_sync->UpdateForReorg(*this, disconnectpool, false);
+            if (mempool_sync) mempool_sync->UpdateForReorg(*this, false);
 
             // If we're unable to disconnect a block during normal operation,
             // then that is a failure of our local system -- we should abort
@@ -829,7 +816,7 @@ bool Chainstate::ActivateBestChainStep(
 
         // Connect new blocks.
         for (CBlockIndex* pindexConnect : vpindexToConnect | std::views::reverse) {
-            if (!ConnectTip(state, pindexConnect, pindexConnect == &index_most_work ? pblock : std::shared_ptr<const CBlock>(), connected_blocks, disconnectpool, mempool_sync)) {
+            if (!ConnectTip(state, pindexConnect, pindexConnect == &index_most_work ? pblock : std::shared_ptr<const CBlock>(), connected_blocks, mempool_sync)) {
                 if (state.IsInvalid()) {
                     // The block violates a consensus rule.
                     if (state.GetResult() != BlockValidationResult::BLOCK_MUTATED) {
@@ -843,7 +830,7 @@ bool Chainstate::ActivateBestChainStep(
                     // A system error occurred (disk space, database error, ...).
                     // Make the mempool consistent with the current tip, just in case
                     // any observers try to use it before shutdown.
-                    if (mempool_sync) mempool_sync->UpdateForReorg(*this, disconnectpool, false);
+                    if (mempool_sync) mempool_sync->UpdateForReorg(*this, false);
                     return false;
                 }
             } else {
@@ -858,9 +845,7 @@ bool Chainstate::ActivateBestChainStep(
     }
 
     if (fBlocksDisconnected) {
-        // If any blocks were disconnected, disconnectpool may be non empty.  Add
-        // any disconnected transactions back to the mempool.
-        if (mempool_sync) mempool_sync->UpdateForReorg(*this, disconnectpool, true);
+        if (mempool_sync) mempool_sync->UpdateForReorg(*this, true);
     }
     if (mempool_sync) mempool_sync->Check(this->CoinsTip(), this->m_chain.Height() + 1);
 
@@ -1130,8 +1115,8 @@ bool Chainstate::InvalidateBlock(BlockValidationState& state, CBlockIndex* const
 
         LOCK(cs_main);
         CoreBlockIndexStore block_index_store{m_chainman};
-        // Lock for as long as disconnectpool is in scope to make sure the
-        // mempool reorg update runs after DisconnectTip without unlocking in between.
+        // Keep the mempool lock held across DisconnectTip and the reorg repair
+        // step so observers never see a half-repaired mempool.
         LOCK(MempoolMutex(mempool_sync));
         if (!m_chain.Contains(*pindex)) break;
         pindex_was_in_chain = true;
@@ -1139,14 +1124,11 @@ bool Chainstate::InvalidateBlock(BlockValidationState& state, CBlockIndex* const
 
         // ActivateBestChain considers blocks already in m_chain
         // unconditionally valid already, so force disconnect away from it.
-        DisconnectedBlockTransactions disconnectpool{MAX_DISCONNECTED_TX_POOL_BYTES};
-        bool ret = DisconnectTip(state, &disconnectpool, mempool_sync);
-        // DisconnectTip will add transactions to disconnectpool.
+        bool ret = DisconnectTip(state, mempool_sync);
         // Adjust the mempool to be consistent with the new tip, adding
         // transactions back to the mempool if disconnecting was successful,
-        // and we're not doing a very deep invalidation (in which case
-        // keeping the mempool up to date is probably futile anyway).
-        if (mempool_sync) mempool_sync->UpdateForReorg(*this, disconnectpool, /*add_to_mempool=*/(++disconnected <= 10) && ret);
+        // and we're not doing a very deep invalidation.
+        if (mempool_sync) mempool_sync->UpdateForReorg(*this, /*add_to_mempool=*/(++disconnected <= 10) && ret);
         if (!ret) return false;
         CBlockIndex* new_tip{m_chain.Tip()};
         assert(disconnected_tip->pprev == new_tip);

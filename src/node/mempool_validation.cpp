@@ -13,7 +13,6 @@
 #include <tx_check_adapters.h>
 #include <tx_verify.h>
 #include <kernel/chainparams.h>
-#include <kernel/disconnected_transactions.h>
 #include <node/mempool_entry.h>
 #include <kernel/notifications_interface.h>
 #include <node/blockstorage.h>

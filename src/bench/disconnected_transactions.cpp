@@ -3,7 +3,7 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #include <bench/bench.h>
-#include <kernel/disconnected_transactions.h>
+#include <node/disconnected_transactions.h>
 #include <primitives/block.h>
 #include <primitives/transaction.h>
 #include <script/script.h>
@@ -21,6 +21,8 @@ constexpr size_t BLOCK_VTX_COUNT{4000};
 constexpr size_t BLOCK_VTX_COUNT_10PERCENT{400};
 
 using BlockTxns = decltype(CBlock::vtx);
+using node::DisconnectedBlockTransactions;
+using node::MAX_DISCONNECTED_TX_POOL_BYTES;
 
 /** Reorg where 1 block is disconnected and 2 blocks are connected. */
 struct ReorgTxns {

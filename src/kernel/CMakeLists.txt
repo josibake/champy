@@ -16,7 +16,6 @@ add_library(bitcoinkernel
   coinstats.cpp
   context.cpp
   cs_main.cpp
-  disconnected_transactions.cpp
   ../chain.cpp
   ../coins.cpp
   ../compressor.cpp

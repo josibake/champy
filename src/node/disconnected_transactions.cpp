@@ -2,7 +2,7 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#include <kernel/disconnected_transactions.h>
+#include <node/disconnected_transactions.h>
 
 #include <cassert>
 #include <core_memusage.h>
@@ -21,6 +21,8 @@
 // to be refactored such that this assumption is no longer true (for
 // instance if there was some other way we cleaned up the mempool after a
 // reorg, besides draining this object).
+namespace node {
+
 DisconnectedBlockTransactions::~DisconnectedBlockTransactions()
 {
     assert(queuedTx.empty());
@@ -88,3 +90,5 @@ std::list<CTransactionRef> DisconnectedBlockTransactions::take()
     clear();
     return ret;
 }
+
+} // namespace node
