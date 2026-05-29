@@ -1,0 +1,58 @@
+name: Champix Nix CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - "**"
+    tags-ignore:
+      - "**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: true
+
+env:
+  CHAMPIX_REPOSITORY: josibake/champix
+  CACHIX_CACHE_NAME: champix
+  CACHIX_AUTH_TOKEN: ${{ secrets.CACHIX_AUTH_TOKEN }}
+
+jobs:
+  champix-smoke:
+    name: Champix smoke
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout Champy
+        uses: actions/checkout@v6
+        with:
+          path: champy
+
+      - name: Checkout Champix
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ env.CHAMPIX_REPOSITORY }}
+          path: champix
+          token: ${{ secrets.CHAMPIX_CHECKOUT_TOKEN || github.token }}
+
+      - uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      # TODO: Add CACHIX_AUTH_TOKEN in GitHub secrets to enable binary cache pushes.
+      - uses: cachix/cachix-action@v17
+        if: ${{ env.CACHIX_AUTH_TOKEN != '' }}
+        with:
+          name: ${{ env.CACHIX_CACHE_NAME }}
+          authToken: "${{ env.CACHIX_AUTH_TOKEN }}"
+
+      - name: Evaluate Champix against this Champy checkout
+        working-directory: champix
+        run: nix flake check --no-build --override-input champy path:${{ github.workspace }}/champy --print-build-logs
+
+      - name: Build smoke job
+        working-directory: champix
+        run: nix build .#hydraJobs.x86_64-linux.formatting --override-input champy path:${{ github.workspace }}/champy --no-link --print-build-logs
