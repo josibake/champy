@@ -221,6 +221,13 @@ add_test(
     -P ${PROJECT_SOURCE_DIR}/cmake/script/CheckMempoolBoundary.cmake
 )
 
+add_test(
+  NAME kernel_boundary
+  COMMAND ${CMAKE_COMMAND}
+    -DSOURCE_DIR=${PROJECT_SOURCE_DIR}
+    -P ${PROJECT_SOURCE_DIR}/cmake/script/CheckKernelBoundary.cmake
+)
+
 file(GLOB consensus_public_headers CONFIGURE_DEPENDS
   "${PROJECT_SOURCE_DIR}/src/consensus/*.h"
 )

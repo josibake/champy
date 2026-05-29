@@ -7,9 +7,9 @@
 
 /**
  * Context-independent transaction checking code that can be called outside the
- * bitcoin server and doesn't depend on chain or mempool state. Transaction
- * verification code that does call server functions or depend on server state
- * belongs in tx_verify.h/cpp instead.
+ * bitcoin server and doesn't depend on chain state or local transaction-pool
+ * state. Transaction verification code that does call server functions or
+ * depend on server state belongs in tx_verify.h/cpp instead.
  */
 
 #include <consensus/expected.h>

@@ -189,11 +189,20 @@ set(forbidden_symbols
   "BlockValidationState"
   "CBlockIndex"
   "CCoinsView"
+  "CCoinsViewCache"
+  "CBlockUndo"
+  "CTxMemPool"
   "Chainstate"
   "ChainstateManager"
+  "ChainstateMempoolSync"
+  "FlatFilePos"
+  "BlockDataStore"
+  "BlockIndexStore"
+  "LevelDB"
   "TxValidationState"
   "cs_main"
   "gArgs"
+  "leveldb"
 )
 
 set(forbidden_public_api_symbols

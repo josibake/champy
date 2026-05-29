@@ -15,7 +15,7 @@ class COutPoint;
 namespace Consensus {
 
 // Portable data required to validate a spend of one previous output. This is
-// not Core's Coin type and does not imply a CCoinsViewCache-backed UTXO set.
+// not Core's Coin type and does not imply a Core cache-backed UTXO set.
 struct CoinSnapshot {
     CTxOut output;
     int height{0};
