@@ -117,7 +117,8 @@ COutPoint ProcessBlock(const NodeContext& node, const std::shared_ptr<CBlock>& b
         chainman,
         mempool_sync ? &*mempool_sync : nullptr,
         block,
-        {.force_processing = true, .header = {.min_pow_checked = true}})};
+        {.force_processing = true, .header = {.min_pow_checked = true}},
+        CurrentBlockValidationTime())};
     const bool duplicate{!result.new_block() && result.processed()};
     assert(!duplicate);
     node.validation_signals->UnregisterValidationInterface(&bvsc);

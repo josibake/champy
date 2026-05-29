@@ -795,7 +795,8 @@ public:
             chainman(),
             mempool_sync ? &*mempool_sync : nullptr,
             std::make_shared<const CBlock>(m_block_template->block),
-            {.force_processing = true, .header = {.min_pow_checked = true}})
+            {.force_processing = true, .header = {.min_pow_checked = true}},
+            CurrentBlockValidationTime())
             .processed();
     }
 
@@ -894,7 +895,7 @@ public:
         const Consensus::BlockCheckOptions validity_options{
             .check_pow = options.check_pow,
             .check_merkle_root = options.check_merkle_root};
-        BlockValidationState state{TestBlockValidity(chainman().ActiveChainstate(), block, validity_options)};
+        BlockValidationState state{TestBlockValidity(chainman().ActiveChainstate(), block, validity_options, CurrentBlockValidationTime())};
         reason = state.GetRejectReason();
         debug = state.GetDebugMessage();
         return state.IsValid();

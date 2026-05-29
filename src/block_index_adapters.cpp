@@ -5,6 +5,7 @@
 #include <block_index_adapters.h>
 
 #include <chainstate.h>
+#include <flatfile.h>
 #include <node/blockstorage.h>
 
 const CBlockIndex* CoreBlockIndexView::LookupBlockIndex(const uint256& block_hash) const
@@ -35,6 +36,12 @@ void CoreBlockIndexStore::MarkBlockIndexDirty(CBlockIndex& block_index)
     EXCLUSIVE_LOCKS_REQUIRED(::cs_main)
 {
     m_chainman.m_blockman.DirtyBlockIndex().insert(&block_index);
+}
+
+void CoreBlockIndexStore::MarkBlockDataReceived(const CBlock& block, CBlockIndex& block_index, const FlatFilePos& pos)
+    EXCLUSIVE_LOCKS_REQUIRED(::cs_main)
+{
+    m_chainman.ReceivedBlockTransactions(block, &block_index, pos);
 }
 
 CBlockIndex* CoreBlockIndexStore::AddToBlockIndex(const CBlockHeader& block)

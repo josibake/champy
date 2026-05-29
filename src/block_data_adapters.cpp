@@ -21,6 +21,27 @@ bool CoreBlockDataStore::ReadBlockUndo(CBlockUndo& blockundo, const CBlockIndex&
     return m_blockman.ReadBlockUndo(blockundo, index);
 }
 
+Consensus::BlockCommitResult<void> CoreBlockDataStore::WriteBlockUndo(const CBlockUndo& blockundo, CBlockIndex& index)
+    EXCLUSIVE_LOCKS_REQUIRED(::cs_main)
+{
+    if (const auto undo_write{m_blockman.WriteBlockUndo(blockundo, index)}; !undo_write) {
+        return Consensus::Unexpected<Consensus::BlockCommitError>{Consensus::BlockCommitError{
+            .reject_reason = undo_write.error().reject_reason,
+        }};
+    }
+    return {};
+}
+
+bool CoreBlockDataStore::IsPruneMode() const
+{
+    return m_blockman.IsPruneMode();
+}
+
+bool CoreBlockDataStore::HasIndexedBlockFiles() const
+{
+    return m_blockman.m_blockfiles_indexed;
+}
+
 FlatFilePos CoreBlockDataStore::WriteBlock(const CBlock& block, int height)
 {
     return m_blockman.WriteBlock(block, height);

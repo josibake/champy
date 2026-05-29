@@ -2980,6 +2980,7 @@ void PeerManagerImpl::ProcessHeadersMessage(CNode& pfrom, Peer& peer,
         m_chainman,
         headers,
         {.min_pow_checked = true},
+        CurrentBlockValidationTime(),
         state)};
     const bool processed{headers_result.accepted};
     pindexLast = headers_result.last_accepted;
@@ -3168,7 +3169,8 @@ void PeerManagerImpl::ProcessBlock(CNode& node, const std::shared_ptr<const CBlo
         m_chainman,
         &mempool_sync,
         block,
-        {.force_processing = force_processing, .header = {.min_pow_checked = min_pow_checked}})};
+        {.force_processing = force_processing, .header = {.min_pow_checked = min_pow_checked}},
+        CurrentBlockValidationTime())};
     if (result.new_block()) {
         node.m_last_block_time = GetTime<std::chrono::seconds>();
         // In case this block came from a different peer than we requested
@@ -4245,7 +4247,7 @@ void PeerManagerImpl::ProcessMessage(Peer& peer, CNode& pfrom, const std::string
 
         const CBlockIndex *pindex = nullptr;
         BlockValidationState state;
-        const NewBlockHeadersResult headers_result{ProcessNewBlockHeaders(m_chainman, {{cmpctblock.header}}, {.min_pow_checked = true}, state)};
+        const NewBlockHeadersResult headers_result{ProcessNewBlockHeaders(m_chainman, {{cmpctblock.header}}, {.min_pow_checked = true}, CurrentBlockValidationTime(), state)};
         if (!headers_result.accepted) {
             if (state.IsInvalid()) {
                 MaybePunishNodeForBlock(pfrom.GetId(), state, /*via_compact_block=*/true, "invalid header via cmpctblock");

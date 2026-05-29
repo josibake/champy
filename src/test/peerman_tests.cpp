@@ -29,7 +29,8 @@ static void mineBlock(const node::NodeContext& node, std::chrono::seconds block_
     Assert(ProcessNewBlock(
         *node.chainman,
         std::make_shared<const CBlock>(block),
-        {.force_processing = true, .header = {.min_pow_checked = true}})
+        {.force_processing = true, .header = {.min_pow_checked = true}},
+        CurrentBlockValidationTime())
         .processed());
     node.validation_signals->SyncWithValidationInterfaceQueue(); // drain events queue
 }

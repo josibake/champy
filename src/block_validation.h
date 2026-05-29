@@ -14,6 +14,7 @@
 #include <kernel/cs_main.h>
 #include <primitives/block.h>
 
+#include <cstdint>
 #include <memory>
 #include <span>
 
@@ -40,6 +41,20 @@ struct ConnectBlockOptions {
 struct BlockHeaderAcceptanceOptions {
     bool min_pow_checked{false};
 };
+
+/**
+ * Time-dependent block validation inputs.
+ *
+ * Keep these values explicit at validation entry points so tests and alternate
+ * orchestrators can supply deterministic time without changing consensus
+ * behavior.
+ */
+struct BlockValidationTime {
+    int64_t current_time_seconds{0};
+    int64_t max_future_block_time{0};
+};
+
+[[nodiscard]] BlockValidationTime CurrentBlockValidationTime();
 
 struct BlockAcceptanceOptions {
     bool block_data_requested{false};
@@ -126,10 +141,10 @@ bool RollforwardBlock(Chainstate& chainstate, const CBlockIndex* pindex, CCoinsV
 bool ReplayBlocks(Chainstate& chainstate);
 void UpdateUncommittedBlockStructures(const ChainstateManager& chainman, CBlock& block, const CBlockIndex* pindexPrev);
 void GenerateCoinbaseCommitment(const ChainstateManager& chainman, CBlock& block, const CBlockIndex* pindexPrev);
-[[nodiscard]] NewBlockHeadersResult ProcessNewBlockHeaders(ChainstateManager& chainman, std::span<const CBlockHeader> headers, BlockHeaderAcceptanceOptions options, BlockValidationState& state) LOCKS_EXCLUDED(cs_main);
-[[nodiscard]] BlockAcceptanceResult AcceptBlock(ChainstateManager& chainman, const std::shared_ptr<const CBlock>& pblock, BlockValidationState& state, BlockAcceptanceOptions options) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
-[[nodiscard]] NewBlockProcessingResult ProcessNewBlock(ChainstateManager& chainman, ChainstateMempoolSync* mempool_sync, const std::shared_ptr<const CBlock>& block, NewBlockProcessingOptions options) LOCKS_EXCLUDED(cs_main);
-[[nodiscard]] NewBlockProcessingResult ProcessNewBlock(ChainstateManager& chainman, const std::shared_ptr<const CBlock>& block, NewBlockProcessingOptions options) LOCKS_EXCLUDED(cs_main);
+[[nodiscard]] NewBlockHeadersResult ProcessNewBlockHeaders(ChainstateManager& chainman, std::span<const CBlockHeader> headers, BlockHeaderAcceptanceOptions options, BlockValidationTime time, BlockValidationState& state) LOCKS_EXCLUDED(cs_main);
+[[nodiscard]] BlockAcceptanceResult AcceptBlock(ChainstateManager& chainman, const std::shared_ptr<const CBlock>& pblock, BlockValidationState& state, BlockAcceptanceOptions options, BlockValidationTime time) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
+[[nodiscard]] NewBlockProcessingResult ProcessNewBlock(ChainstateManager& chainman, ChainstateMempoolSync* mempool_sync, const std::shared_ptr<const CBlock>& block, NewBlockProcessingOptions options, BlockValidationTime time) LOCKS_EXCLUDED(cs_main);
+[[nodiscard]] NewBlockProcessingResult ProcessNewBlock(ChainstateManager& chainman, const std::shared_ptr<const CBlock>& block, NewBlockProcessingOptions options, BlockValidationTime time) LOCKS_EXCLUDED(cs_main);
 
 /** Context-independent validity checks */
 bool CheckBlock(const CBlock& block, BlockValidationState& state, const Consensus::Params& consensusParams, const Consensus::BlockCheckOptions& options = {});
@@ -165,7 +180,8 @@ arith_uint256 CalculateClaimedHeadersWork(std::span<const CBlockHeader> headers)
 BlockValidationState TestBlockValidity(
     Chainstate& chainstate,
     const CBlock& block,
-    const Consensus::BlockCheckOptions& options) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
+    const Consensus::BlockCheckOptions& options,
+    BlockValidationTime time) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
 
 void LimitValidationInterfaceQueue(ValidationSignals& signals) LOCKS_EXCLUDED(cs_main);
 

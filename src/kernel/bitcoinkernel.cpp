@@ -1343,7 +1343,8 @@ int btck_chainstate_manager_process_block(
     const NewBlockProcessingResult result{ProcessNewBlock(
         *btck_ChainstateManager::get(chainman).m_chainman,
         btck_Block::get(block),
-        {.force_processing = true, .header = {.min_pow_checked = true}})};
+        {.force_processing = true, .header = {.min_pow_checked = true}},
+        CurrentBlockValidationTime())};
     if (_new_block) {
         *_new_block = result.new_block() ? 1 : 0;
     }
@@ -1362,6 +1363,7 @@ btck_BlockValidationState* btck_chainstate_manager_process_block_header(
             *chainman,
             {&btck_BlockHeader::get(header), 1},
             {.min_pow_checked = true},
+            CurrentBlockValidationTime(),
             btck_BlockValidationState::get(state))};
         assert(result.accepted == btck_BlockValidationState::get(state).IsValid());
         return state;

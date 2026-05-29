@@ -86,7 +86,8 @@ BOOST_FIXTURE_TEST_CASE(connect_tip_does_not_cache_inputs_on_failed_connect, Tes
     BOOST_CHECK(ProcessNewBlock(
         *Assert(m_node.chainman),
         std::make_shared<CBlock>(block),
-        {.force_processing = true, .header = {.min_pow_checked = true}})
+        {.force_processing = true, .header = {.min_pow_checked = true}},
+        CurrentBlockValidationTime())
         .processed());
 
     LOCK(cs_main);

@@ -13,6 +13,7 @@
 
 class CBlockIndex;
 class ChainstateManager;
+struct FlatFilePos;
 
 class BlockIndexView
 {
@@ -33,6 +34,7 @@ public:
     //! Return mutable block-index entries present at snapshot time. Persisted field changes must be marked dirty.
     virtual std::vector<CBlockIndex*> SnapshotBlockIndices() EXCLUSIVE_LOCKS_REQUIRED(::cs_main) = 0;
     virtual void MarkBlockIndexDirty(CBlockIndex& block_index) EXCLUSIVE_LOCKS_REQUIRED(::cs_main) = 0;
+    virtual void MarkBlockDataReceived(const CBlock& block, CBlockIndex& block_index, const FlatFilePos& pos) EXCLUSIVE_LOCKS_REQUIRED(::cs_main) = 0;
     virtual CBlockIndex* AddToBlockIndex(const CBlockHeader& block) EXCLUSIVE_LOCKS_REQUIRED(::cs_main) = 0;
 };
 
@@ -56,6 +58,7 @@ public:
     CBlockIndex* LookupBlockIndex(const uint256& block_hash) override EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
     std::vector<CBlockIndex*> SnapshotBlockIndices() override EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
     void MarkBlockIndexDirty(CBlockIndex& block_index) override EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
+    void MarkBlockDataReceived(const CBlock& block, CBlockIndex& block_index, const FlatFilePos& pos) override EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
     CBlockIndex* AddToBlockIndex(const CBlockHeader& block) override EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
 
 private:

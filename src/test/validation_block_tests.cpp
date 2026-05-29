@@ -6,6 +6,7 @@
 
 #include <block_validation.h>
 #include <chainparams.h>
+#include <consensus/consensus.h>
 #include <consensus/merkle.h>
 #include <node/mempool_chain_sync.h>
 #include <node/mempool_validation.h>
@@ -36,6 +37,16 @@ struct MinerTestingSetup : public RegTestingSetup {
 } // namespace validation_block_tests
 
 BOOST_FIXTURE_TEST_SUITE(validation_block_tests, MinerTestingSetup)
+
+BOOST_AUTO_TEST_CASE(current_block_validation_time_uses_mock_time)
+{
+    constexpr int64_t mock_time{1'710'000'000};
+    SetMockTime(std::chrono::seconds{mock_time});
+    const BlockValidationTime time{CurrentBlockValidationTime()};
+    BOOST_CHECK_EQUAL(time.current_time_seconds, mock_time);
+    BOOST_CHECK_EQUAL(time.max_future_block_time, mock_time + MAX_FUTURE_BLOCK_TIME);
+    SetMockTime(0s);
+}
 
 BOOST_AUTO_TEST_CASE(block_acceptance_result_predicates_keep_admission_reason_visible)
 {
@@ -133,7 +144,7 @@ std::shared_ptr<CBlock> MinerTestingSetup::FinalizeBlock(std::shared_ptr<CBlock>
     // submit block header, so that miner can get the block height from the
     // global state and the node has the topology of the chain
     BlockValidationState ignored;
-    BOOST_CHECK(ProcessNewBlockHeaders(*Assert(m_node.chainman), {{*pblock}}, {.min_pow_checked = true}, ignored).accepted);
+    BOOST_CHECK(ProcessNewBlockHeaders(*Assert(m_node.chainman), {{*pblock}}, {.min_pow_checked = true}, CurrentBlockValidationTime(), ignored).accepted);
 
     return pblock;
 }
@@ -193,7 +204,8 @@ BOOST_AUTO_TEST_CASE(processnewblock_signals_ordering)
     BOOST_CHECK(ProcessNewBlock(
         *Assert(m_node.chainman),
         std::make_shared<CBlock>(Params().GenesisBlock()),
-        {.force_processing = true, .header = {.min_pow_checked = true}})
+        {.force_processing = true, .header = {.min_pow_checked = true}},
+        CurrentBlockValidationTime())
         .processed());
     m_node.validation_signals->SyncWithValidationInterfaceQueue();
 
@@ -219,7 +231,8 @@ BOOST_AUTO_TEST_CASE(processnewblock_signals_ordering)
                 (void)ProcessNewBlock(
                     *Assert(m_node.chainman),
                     block,
-                    {.force_processing = true, .header = {.min_pow_checked = true}});
+                    {.force_processing = true, .header = {.min_pow_checked = true}},
+                    CurrentBlockValidationTime());
             }
 
             // to make sure that eventually we process the full chain - do it here
@@ -228,7 +241,8 @@ BOOST_AUTO_TEST_CASE(processnewblock_signals_ordering)
                     const NewBlockProcessingResult result{ProcessNewBlock(
                         *Assert(m_node.chainman),
                         block,
-                        {.force_processing = true, .header = {.min_pow_checked = true}})};
+                        {.force_processing = true, .header = {.min_pow_checked = true}},
+                        CurrentBlockValidationTime())};
                     assert(result.processed());
                 }
             }
@@ -271,7 +285,8 @@ BOOST_AUTO_TEST_CASE(mempool_locks_reorg)
             *Assert(m_node.chainman),
             &mempool_sync,
             block,
-            {.force_processing = true, .header = {.min_pow_checked = true}})
+            {.force_processing = true, .header = {.min_pow_checked = true}},
+            CurrentBlockValidationTime())
             .processed();
     };
 

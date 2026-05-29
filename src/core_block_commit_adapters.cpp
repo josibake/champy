@@ -4,10 +4,11 @@
 
 #include <core_block_commit_adapters.h>
 
+#include <block_data_adapters.h>
 #include <block_coin_effects.h>
+#include <block_index_adapters.h>
 #include <chain.h>
 #include <coins.h>
-#include <node/blockstorage.h>
 #include <undo.h>
 
 #include <cstddef>
@@ -41,26 +42,21 @@ CBlockUndo BuildBlockUndoFromSpendEffects(const Consensus::BlockSpendEffects& ef
 
 } // namespace
 
-CoreBlockEffectsWriter::CoreBlockEffectsWriter(node::BlockManager& blockman, std::set<CBlockIndex*>& dirty_blockindex, CCoinsViewCache& view, CBlockIndex& block_index)
-    : m_blockman{blockman}, m_dirty_blockindex{dirty_blockindex}, m_view{view}, m_block_index{block_index}
+CoreBlockEffectsWriter::CoreBlockEffectsWriter(BlockDataStore& block_store, BlockIndexStore& block_index_store, CCoinsViewCache& view, CBlockIndex& block_index)
+    : m_block_store{block_store}, m_block_index_store{block_index_store}, m_view{view}, m_block_index{block_index}
 {
 }
 
 Consensus::BlockCommitResult<void> CoreBlockEffectsWriter::WriteBlockRevertData(const Consensus::BlockCommitContext&, const Consensus::BlockSpendEffects& effects)
 {
-    if (const auto undo_write{m_blockman.WriteBlockUndo(BuildBlockUndoFromSpendEffects(effects), m_block_index)}; !undo_write) {
-        return Consensus::Unexpected<Consensus::BlockCommitError>{Consensus::BlockCommitError{
-            .reject_reason = undo_write.error().reject_reason,
-        }};
-    }
-    return {};
+    return m_block_store.WriteBlockUndo(BuildBlockUndoFromSpendEffects(effects), m_block_index);
 }
 
 Consensus::BlockCommitResult<void> CoreBlockEffectsWriter::CommitBlockMetadata(const Consensus::BlockCommitContext& context, const Consensus::BlockSpendEffects&)
 {
     if (!m_block_index.IsValid(BLOCK_VALID_SCRIPTS)) {
         m_block_index.RaiseValidity(BLOCK_VALID_SCRIPTS);
-        m_dirty_blockindex.insert(&m_block_index);
+        m_block_index_store.MarkBlockIndexDirty(m_block_index);
     }
 
     m_view.SetBestBlock(context.new_best_block);

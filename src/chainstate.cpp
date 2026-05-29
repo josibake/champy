@@ -1599,7 +1599,8 @@ void ChainstateManager::LoadExternalBlockFile(
                                 *this,
                                 pblock,
                                 state,
-                                {.block_data_requested = true, .existing_block_pos = dbp, .header = {.min_pow_checked = true}})
+                                {.block_data_requested = true, .existing_block_pos = dbp, .header = {.min_pow_checked = true}},
+                                CurrentBlockValidationTime())
                                 .accepted_for_processing()) {
                             nLoaded++;
                         }
@@ -1625,7 +1626,7 @@ void ChainstateManager::LoadExternalBlockFile(
                     }
                 }
 
-                if (m_blockman.IsPruneMode() && m_blockman.m_blockfiles_indexed && pblock) {
+                if (block_store.IsPruneMode() && block_store.HasIndexedBlockFiles() && pblock) {
                     // must update the tip for pruning to work while importing with -loadblock.
                     // this is a tradeoff to conserve disk space at the expense of time
                     // spent updating the tip to be able to prune.
@@ -1662,7 +1663,8 @@ void ChainstateManager::LoadExternalBlockFile(
                                     *this,
                                     pblockrecursive,
                                     dummy,
-                                    {.block_data_requested = true, .existing_block_pos = &it->second, .header = {.min_pow_checked = true}})
+                                    {.block_data_requested = true, .existing_block_pos = &it->second, .header = {.min_pow_checked = true}},
+                                    CurrentBlockValidationTime())
                                     .accepted_for_processing()) {
                                 nLoaded++;
                                 queue.push_back(block_hash);

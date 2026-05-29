@@ -816,7 +816,8 @@ BOOST_AUTO_TEST_CASE(CreateNewBlock_validity)
             BOOST_REQUIRE(ProcessNewBlock(
                 *Assert(m_node.chainman),
                 shared_pblock,
-                {.force_processing = true, .header = {.min_pow_checked = true}})
+                {.force_processing = true, .header = {.min_pow_checked = true}},
+                CurrentBlockValidationTime())
                 .processed());
         } else {
             BOOST_REQUIRE(block_template->submitSolution(block.nVersion, block.nTime, block.nNonce, MakeTransactionRef(txCoinbase)));

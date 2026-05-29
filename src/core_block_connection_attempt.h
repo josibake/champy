@@ -5,20 +5,18 @@
 #ifndef BITCOIN_CORE_BLOCK_CONNECTION_ATTEMPT_H
 #define BITCOIN_CORE_BLOCK_CONNECTION_ATTEMPT_H
 
+#include <consensus/block_commit.h>
 #include <consensus/block_consensus_pipeline.h>
 #include <consensus/block_spend.h>
 #include <kernel/cs_main.h>
 
 #include <memory>
-#include <set>
 
+class BlockDataStore;
 class CBlock;
 class CBlockIndex;
 class CCoinsViewCache;
-
-namespace node {
-class BlockManager;
-} // namespace node
+class BlockIndexStore;
 
 class CoreBlockConnectionAttempt final {
 public:
@@ -26,8 +24,10 @@ public:
         const CBlock& block,
         CBlockIndex& block_index,
         CCoinsViewCache& view,
-        node::BlockManager& blockman,
-        std::set<CBlockIndex*>& dirty_blockindex,
+        BlockDataStore& block_store,
+        BlockIndexStore& block_index_store,
+        Consensus::BlockSpendWorkspace& spend_workspace,
+        Consensus::BlockSpendStateCommitter& spend_state_committer,
         Consensus::BlockConsensusContext consensus_context,
         Consensus::BlockSpendConsensusOptions spend_options);
     ~CoreBlockConnectionAttempt();

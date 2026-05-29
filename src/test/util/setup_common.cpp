@@ -435,7 +435,8 @@ CBlock TestChain100Setup::CreateAndProcessBlock(
         *Assert(m_node.chainman),
         mempool_sync ? &*mempool_sync : nullptr,
         shared_pblock,
-        {.force_processing = true, .header = {.min_pow_checked = true}});
+        {.force_processing = true, .header = {.min_pow_checked = true}},
+        CurrentBlockValidationTime());
 
     return block;
 }

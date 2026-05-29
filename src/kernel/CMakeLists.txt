@@ -20,7 +20,6 @@ add_library(bitcoinkernel
   ../chain.cpp
   ../coins.cpp
   ../compressor.cpp
-  ${BITCOIN_KERNEL_VALIDATION_SOURCES}
   ../dbwrapper.cpp
   ../deploymentinfo.cpp
   ../deploymentstatus.cpp
@@ -82,6 +81,7 @@ target_link_libraries(crc32c PRIVATE kernel_warn_interface)
 target_link_libraries(bitcoinkernel
   PRIVATE
     bitcoin_consensus
+    bitcoin_chain_validation
     core_interface
     kernel_warn_interface
     secp256k1

@@ -196,9 +196,9 @@ target_link_libraries(bitcoin_common
 include(InstallBinaryComponent)
 
 
-# Core validation sources shared by bitcoin_node and bitcoinkernel while the
-# consensus boundary is being extracted.
-set(BITCOIN_KERNEL_VALIDATION_SOURCES
+# Core chain-validation sources shared by bitcoin_node and bitcoinkernel while
+# the consensus boundary is being extracted.
+set(BITCOIN_CHAIN_VALIDATION_SOURCES
   ${CMAKE_CURRENT_SOURCE_DIR}/block_data_admission.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/block_data_adapters.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/block_index_adapters.cpp
@@ -217,6 +217,18 @@ set(BITCOIN_KERNEL_VALIDATION_SOURCES
   ${CMAKE_CURRENT_SOURCE_DIR}/tx_check_adapters.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/tx_verify.cpp
 )
+
+add_library(bitcoin_chain_validation STATIC EXCLUDE_FROM_ALL
+  ${BITCOIN_CHAIN_VALIDATION_SOURCES}
+)
+target_link_libraries(bitcoin_chain_validation
+  PRIVATE
+    core_interface
+    bitcoin_consensus
+    Boost::headers
+    $<TARGET_NAME_IF_EXISTS:USDT::headers>
+)
+target_include_directories(bitcoin_chain_validation PRIVATE $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/src/leveldb/include>)
 
 # Local transaction admission, mempool state, and mempool-specific policy.
 add_library(bitcoin_mempool_policy OBJECT EXCLUDE_FROM_ALL
@@ -247,7 +259,6 @@ add_library(bitcoin_node STATIC EXCLUDE_FROM_ALL
   banman.cpp
   bip324.cpp
   blockencodings.cpp
-  ${BITCOIN_KERNEL_VALIDATION_SOURCES}
   dbwrapper.cpp
   deploymentstatus.cpp
   flatfile.cpp
@@ -314,6 +325,7 @@ target_link_libraries(bitcoin_node
     univalue
   PRIVATE
     core_interface
+    bitcoin_chain_validation
     bitcoin_common
     bitcoin_util
     leveldb

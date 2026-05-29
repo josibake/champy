@@ -22,6 +22,7 @@
 #include <consensus/consensus.h>
 #include <consensus/merkle.h>
 #include <connect_block_bench.h>
+#include <coins_view_spend_state.h>
 #include <flatfile.h>
 #include <hash.h>
 #include <kernel/chainparams.h>
@@ -212,13 +213,19 @@ bool ConnectBlock(Chainstate& chainstate, const CBlock& block, BlockValidationSt
         script_check_decision.run_script_checks,
         options.cache_script_results,
         chainstate.m_chainman.m_validation_cache};
+    CoreBlockDataStore block_store{chainstate.m_blockman};
+    CoreBlockIndexStore block_index_store{chainstate.m_chainman};
     const Consensus::BlockConsensusContext consensus_context{BuildCoreBlockConsensusContext(*pindex, chainstate.m_chainman, params.GetConsensus())};
+    Consensus::CoinsViewBlockSpendWorkspace spend_workspace{view, *pindex};
+    CoreBlockSpendStateCommitter spend_state_committer{spend_workspace.StagedCoins(), view};
     CoreBlockConnectionAttempt connection_attempt{
         block,
         *pindex,
         view,
-        chainstate.m_blockman,
-        chainstate.m_blockman.DirtyBlockIndex(),
+        block_store,
+        block_index_store,
+        spend_workspace,
+        spend_state_committer,
         consensus_context,
         spend_options};
     auto spend_effects{connection_attempt.ValidateAndStageSpend(script_checks.Checker())};
@@ -442,6 +449,15 @@ static int64_t MaxFutureBlockTime(NodeClock::time_point now)
     return TicksSinceEpoch<std::chrono::seconds>(now + std::chrono::seconds{MAX_FUTURE_BLOCK_TIME});
 }
 
+BlockValidationTime CurrentBlockValidationTime()
+{
+    const auto now{NodeClock::now()};
+    return {
+        .current_time_seconds = TicksSinceEpoch<std::chrono::seconds>(now),
+        .max_future_block_time = MaxFutureBlockTime(now),
+    };
+}
+
 static bool ContextualCheckBlockHeader(
     const CBlockHeader& block,
     BlockValidationState& state,
@@ -541,16 +557,15 @@ static BlockHeaderAcceptanceResult AcceptBlockHeader(ChainstateManager& chainman
 }
 
 // Exposed wrapper for AcceptBlockHeader
-NewBlockHeadersResult ProcessNewBlockHeaders(ChainstateManager& chainman, std::span<const CBlockHeader> headers, BlockHeaderAcceptanceOptions options, BlockValidationState& state)
+NewBlockHeadersResult ProcessNewBlockHeaders(ChainstateManager& chainman, std::span<const CBlockHeader> headers, BlockHeaderAcceptanceOptions options, BlockValidationTime time, BlockValidationState& state)
 {
     AssertLockNotHeld(cs_main);
     NewBlockHeadersResult result{.accepted = true};
     {
         LOCK(cs_main);
         CoreBlockIndexStore block_index{chainman};
-        const int64_t max_future_block_time{MaxFutureBlockTime(NodeClock::now())};
         for (const CBlockHeader& header : headers) {
-            const BlockHeaderAcceptanceResult accepted_header{AcceptBlockHeader(chainman, block_index, header, state, options, max_future_block_time)};
+            const BlockHeaderAcceptanceResult accepted_header{AcceptBlockHeader(chainman, block_index, header, state, options, time.max_future_block_time)};
             chainman.CheckBlockIndex();
 
             if (!accepted_header.accepted) {
@@ -562,7 +577,8 @@ NewBlockHeadersResult ProcessNewBlockHeaders(ChainstateManager& chainman, std::s
     if (chainman.NotifyHeaderTip()) {
         if (chainman.IsInitialBlockDownload() && result.last_accepted) {
             const CBlockIndex& last_accepted{*result.last_accepted};
-            int64_t blocks_left{(NodeClock::now() - last_accepted.Time()) / chainman.GetConsensus().PowTargetSpacing()};
+            const NodeSeconds current_time{std::chrono::seconds{time.current_time_seconds}};
+            int64_t blocks_left{(current_time - last_accepted.Time()) / chainman.GetConsensus().PowTargetSpacing()};
             blocks_left = std::max<int64_t>(0, blocks_left);
             const double progress{100.0 * last_accepted.nHeight / (last_accepted.nHeight + blocks_left)};
             LogInfo("Synchronizing blockheaders, height: %d (~%.2f%%)\n", last_accepted.nHeight, progress);
@@ -591,15 +607,14 @@ static BlockAcceptanceStatus BlockAcceptanceStatusFromDataAdmission(BlockDataAdm
 }
 
 
-BlockAcceptanceResult AcceptBlock(ChainstateManager& chainman, const std::shared_ptr<const CBlock>& pblock, BlockValidationState& state, BlockAcceptanceOptions options)
+BlockAcceptanceResult AcceptBlock(ChainstateManager& chainman, const std::shared_ptr<const CBlock>& pblock, BlockValidationState& state, BlockAcceptanceOptions options, BlockValidationTime time)
 {
     const CBlock& block = *pblock;
 
     AssertLockHeld(cs_main);
 
     CoreBlockIndexStore block_index{chainman};
-    const int64_t max_future_block_time{MaxFutureBlockTime(NodeClock::now())};
-    const BlockHeaderAcceptanceResult accepted_header{AcceptBlockHeader(chainman, block_index, block, state, options.header, max_future_block_time)};
+    const BlockHeaderAcceptanceResult accepted_header{AcceptBlockHeader(chainman, block_index, block, state, options.header, time.max_future_block_time)};
     chainman.CheckBlockIndex();
 
     if (!accepted_header.accepted) {
@@ -660,7 +675,7 @@ BlockAcceptanceResult AcceptBlock(ChainstateManager& chainman, const std::shared
                 return {.status = BlockAcceptanceStatus::StorageFailed, .block_index = &block_index_entry};
             }
         }
-        chainman.ReceivedBlockTransactions(block, &block_index_entry, blockPos);
+        block_index.MarkBlockDataReceived(block, block_index_entry, blockPos);
     } catch (const std::runtime_error& e) {
         FatalError(chainman.GetNotifications(), state, strprintf(_("System error while saving block to disk: %s"), e.what()));
         return {.status = BlockAcceptanceStatus::StorageFailed, .block_index = &block_index_entry};
@@ -680,7 +695,7 @@ BlockAcceptanceResult AcceptBlock(ChainstateManager& chainman, const std::shared
     return {.status = BlockAcceptanceStatus::BlockDataStored, .block_index = &block_index_entry};
 }
 
-NewBlockProcessingResult ProcessNewBlock(ChainstateManager& chainman, ChainstateMempoolSync* mempool_sync, const std::shared_ptr<const CBlock>& block, NewBlockProcessingOptions options)
+NewBlockProcessingResult ProcessNewBlock(ChainstateManager& chainman, ChainstateMempoolSync* mempool_sync, const std::shared_ptr<const CBlock>& block, NewBlockProcessingOptions options, BlockValidationTime time)
 {
     AssertLockNotHeld(cs_main);
 
@@ -704,7 +719,8 @@ NewBlockProcessingResult ProcessNewBlock(ChainstateManager& chainman, Chainstate
                 chainman,
                 block,
                 state,
-                {.block_data_requested = options.force_processing, .header = options.header})};
+                {.block_data_requested = options.force_processing, .header = options.header},
+                time)};
             result.block_acceptance_status = acceptance.status;
             ret = acceptance.accepted_for_processing();
             if (!ret) {
@@ -733,15 +749,16 @@ NewBlockProcessingResult ProcessNewBlock(ChainstateManager& chainman, Chainstate
     return result;
 }
 
-NewBlockProcessingResult ProcessNewBlock(ChainstateManager& chainman, const std::shared_ptr<const CBlock>& block, NewBlockProcessingOptions options)
+NewBlockProcessingResult ProcessNewBlock(ChainstateManager& chainman, const std::shared_ptr<const CBlock>& block, NewBlockProcessingOptions options, BlockValidationTime time)
 {
-    return ProcessNewBlock(chainman, /*mempool_sync=*/nullptr, block, options);
+    return ProcessNewBlock(chainman, /*mempool_sync=*/nullptr, block, options, time);
 }
 
 BlockValidationState TestBlockValidity(
     Chainstate& chainstate,
     const CBlock& block,
-    const Consensus::BlockCheckOptions& options)
+    const Consensus::BlockCheckOptions& options,
+    BlockValidationTime time)
 {
     // Lock must be held throughout this function for two reasons:
     // 1. We don't want the tip to change during several of the validation steps
@@ -779,8 +796,7 @@ BlockValidationState TestBlockValidity(
      * - do run ContextualCheckBlock()
      */
 
-    const int64_t max_future_block_time{MaxFutureBlockTime(NodeClock::now())};
-    if (!ContextualCheckBlockHeader(block, state, chainstate.m_chainman, tip, max_future_block_time)) {
+    if (!ContextualCheckBlockHeader(block, state, chainstate.m_chainman, tip, time.max_future_block_time)) {
         if (state.IsValid()) NONFATAL_UNREACHABLE();
         return state;
     }
@@ -872,7 +888,7 @@ VerifyDBResult CVerifyDB::VerifyDB(
         if (pindex->nHeight <= chainstate.m_chain.Height() - nCheckDepth) {
             break;
         }
-        if (chainstate.m_blockman.IsPruneMode() && !(pindex->nStatus & BLOCK_HAVE_DATA)) {
+        if (block_store.IsPruneMode() && !(pindex->nStatus & BLOCK_HAVE_DATA)) {
             // If pruning, only go back as far as we have data.
             LogInfo("Block verification stopping at height %d (no data). This could be due to pruning.", pindex->nHeight);
             skipped_no_block_data = true;

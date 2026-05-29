@@ -4,7 +4,6 @@
 
 #include <core_block_connection_attempt.h>
 
-#include <coins_view_spend_state.h>
 #include <core_block_commit_adapters.h>
 
 #include <utility>
@@ -15,15 +14,17 @@ public:
         const CBlock& block,
         CBlockIndex& block_index,
         CCoinsViewCache& view,
-        node::BlockManager& blockman,
-        std::set<CBlockIndex*>& dirty_blockindex,
+        BlockDataStore& block_store,
+        BlockIndexStore& block_index_store,
+        Consensus::BlockSpendWorkspace& spend_workspace,
+        Consensus::BlockSpendStateCommitter& spend_state_committer,
         Consensus::BlockConsensusContext consensus_context,
         Consensus::BlockSpendConsensusOptions spend_options)
-        : m_spend_workspace{view, block_index},
+        : m_spend_workspace{spend_workspace},
           m_commit_context{consensus_context.commit},
           m_pipeline{block, consensus_context},
-          m_spend_state_committer{m_spend_workspace.StagedCoins(), view},
-          m_effects_writer{blockman, dirty_blockindex, view, block_index},
+          m_spend_state_committer{spend_state_committer},
+          m_effects_writer{block_store, block_index_store, view, block_index},
           m_spend_options{spend_options}
     {
     }
@@ -59,10 +60,10 @@ public:
     }
 
 private:
-    Consensus::CoinsViewBlockSpendWorkspace m_spend_workspace;
+    Consensus::BlockSpendWorkspace& m_spend_workspace;
     Consensus::BlockCommitContext m_commit_context;
     Consensus::BlockConsensusPipeline m_pipeline;
-    CoreBlockSpendStateCommitter m_spend_state_committer;
+    Consensus::BlockSpendStateCommitter& m_spend_state_committer;
     CoreBlockEffectsWriter m_effects_writer;
     Consensus::BlockSpendConsensusOptions m_spend_options;
 };
@@ -71,16 +72,20 @@ CoreBlockConnectionAttempt::CoreBlockConnectionAttempt(
     const CBlock& block,
     CBlockIndex& block_index,
     CCoinsViewCache& view,
-    node::BlockManager& blockman,
-    std::set<CBlockIndex*>& dirty_blockindex,
+    BlockDataStore& block_store,
+    BlockIndexStore& block_index_store,
+    Consensus::BlockSpendWorkspace& spend_workspace,
+    Consensus::BlockSpendStateCommitter& spend_state_committer,
     Consensus::BlockConsensusContext consensus_context,
     Consensus::BlockSpendConsensusOptions spend_options)
     : m_impl{std::make_unique<Impl>(
           block,
           block_index,
           view,
-          blockman,
-          dirty_blockindex,
+          block_store,
+          block_index_store,
+          spend_workspace,
+          spend_state_committer,
           consensus_context,
           spend_options)}
 {
