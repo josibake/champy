@@ -981,7 +981,8 @@ Current limitations:
 - production adapts header history from Core's block-index view
 - Core still owns validation orchestration, locks, block storage, undo writes,
   and chainstate persistence
-- mempool admission is not yet split into its own explicit target
+- mempool admission has its own in-tree target and result vocabulary
+  (`MempoolValidationState`)
 - LevelDB coins and block-file storage are not yet behind stable kernel storage
   interfaces
 - alternate spend-state backends are enabled by interfaces, but only the Core

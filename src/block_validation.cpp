@@ -678,7 +678,7 @@ bool AcceptBlock(ChainstateManager& chainman, const std::shared_ptr<const CBlock
     return true;
 }
 
-bool ProcessNewBlock(ChainstateManager& chainman, const std::shared_ptr<const CBlock>& block, bool force_processing, bool min_pow_checked, bool* new_block)
+bool ProcessNewBlock(ChainstateManager& chainman, ChainstateMempoolSync* mempool_sync, const std::shared_ptr<const CBlock>& block, bool force_processing, bool min_pow_checked, bool* new_block)
 {
     AssertLockNotHeld(cs_main);
 
@@ -713,12 +713,17 @@ bool ProcessNewBlock(ChainstateManager& chainman, const std::shared_ptr<const CB
     chainman.NotifyHeaderTip();
 
     BlockValidationState state; // Only used to report errors, not invalidity - ignore it
-    if (!chainman.ActiveChainstate().ActivateBestChain(state, block)) {
+    if (!chainman.ActiveChainstate().ActivateBestChain(state, block, mempool_sync)) {
         LogError("%s: ActivateBestChain failed (%s)\n", __func__, state.ToString());
         return false;
     }
 
     return true;
+}
+
+bool ProcessNewBlock(ChainstateManager& chainman, const std::shared_ptr<const CBlock>& block, bool force_processing, bool min_pow_checked, bool* new_block)
+{
+    return ProcessNewBlock(chainman, /*mempool_sync=*/nullptr, block, force_processing, min_pow_checked, new_block);
 }
 
 BlockValidationState TestBlockValidity(

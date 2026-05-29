@@ -17,7 +17,7 @@
 #include <test/util/setup_common.h>
 #include <test/util/time.h>
 #include <test/util/txmempool.h>
-#include <txmempool.h>
+#include <node/txmempool.h>
 #include <util/hasher.h>
 #include <util/rbf.h>
 #include <util/time.h>
@@ -31,20 +31,20 @@ const TestingSetup* g_setup;
 constexpr size_t NUM_COINS{50};
 COutPoint COINS[NUM_COINS];
 
-static TxValidationResult TESTED_TX_RESULTS[] = {
-    // Skip TX_RESULT_UNSET
-    TxValidationResult::TX_CONSENSUS,
-    TxValidationResult::TX_INPUTS_NOT_STANDARD,
-    TxValidationResult::TX_NOT_STANDARD,
-    TxValidationResult::TX_MISSING_INPUTS,
-    TxValidationResult::TX_PREMATURE_SPEND,
-    TxValidationResult::TX_WITNESS_MUTATED,
-    TxValidationResult::TX_WITNESS_STRIPPED,
-    TxValidationResult::TX_CONFLICT,
-    TxValidationResult::TX_MEMPOOL_POLICY,
+static MempoolValidationResult TESTED_TX_RESULTS[] = {
+    // Skip RESULT_UNSET
+    MempoolValidationResult::CONSENSUS,
+    MempoolValidationResult::INPUTS_NOT_STANDARD,
+    MempoolValidationResult::NOT_STANDARD,
+    MempoolValidationResult::MISSING_INPUTS,
+    MempoolValidationResult::PREMATURE_SPEND,
+    MempoolValidationResult::WITNESS_MUTATED,
+    MempoolValidationResult::WITNESS_STRIPPED,
+    MempoolValidationResult::CONFLICT,
+    MempoolValidationResult::MEMPOOL_POLICY,
     // Skip TX_NO_MEMPOOL
-    TxValidationResult::TX_RECONSIDERABLE,
-    TxValidationResult::TX_UNKNOWN,
+    MempoolValidationResult::RECONSIDERABLE,
+    MempoolValidationResult::UNKNOWN,
 };
 
 // Precomputed transactions. Some may conflict with each other.
@@ -219,7 +219,7 @@ FUZZ_TARGET(txdownloadman, .init = initialize)
                 txdownloadman.MempoolAcceptedTx(rand_tx);
             },
             [&] {
-                TxValidationState state;
+                MempoolValidationState state;
                 state.Invalid(fuzzed_data_provider.PickValueInArray(TESTED_TX_RESULTS), "");
                 bool first_time_failure{fuzzed_data_provider.ConsumeBool()};
 
@@ -355,7 +355,7 @@ FUZZ_TARGET(txdownloadman_impl, .init = initialize)
                 txdownload_impl.MempoolAcceptedTx(rand_tx);
             },
             [&] {
-                TxValidationState state;
+                MempoolValidationState state;
                 state.Invalid(fuzzed_data_provider.PickValueInArray(TESTED_TX_RESULTS), "");
                 bool first_time_failure{fuzzed_data_provider.ConsumeBool()};
 
@@ -421,8 +421,8 @@ FUZZ_TARGET(txdownloadman_impl, .init = initialize)
                     // Presumably we have validated this tx. Use "missing inputs" to keep it in the
                     // orphanage longer. Later iterations might call MempoolAcceptedTx or
                     // MempoolRejectedTx with a different error.
-                    TxValidationState state_missing_inputs;
-                    state_missing_inputs.Invalid(TxValidationResult::TX_MISSING_INPUTS, "");
+                    MempoolValidationState state_missing_inputs;
+                    state_missing_inputs.Invalid(MempoolValidationResult::MISSING_INPUTS, "");
                     txdownload_impl.MempoolRejectedTx(ptx, state_missing_inputs, rand_peer, fuzzed_data_provider.ConsumeBool());
                 }
             });

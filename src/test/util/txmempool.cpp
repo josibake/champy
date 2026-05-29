@@ -4,13 +4,13 @@
 
 #include <test/util/txmempool.h>
 
-#include <mempool_validation.h>
+#include <node/mempool_validation.h>
 #include <chainparams.h>
 #include <node/context.h>
 #include <node/mempool_args.h>
 #include <policy/rbf.h>
 #include <policy/truc_policy.h>
-#include <txmempool.h>
+#include <node/txmempool.h>
 #include <test/util/transaction_utils.h>
 #include <util/check.h>
 #include <util/time.h>
@@ -111,7 +111,7 @@ std::optional<std::string> CheckPackageMempoolAcceptResult(const Package& txns,
         // m_effective_feerate and m_wtxids_fee_calculations should exist iff the result was valid
         // or if the failure was TX_RECONSIDERABLE
         const bool valid_or_reconsiderable{atmp_result.m_result_type == MempoolAcceptResult::ResultType::VALID ||
-                    atmp_result.m_state.GetResult() == TxValidationResult::TX_RECONSIDERABLE};
+                    atmp_result.m_state.GetResult() == MempoolValidationResult::RECONSIDERABLE};
         if (atmp_result.m_effective_feerate.has_value() != valid_or_reconsiderable) {
             return strprintf("tx %s result should %shave m_effective_feerate",
                                     wtxid.ToString(), valid ? "" : "not ");

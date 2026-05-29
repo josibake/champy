@@ -65,7 +65,7 @@
 #include <sync.h>
 #include <torcontrol.h>
 #include <txdb.h>
-#include <txmempool.h>
+#include <node/txmempool.h>
 #include <util/asmap.h>
 #include <util/batchpriority.h>
 #include <util/byte_units.h>
@@ -1211,7 +1211,6 @@ static ChainstateLoadResult InitAndLoadChainstate(
     if (chainman.m_interrupt) return {ChainstateLoadStatus::INTERRUPTED, {}};
 
     node::ChainstateLoadOptions options;
-    options.mempool = Assert(node.mempool.get());
     options.wipe_chainstate_db = do_reindex || do_reindex_chainstate;
     options.prune = chainman.m_blockman.IsPruneMode();
     options.check_blocks = args.GetIntArg("-checkblocks", DEFAULT_CHECKBLOCKS);
@@ -1777,7 +1776,7 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
         }
 
         // Load mempool from disk
-        if (auto* pool{chainman.ActiveChainstate().GetMempool()}) {
+        if (auto* pool{node.mempool.get()}) {
             LoadMempool(*pool, ShouldPersistMempool(args) ? MempoolPath(args) : fs::path{}, chainman.ActiveChainstate(), {});
             pool->SetLoadTried(!chainman.m_interrupt);
         }

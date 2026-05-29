@@ -23,7 +23,6 @@
 #include <script/sigcache.h>
 #include <sync.h>
 #include <txdb.h>
-#include <txmempool.h>
 #include <uint256.h>
 #include <util/byte_units.h>
 #include <util/check.h>
@@ -48,9 +47,9 @@
 #include <vector>
 
 class Chainstate;
-class CTxMemPool;
 class ChainstateManager;
 struct ChainTxData;
+class ChainstateMempoolSync;
 class DisconnectedBlockTransactions;
 struct LockPoints;
 namespace Consensus {
@@ -229,10 +228,6 @@ protected:
      */
     Mutex m_chainstate_mutex;
 
-    //! Optional mempool that is kept in sync with the chain.
-    //! Only the active chainstate has a mempool.
-    CTxMemPool* m_mempool;
-
     //! Manages the UTXO set, which is a reflection of the contents of `m_chain`.
     std::unique_ptr<CoinsViews> m_coins_views;
 
@@ -253,7 +248,6 @@ public:
     ChainstateManager& m_chainman;
 
     explicit Chainstate(
-        CTxMemPool* mempool,
         node::BlockManager& blockman,
         ChainstateManager& chainman);
 
@@ -311,12 +305,6 @@ public:
         return Assert(m_coins_views)->m_dbview;
     }
 
-    //! @returns A pointer to the mempool.
-    CTxMemPool* GetMempool()
-    {
-        return m_mempool;
-    }
-
     //! @returns A reference to a wrapped view of the in-memory UTXO set that
     //!     handles disk read errors gracefully.
     CCoinsViewErrorCatcher& CoinsErrorCatcher() EXCLUSIVE_LOCKS_REQUIRED(::cs_main)
@@ -353,7 +341,8 @@ public:
     bool FlushStateToDisk(
         BlockValidationState& state,
         FlushStateMode mode,
-        int nManualPruneHeight = 0);
+        int nManualPruneHeight = 0,
+        const ChainstateMempoolSync* mempool_sync = nullptr);
 
     //! Flush all changes to disk.
     void ForceFlushStateToDisk(bool wipe_cache = true);
@@ -379,24 +368,28 @@ public:
      */
     bool ActivateBestChain(
         BlockValidationState& state,
-        std::shared_ptr<const CBlock> pblock = nullptr)
+        std::shared_ptr<const CBlock> pblock = nullptr,
+        ChainstateMempoolSync* mempool_sync = nullptr)
         EXCLUSIVE_LOCKS_REQUIRED(!m_chainstate_mutex)
         LOCKS_EXCLUDED(::cs_main);
 
     // Apply the effects of a block disconnection on the UTXO set.
-    bool DisconnectTip(BlockValidationState& state, DisconnectedBlockTransactions* disconnectpool) EXCLUSIVE_LOCKS_REQUIRED(cs_main, m_mempool->cs);
+    bool DisconnectTip(
+        BlockValidationState& state,
+        DisconnectedBlockTransactions* disconnectpool,
+        ChainstateMempoolSync* mempool_sync) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
 
     // Manual block validity manipulation:
     /** Mark a block as precious and reorganize.
      *
      * May not be called in a validationinterface callback.
      */
-    bool PreciousBlock(BlockValidationState& state, CBlockIndex* pindex)
+    bool PreciousBlock(BlockValidationState& state, CBlockIndex* pindex, ChainstateMempoolSync* mempool_sync = nullptr)
         EXCLUSIVE_LOCKS_REQUIRED(!m_chainstate_mutex)
         LOCKS_EXCLUDED(::cs_main);
 
     /** Mark a block as invalid. */
-    bool InvalidateBlock(BlockValidationState& state, CBlockIndex* pindex)
+    bool InvalidateBlock(BlockValidationState& state, CBlockIndex* pindex, ChainstateMempoolSync* mempool_sync = nullptr)
         EXCLUSIVE_LOCKS_REQUIRED(!m_chainstate_mutex)
         LOCKS_EXCLUDED(::cs_main);
 
@@ -437,15 +430,10 @@ public:
 
     CoinsCacheSizeState GetCoinsCacheSizeState(
         size_t max_coins_cache_size_bytes,
-        size_t max_mempool_size_bytes) EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
+        size_t max_mempool_size_bytes,
+        size_t mempool_usage_bytes = 0) EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
 
     std::string ToString() EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
-
-    //! Indirection necessary to make lock annotations work with an optional mempool.
-    RecursiveMutex* MempoolMutex() const LOCK_RETURNED(m_mempool->cs)
-    {
-        return m_mempool ? &m_mempool->cs : nullptr;
-    }
 
     //! Return the [start, end] (inclusive) of block heights we can prune.
     //!
@@ -453,35 +441,28 @@ public:
     std::pair<int, int> GetPruneRange(int last_height_can_prune) const EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
 
 protected:
-    bool ActivateBestChainStep(BlockValidationState& state, CBlockIndex& index_most_work, const std::shared_ptr<const CBlock>& pblock, bool& fInvalidFound, std::vector<ConnectedBlock>& connected_blocks) EXCLUSIVE_LOCKS_REQUIRED(cs_main, m_mempool->cs);
+    bool ActivateBestChainStep(
+        BlockValidationState& state,
+        CBlockIndex& index_most_work,
+        const std::shared_ptr<const CBlock>& pblock,
+        bool& fInvalidFound,
+        std::vector<ConnectedBlock>& connected_blocks,
+        ChainstateMempoolSync* mempool_sync) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
     bool ConnectTip(
         BlockValidationState& state,
         CBlockIndex* pindexNew,
         std::shared_ptr<const CBlock> block_to_connect,
         std::vector<ConnectedBlock>& connected_blocks,
-        DisconnectedBlockTransactions& disconnectpool) EXCLUSIVE_LOCKS_REQUIRED(cs_main, m_mempool->cs);
+        DisconnectedBlockTransactions& disconnectpool,
+        ChainstateMempoolSync* mempool_sync) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
 
     CBlockIndex* FindMostWorkChain() EXCLUSIVE_LOCKS_REQUIRED(cs_main);
 
     void CheckForkWarningConditions() EXCLUSIVE_LOCKS_REQUIRED(cs_main);
     void InvalidChainFound(CBlockIndex* pindexNew) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
 
-    /**
-     * Make mempool consistent after a reorg, by re-adding or recursively erasing
-     * disconnected block transactions from the mempool, and also removing any
-     * other transactions from the mempool that are no longer valid given the new
-     * tip/height.
-     *
-     * Note: we assume that disconnectpool only contains transactions that are NOT
-     * confirmed in the current chain nor already in the mempool (otherwise,
-     * in-mempool descendants of such transactions would be removed).
-     *
-     * Passing fAddToMempool=false will skip trying to add the transactions back,
-     * and instead just erase from the mempool as needed.
-     */
-
     /** Check warning conditions and do some notifications on new chain tip set. */
-    void UpdateTip(const CBlockIndex* pindexNew)
+    void UpdateTip(const CBlockIndex* pindexNew, ChainstateMempoolSync* mempool_sync = nullptr)
         EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
 
     NodeClock::time_point m_next_write{NodeClock::time_point::max()};
@@ -633,10 +614,7 @@ public:
     size_t m_total_coinsdb_cache{0};
 
     //! Instantiate a new chainstate.
-    //!
-    //! @param[in] mempool              The mempool to pass to the chainstate
-    //                                  constructor
-    Chainstate& InitializeChainstate(CTxMemPool* mempool) EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
+    Chainstate& InitializeChainstate() EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
 
     //! Return the chainstate. With the snapshot machinery gone, there is
     //! always exactly one chainstate.
@@ -724,7 +702,7 @@ public:
     void ResetChainstates() EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
 
     //! Call ActivateBestChain() on the chainstate.
-    util::Result<void> ActivateBestChains() LOCKS_EXCLUDED(::cs_main);
+    util::Result<void> ActivateBestChains(ChainstateMempoolSync* mempool_sync = nullptr) LOCKS_EXCLUDED(::cs_main);
 
     //! If, due to invalidation / reconsideration of blocks, the previous
     //! best header is no longer valid / guaranteed to be the most-work

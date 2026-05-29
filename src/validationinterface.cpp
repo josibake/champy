@@ -7,8 +7,8 @@
 
 #include <chain.h>
 #include <validation_state.h>
-#include <kernel/mempool_entry.h>
-#include <kernel/mempool_removal_reason.h>
+#include <node/mempool_entry.h>
+#include <node/mempool_removal_reason.h>
 #include <primitives/block.h>
 #include <primitives/transaction.h>
 #include <util/check.h>

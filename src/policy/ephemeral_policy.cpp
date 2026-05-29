@@ -2,13 +2,12 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#include <validation_state.h>
 #include <policy/ephemeral_policy.h>
 #include <policy/feerate.h>
 #include <policy/packages.h>
 #include <policy/policy.h>
 #include <primitives/transaction.h>
-#include <txmempool.h>
+#include <node/txmempool.h>
 #include <util/check.h>
 #include <util/hasher.h>
 
@@ -20,17 +19,17 @@
 #include <utility>
 #include <vector>
 
-bool PreCheckEphemeralTx(const CTransaction& tx, CFeeRate dust_relay_rate, CAmount base_fee, CAmount mod_fee, TxValidationState& state)
+bool PreCheckEphemeralTx(const CTransaction& tx, CFeeRate dust_relay_rate, CAmount base_fee, CAmount mod_fee, MempoolValidationState& state)
 {
     // We never want to give incentives to mine this transaction alone
     if ((base_fee != 0 || mod_fee != 0) && !GetDust(tx, dust_relay_rate).empty()) {
-        return state.Invalid(TxValidationResult::TX_NOT_STANDARD, "dust", "tx with dust output must be 0-fee");
+        return state.Invalid(MempoolValidationResult::NOT_STANDARD, "dust", "tx with dust output must be 0-fee");
     }
 
     return true;
 }
 
-bool CheckEphemeralSpends(const Package& package, CFeeRate dust_relay_rate, const CTxMemPool& tx_pool, TxValidationState& out_child_state, Wtxid& out_child_wtxid)
+bool CheckEphemeralSpends(const Package& package, CFeeRate dust_relay_rate, const CTxMemPool& tx_pool, MempoolValidationState& out_child_state, Wtxid& out_child_wtxid)
 {
     if (!Assume(std::ranges::all_of(package, [](const auto& tx){return tx != nullptr;}))) {
         // Bail out of spend checks if caller gave us an invalid package
@@ -85,7 +84,7 @@ bool CheckEphemeralSpends(const Package& package, CFeeRate dust_relay_rate, cons
         if (!unspent_parent_dust.empty()) {
             const Txid& out_child_txid = tx->GetHash();
             out_child_wtxid = tx->GetWitnessHash();
-            out_child_state.Invalid(TxValidationResult::TX_MEMPOOL_POLICY, "missing-ephemeral-spends",
+            out_child_state.Invalid(MempoolValidationResult::MEMPOOL_POLICY, "missing-ephemeral-spends",
                                 strprintf("tx %s (wtxid=%s) did not spend parent's ephemeral dust", out_child_txid.ToString(), out_child_wtxid.ToString()));
             return false;
         }

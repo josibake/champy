@@ -210,10 +210,31 @@ set(BITCOIN_KERNEL_VALIDATION_SOURCES
   ${CMAKE_CURRENT_SOURCE_DIR}/core_block_commit_adapters.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/core_block_connection_attempt.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/core_block_policy.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/mempool_validation.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/sequence_locks_adapters.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/tx_check_adapters.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/tx_verify.cpp
+)
+
+# Local transaction admission, mempool state, and mempool-specific policy.
+add_library(bitcoin_mempool_policy OBJECT EXCLUDE_FROM_ALL
+  node/mempool_chain_sync.cpp
+  node/mempool_removal_reason.cpp
+  node/mempool_validation.cpp
+  node/txmempool.cpp
+  policy/ephemeral_policy.cpp
+  policy/packages.cpp
+  policy/rbf.cpp
+  policy/truc_policy.cpp
+  txgraph.cpp
+)
+target_link_libraries(bitcoin_mempool_policy
+  PRIVATE
+    core_interface
+    bitcoin_common
+    bitcoin_consensus
+    bitcoin_util
+    Boost::headers
+    $<TARGET_NAME_IF_EXISTS:USDT::headers>
 )
 
 # P2P and RPC server functionality used by `bitcoind` executable.
@@ -236,7 +257,6 @@ add_library(bitcoin_node STATIC EXCLUDE_FROM_ALL
   kernel/context.cpp
   kernel/cs_main.cpp
   kernel/disconnected_transactions.cpp
-  kernel/mempool_removal_reason.cpp
   mapport.cpp
   net.cpp
   net_processing.cpp
@@ -271,25 +291,20 @@ add_library(bitcoin_node STATIC EXCLUDE_FROM_ALL
   node/txreconciliation.cpp
   node/warnings.cpp
   noui.cpp
-  policy/ephemeral_policy.cpp
   policy/fees/block_policy_estimator.cpp
   policy/fees/block_policy_estimator_args.cpp
-  policy/packages.cpp
-  policy/rbf.cpp
   policy/settings.cpp
-  policy/truc_policy.cpp
   private_broadcast.cpp
   script/script_check.cpp
   script/sigcache.cpp
   signet.cpp
   torcontrol.cpp
   txdb.cpp
-  txgraph.cpp
-  txmempool.cpp
   txrequest.cpp
   chainstate.cpp
   validationinterface.cpp
   versionbits.cpp
+  $<TARGET_OBJECTS:bitcoin_mempool_policy>
 )
 target_link_libraries(bitcoin_node
   PUBLIC

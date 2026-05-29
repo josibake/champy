@@ -10,7 +10,7 @@
 #include <consensus/merkle.h>
 #include <tx_verify.h>
 #include <interfaces/mining.h>
-#include <mempool_validation.h>
+#include <node/mempool_validation.h>
 #include <node/miner.h>
 #include <policy/policy.h>
 #include <pow.h>
@@ -19,7 +19,7 @@
 #include <test/util/setup_common.h>
 #include <test/util/transaction_utils.h>
 #include <test/util/txmempool.h>
-#include <txmempool.h>
+#include <node/txmempool.h>
 #include <uint256.h>
 #include <util/check.h>
 #include <util/feefrac.h>

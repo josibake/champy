@@ -1466,21 +1466,13 @@ btck_TxValidationState* btck_tx_validation_state_create()
 btck_TxValidationResult btck_tx_validation_state_get_tx_validation_result(const btck_TxValidationState* state_)
 {
     switch (btck_TxValidationState::get(state_).GetResult()) {
-    case TxValidationResult::TX_RESULT_UNSET:        return btck_TxValidationResult_UNSET;
-    case TxValidationResult::TX_CONSENSUS:           return btck_TxValidationResult_CONSENSUS;
-    case TxValidationResult::TX_INPUTS_NOT_STANDARD: return btck_TxValidationResult_INPUTS_NOT_STANDARD;
-    case TxValidationResult::TX_NOT_STANDARD:        return btck_TxValidationResult_NOT_STANDARD;
-    case TxValidationResult::TX_MISSING_INPUTS:      return btck_TxValidationResult_MISSING_INPUTS;
-    case TxValidationResult::TX_PREMATURE_SPEND:     return btck_TxValidationResult_PREMATURE_SPEND;
-    case TxValidationResult::TX_WITNESS_MUTATED:     return btck_TxValidationResult_WITNESS_MUTATED;
-    case TxValidationResult::TX_WITNESS_STRIPPED:    return btck_TxValidationResult_WITNESS_STRIPPED;
-    case TxValidationResult::TX_CONFLICT:            return btck_TxValidationResult_CONFLICT;
-    case TxValidationResult::TX_MEMPOOL_POLICY:      return btck_TxValidationResult_MEMPOOL_POLICY;
-    case TxValidationResult::TX_NO_MEMPOOL:          return btck_TxValidationResult_NO_MEMPOOL;
-    case TxValidationResult::TX_RECONSIDERABLE:      return btck_TxValidationResult_RECONSIDERABLE;
-    case TxValidationResult::TX_UNKNOWN:             return btck_TxValidationResult_UNKNOWN;
-    } // no default case, so the compiler can warn about missing cases
-    assert(false);
+    case TxValidationResult::TX_RESULT_UNSET:
+        return btck_TxValidationResult_UNSET;
+    case TxValidationResult::TX_CONSENSUS:
+        return btck_TxValidationResult_CONSENSUS;
+    default:
+        return btck_TxValidationResult_UNKNOWN;
+    }
 }
 
 void btck_tx_validation_state_destroy(btck_TxValidationState* state)

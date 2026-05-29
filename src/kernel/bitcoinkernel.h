@@ -404,24 +404,11 @@ typedef uint32_t btck_BlockValidationResult;
 #define btck_BlockValidationResult_TIME_FUTURE ((btck_BlockValidationResult)(7))     //!< block timestamp was > 2 hours in the future (or our clock is bad)
 #define btck_BlockValidationResult_HEADER_LOW_WORK ((btck_BlockValidationResult)(8)) //!< the block header may be on a too-little-work chain
 
-/**
- * Indicates the reason why a transaction failed validation. The subset of
- * values reachable depends on which validation function was used.
- */
+/** Indicates the reason why a context-free transaction check failed. */
 typedef uint32_t btck_TxValidationResult;
-#define btck_TxValidationResult_UNSET               ((btck_TxValidationResult)(0))  //!< initial value. Tx has not yet been rejected
-#define btck_TxValidationResult_CONSENSUS           ((btck_TxValidationResult)(1))  //!< invalid by consensus rules
-#define btck_TxValidationResult_INPUTS_NOT_STANDARD ((btck_TxValidationResult)(2))  //!< inputs (covered by txid) failed policy rules
-#define btck_TxValidationResult_NOT_STANDARD        ((btck_TxValidationResult)(3))  //!< otherwise didn't meet local policy rules
-#define btck_TxValidationResult_MISSING_INPUTS      ((btck_TxValidationResult)(4))  //!< transaction was missing some of its inputs
-#define btck_TxValidationResult_PREMATURE_SPEND     ((btck_TxValidationResult)(5))  //!< transaction spends a coinbase too early, or violates locktime/sequence locks
-#define btck_TxValidationResult_WITNESS_MUTATED     ((btck_TxValidationResult)(6))  //!< witness may have been malleated or is prior to SegWit activation
-#define btck_TxValidationResult_WITNESS_STRIPPED    ((btck_TxValidationResult)(7))  //!< transaction is missing a witness
-#define btck_TxValidationResult_CONFLICT            ((btck_TxValidationResult)(8))  //!< tx already in mempool or conflicts with a tx in the chain
-#define btck_TxValidationResult_MEMPOOL_POLICY      ((btck_TxValidationResult)(9))  //!< violated mempool's fee/size/descendant/RBF/etc limits
-#define btck_TxValidationResult_NO_MEMPOOL          ((btck_TxValidationResult)(10)) //!< this node does not have a mempool so can't validate the transaction
-#define btck_TxValidationResult_RECONSIDERABLE      ((btck_TxValidationResult)(11)) //!< fails some policy, but might be acceptable if submitted in a (different) package
-#define btck_TxValidationResult_UNKNOWN             ((btck_TxValidationResult)(12)) //!< transaction was not validated because package failed
+#define btck_TxValidationResult_UNSET     ((btck_TxValidationResult)(0)) //!< initial value. Tx has not yet been rejected
+#define btck_TxValidationResult_CONSENSUS ((btck_TxValidationResult)(1)) //!< invalid by consensus rules
+#define btck_TxValidationResult_UNKNOWN   ((btck_TxValidationResult)(2)) //!< transaction validation result is not exposed by this API
 
 /**
  * Holds the validation interface callbacks. The user data pointer may be used

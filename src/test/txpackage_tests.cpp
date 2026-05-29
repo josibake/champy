@@ -3,7 +3,7 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #include <validation_state.h>
-#include <mempool_validation.h>
+#include <node/mempool_validation.h>
 #include <key_io.h>
 #include <policy/packages.h>
 #include <policy/policy.h>
@@ -438,9 +438,9 @@ BOOST_AUTO_TEST_CASE(package_submission_tests)
         } else {
             auto it_parent = result_quit_early.m_tx_results.find(tx_parent_invalid->GetWitnessHash());
             auto it_child = result_quit_early.m_tx_results.find(tx_child->GetWitnessHash());
-            BOOST_CHECK_EQUAL(it_parent->second.m_state.GetResult(), TxValidationResult::TX_WITNESS_MUTATED);
+            BOOST_CHECK_EQUAL(it_parent->second.m_state.GetResult(), MempoolValidationResult::WITNESS_MUTATED);
             BOOST_CHECK_EQUAL(it_parent->second.m_state.GetRejectReason(), "bad-witness-nonstandard");
-            BOOST_CHECK_EQUAL(it_child->second.m_state.GetResult(), TxValidationResult::TX_MISSING_INPUTS);
+            BOOST_CHECK_EQUAL(it_child->second.m_state.GetResult(), MempoolValidationResult::MISSING_INPUTS);
             BOOST_CHECK_EQUAL(it_child->second.m_state.GetRejectReason(), "bad-txns-inputs-missingorspent");
         }
         BOOST_CHECK_EQUAL(result_quit_early.m_state.GetResult(), PackageValidationResult::PCKG_TX);
@@ -513,8 +513,8 @@ BOOST_AUTO_TEST_CASE(package_submission_tests)
             BOOST_CHECK_EQUAL(result_missing_parent.m_state.GetResult(), PackageValidationResult::PCKG_TX);
             BOOST_CHECK_EQUAL(result_missing_parent.m_state.GetRejectReason(), "transaction failed");
 
-            BOOST_CHECK_EQUAL(it_parent->second.m_state.GetResult(), TxValidationResult::TX_RECONSIDERABLE);
-            BOOST_CHECK_EQUAL(it_child->second.m_state.GetResult(), TxValidationResult::TX_MISSING_INPUTS);
+            BOOST_CHECK_EQUAL(it_parent->second.m_state.GetResult(), MempoolValidationResult::RECONSIDERABLE);
+            BOOST_CHECK_EQUAL(it_child->second.m_state.GetResult(), MempoolValidationResult::MISSING_INPUTS);
             BOOST_CHECK_EQUAL(it_child->second.m_state.GetRejectReason(), "bad-txns-inputs-missingorspent");
             BOOST_CHECK_EQUAL(m_node.mempool->size(), expected_pool_size);
         }
@@ -623,7 +623,7 @@ BOOST_AUTO_TEST_CASE(package_single_tx)
     BOOST_CHECK(!result_single_tx_low_fee.m_state.IsValid());
     BOOST_CHECK_EQUAL(result_single_tx_low_fee.m_state.GetResult(), PackageValidationResult::PCKG_TX);
     auto it_low_fee = result_single_tx_low_fee.m_tx_results.find(tx_single_low_fee->GetWitnessHash());
-    BOOST_CHECK_EQUAL(it_low_fee->second.m_state.GetResult(), TxValidationResult::TX_RECONSIDERABLE);
+    BOOST_CHECK_EQUAL(it_low_fee->second.m_state.GetResult(), MempoolValidationResult::RECONSIDERABLE);
     if (auto err_single{CheckPackageMempoolAcceptResult(package_tx_single_low_fee, result_single_tx_low_fee, /*expect_valid=*/false, m_node.mempool.get())}) {
         BOOST_ERROR(err_single.value());
     }
@@ -805,7 +805,7 @@ BOOST_AUTO_TEST_CASE(package_witness_swap_tests)
     CTransactionRef ptx_parent2_v1 = MakeTransactionRef(mtx_parent2_v1);
     CTransactionRef ptx_parent2_v2 = MakeTransactionRef(mtx_parent2_v2);
     // Put parent2_v1 in the package, submit parent2_v2 to the mempool.
-    const MempoolAcceptResult parent2_v2_result = ProcessTransaction(*m_node.chainman, ptx_parent2_v2);
+    const MempoolAcceptResult parent2_v2_result = ProcessTransaction(*m_node.chainman, m_node.mempool.get(), ptx_parent2_v2);
     BOOST_CHECK(parent2_v2_result.m_result_type == MempoolAcceptResult::ResultType::VALID);
     package_mixed.push_back(ptx_parent2_v1);
 
@@ -910,9 +910,9 @@ BOOST_AUTO_TEST_CASE(package_cpfp_tests)
         } else {
             BOOST_CHECK_EQUAL(submit_cpfp_deprio.m_state.GetResult(), PackageValidationResult::PCKG_TX);
             BOOST_CHECK_EQUAL(submit_cpfp_deprio.m_tx_results.find(tx_parent->GetWitnessHash())->second.m_state.GetResult(),
-                              TxValidationResult::TX_RECONSIDERABLE);
+                              MempoolValidationResult::RECONSIDERABLE);
             BOOST_CHECK_EQUAL(submit_cpfp_deprio.m_tx_results.find(tx_child->GetWitnessHash())->second.m_state.GetResult(),
-                              TxValidationResult::TX_RECONSIDERABLE);
+                              MempoolValidationResult::RECONSIDERABLE);
             BOOST_CHECK_EQUAL(submit_cpfp_deprio.m_tx_results.find(tx_parent->GetWitnessHash())->second.m_state.GetRejectReason(), "mempool min fee not met");
             BOOST_CHECK_EQUAL(m_node.mempool->size(), expected_pool_size);
         }
@@ -984,12 +984,12 @@ BOOST_AUTO_TEST_CASE(package_cpfp_tests)
         } else {
             // Individual feerate of parent is too low.
             BOOST_CHECK_EQUAL(submit_package_too_low.m_tx_results.at(tx_parent_cheap->GetWitnessHash()).m_state.GetResult(),
-                              TxValidationResult::TX_RECONSIDERABLE);
+                              MempoolValidationResult::RECONSIDERABLE);
             BOOST_CHECK(submit_package_too_low.m_tx_results.at(tx_parent_cheap->GetWitnessHash()).m_effective_feerate.value() ==
                         CFeeRate(parent_fee, GetVirtualTransactionSize(*tx_parent_cheap)));
             // Package feerate of parent + child is too low.
             BOOST_CHECK_EQUAL(submit_package_too_low.m_tx_results.at(tx_child_cheap->GetWitnessHash()).m_state.GetResult(),
-                              TxValidationResult::TX_RECONSIDERABLE);
+                              MempoolValidationResult::RECONSIDERABLE);
             BOOST_CHECK(submit_package_too_low.m_tx_results.at(tx_child_cheap->GetWitnessHash()).m_effective_feerate.value() ==
                         CFeeRate(parent_fee + child_fee, GetVirtualTransactionSize(*tx_parent_cheap) + GetVirtualTransactionSize(*tx_child_cheap)));
         }
@@ -1069,7 +1069,7 @@ BOOST_AUTO_TEST_CASE(package_cpfp_tests)
                     strprintf("rich parent: expected fee %s, got %s", high_parent_fee, it_parent->second.m_base_fees.value()));
             BOOST_CHECK(it_parent->second.m_effective_feerate == CFeeRate(high_parent_fee, GetVirtualTransactionSize(*tx_parent_rich)));
             BOOST_CHECK_EQUAL(it_child->second.m_result_type, MempoolAcceptResult::ResultType::INVALID);
-            BOOST_CHECK_EQUAL(it_child->second.m_state.GetResult(), TxValidationResult::TX_RECONSIDERABLE);
+            BOOST_CHECK_EQUAL(it_child->second.m_state.GetResult(), MempoolValidationResult::RECONSIDERABLE);
             BOOST_CHECK_EQUAL(it_child->second.m_state.GetRejectReason(), "mempool min fee not met");
         }
         expected_pool_size += 1;

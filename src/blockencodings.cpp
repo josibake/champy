@@ -14,7 +14,7 @@
 #include <logging.h>
 #include <random.h>
 #include <streams.h>
-#include <txmempool.h>
+#include <node/txmempool.h>
 #include <chainstate.h>
 
 #include <unordered_map>

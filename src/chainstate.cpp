@@ -10,6 +10,7 @@
 #include <arith_uint256.h>
 #include <block_validation.h>
 #include <chain.h>
+#include <chainstate_mempool_sync.h>
 #include <clientversion.h>
 #include <consensus/amount.h>
 #include <consensus/consensus.h>
@@ -22,7 +23,6 @@
 #include <kernel/notifications_interface.h>
 #include <kernel/warning.h>
 #include <logging/timer.h>
-#include <mempool_validation.h>
 #include <node/blockstorage.h>
 #include <policy/policy.h>
 #include <policy/settings.h>
@@ -32,7 +32,6 @@
 #include <random.h>
 #include <tinyformat.h>
 #include <txdb.h>
-#include <txmempool.h>
 #include <uint256.h>
 #include <util/byte_units.h>
 #include <util/check.h>
@@ -125,11 +124,9 @@ void CoinsViews::InitCache()
 }
 
 Chainstate::Chainstate(
-    CTxMemPool* mempool,
     BlockManager& blockman,
     ChainstateManager& chainman)
-    : m_mempool(mempool),
-      m_blockman(blockman),
+    : m_blockman(blockman),
       m_chainman(chainman) {}
 
 fs::path Chainstate::StoragePath() const
@@ -253,18 +250,19 @@ CoinsCacheSizeState Chainstate::GetCoinsCacheSizeState()
     AssertLockHeld(::cs_main);
     return this->GetCoinsCacheSizeState(
         m_coinstip_cache_size_bytes,
-        m_mempool ? m_mempool->m_opts.max_size_bytes : 0);
+        /*max_mempool_size_bytes=*/0,
+        /*mempool_usage_bytes=*/0);
 }
 
 CoinsCacheSizeState Chainstate::GetCoinsCacheSizeState(
     size_t max_coins_cache_size_bytes,
-    size_t max_mempool_size_bytes)
+    size_t max_mempool_size_bytes,
+    size_t mempool_usage_bytes)
 {
     AssertLockHeld(::cs_main);
-    const int64_t nMempoolUsage = m_mempool ? m_mempool->DynamicMemoryUsage() : 0;
     int64_t cacheSize = CoinsTip().DynamicMemoryUsage();
     int64_t nTotalSpace =
-        max_coins_cache_size_bytes + std::max<int64_t>(int64_t(max_mempool_size_bytes) - nMempoolUsage, 0);
+        max_coins_cache_size_bytes + std::max<int64_t>(int64_t(max_mempool_size_bytes) - int64_t(mempool_usage_bytes), 0);
 
     if (cacheSize > nTotalSpace) {
         LogInfo("Cache size (%s) exceeds total space (%s)\n", cacheSize, nTotalSpace);
@@ -278,7 +276,8 @@ CoinsCacheSizeState Chainstate::GetCoinsCacheSizeState(
 bool Chainstate::FlushStateToDisk(
     BlockValidationState &state,
     FlushStateMode mode,
-    int nManualPruneHeight)
+    int nManualPruneHeight,
+    const ChainstateMempoolSync* mempool_sync)
 {
     LOCK(cs_main);
     assert(this->CanFlushToDisk());
@@ -292,7 +291,10 @@ bool Chainstate::FlushStateToDisk(
     {
         bool fFlushForPrune = false;
 
-        CoinsCacheSizeState cache_state = GetCoinsCacheSizeState();
+        CoinsCacheSizeState cache_state = GetCoinsCacheSizeState(
+            m_coinstip_cache_size_bytes,
+            mempool_sync ? mempool_sync->MaxSizeBytes() : 0,
+            mempool_sync ? mempool_sync->DynamicMemoryUsage() : 0);
         LOCK(m_blockman.cs_LastBlockFile);
         if (m_blockman.IsPruneMode() && (m_blockman.m_check_for_pruning || nManualPruneHeight > 0) && m_chainman.m_blockman.m_blockfiles_indexed) {
             // make sure we don't prune above any of the prune locks bestblocks
@@ -454,14 +456,14 @@ static void UpdateTipLog(
                    !warning_messages.empty() ? strprintf(" warning='%s'", warning_messages) : "");
 }
 
-void Chainstate::UpdateTip(const CBlockIndex* pindexNew)
+void Chainstate::UpdateTip(const CBlockIndex* pindexNew, ChainstateMempoolSync* mempool_sync)
 {
     AssertLockHeld(::cs_main);
     const auto& coins_tip = this->CoinsTip();
 
     // New best block
-    if (m_mempool) {
-        m_mempool->AddTransactionsUpdated(1);
+    if (mempool_sync) {
+        mempool_sync->AddTransactionsUpdated();
     }
 
     std::vector<bilingual_str> warning_messages;
@@ -483,17 +485,19 @@ void Chainstate::UpdateTip(const CBlockIndex* pindexNew)
 /** Disconnect m_chain's tip.
   * After calling, the mempool will be in an inconsistent state, with
   * transactions from disconnected blocks being added to disconnectpool.  You
-  * should make the mempool consistent again by calling MaybeUpdateMempoolForReorg.
+  * should make the mempool consistent again through MempoolChainSync.
   * with cs_main held.
   *
   * If disconnectpool is nullptr, then no disconnected transactions are added to
   * disconnectpool (note that the caller is responsible for mempool consistency
   * in any case).
   */
-bool Chainstate::DisconnectTip(BlockValidationState& state, DisconnectedBlockTransactions* disconnectpool)
+bool Chainstate::DisconnectTip(
+    BlockValidationState& state,
+    DisconnectedBlockTransactions* disconnectpool,
+    ChainstateMempoolSync* mempool_sync)
 {
     AssertLockHeld(cs_main);
-    if (m_mempool) AssertLockHeld(m_mempool->cs);
 
     CBlockIndex *pindexDelete = m_chain.Tip();
     assert(pindexDelete);
@@ -531,22 +535,18 @@ bool Chainstate::DisconnectTip(BlockValidationState& state, DisconnectedBlockTra
     }
 
     // Write the chain state to disk, if necessary.
-    if (!FlushStateToDisk(state, FlushStateMode::IF_NEEDED)) {
+    if (!FlushStateToDisk(state, FlushStateMode::IF_NEEDED, /*nManualPruneHeight=*/0, mempool_sync)) {
         return false;
     }
 
-    if (disconnectpool && m_mempool) {
-        // Save transactions to re-add to mempool at end of reorg. If any entries are evicted for
-        // exceeding memory limits, remove them and their descendants from the mempool.
-        for (auto&& evicted_tx : disconnectpool->AddTransactionsFromBlock(block.vtx)) {
-            m_mempool->removeRecursive(*evicted_tx, MemPoolRemovalReason::REORG);
-        }
+    if (disconnectpool && mempool_sync) {
+        mempool_sync->UpdateForDisconnectedBlock(*disconnectpool, block);
     }
 
     m_chain.SetTip(*pindexDelete->pprev);
     m_chainman.UpdateIBDStatus();
 
-    UpdateTip(pindexDelete->pprev);
+    UpdateTip(pindexDelete->pprev, mempool_sync);
     // Let wallets know transactions went from 1-confirmed to
     // 0-confirmed or conflicted:
     if (m_chainman.m_options.signals) {
@@ -571,10 +571,10 @@ bool Chainstate::ConnectTip(
     CBlockIndex* pindexNew,
     std::shared_ptr<const CBlock> block_to_connect,
     std::vector<ConnectedBlock>& connected_blocks,
-    DisconnectedBlockTransactions& disconnectpool)
+    DisconnectedBlockTransactions& disconnectpool,
+    ChainstateMempoolSync* mempool_sync)
 {
     AssertLockHeld(cs_main);
-    if (m_mempool) AssertLockHeld(m_mempool->cs);
 
     assert(pindexNew->pprev == m_chain.Tip());
     // Read block from disk.
@@ -624,7 +624,7 @@ bool Chainstate::ConnectTip(
              Ticks<SecondsDouble>(m_chainman.time_flush),
              Ticks<MillisecondsDouble>(m_chainman.time_flush) / m_chainman.num_blocks_total);
     // Write the chain state to disk, if necessary.
-    if (!FlushStateToDisk(state, FlushStateMode::IF_NEEDED)) {
+    if (!FlushStateToDisk(state, FlushStateMode::IF_NEEDED, /*nManualPruneHeight=*/0, mempool_sync)) {
         return false;
     }
     const auto time_5{SteadyClock::now()};
@@ -633,15 +633,14 @@ bool Chainstate::ConnectTip(
              Ticks<MillisecondsDouble>(time_5 - time_4),
              Ticks<SecondsDouble>(m_chainman.time_chainstate),
              Ticks<MillisecondsDouble>(m_chainman.time_chainstate) / m_chainman.num_blocks_total);
-    // Remove conflicting transactions from the mempool.;
-    if (m_mempool) {
-        m_mempool->removeForBlock(block_to_connect->vtx, pindexNew->nHeight);
-        disconnectpool.removeForBlock(block_to_connect->vtx);
+    // Remove confirmed transactions from node-owned mempool state.
+    if (mempool_sync) {
+        mempool_sync->UpdateForConnectedBlock(disconnectpool, *block_to_connect, pindexNew->nHeight);
     }
     // Update m_chain & related variables.
     m_chain.SetTip(*pindexNew);
     m_chainman.UpdateIBDStatus();
-    UpdateTip(pindexNew);
+    UpdateTip(pindexNew, mempool_sync);
 
     const auto time_6{SteadyClock::now()};
     m_chainman.time_post_connect += time_6 - time_5;
@@ -733,10 +732,15 @@ void Chainstate::PruneBlockIndexCandidates() {
  *
  * @returns true unless a system error occurred
  */
-bool Chainstate::ActivateBestChainStep(BlockValidationState& state, CBlockIndex& index_most_work, const std::shared_ptr<const CBlock>& pblock, bool& fInvalidFound, std::vector<ConnectedBlock>& connected_blocks)
+bool Chainstate::ActivateBestChainStep(
+    BlockValidationState& state,
+    CBlockIndex& index_most_work,
+    const std::shared_ptr<const CBlock>& pblock,
+    bool& fInvalidFound,
+    std::vector<ConnectedBlock>& connected_blocks,
+    ChainstateMempoolSync* mempool_sync)
 {
     AssertLockHeld(cs_main);
-    if (m_mempool) AssertLockHeld(m_mempool->cs);
 
     const CBlockIndex* pindexOldTip = m_chain.Tip();
     const CBlockIndex* pindexFork = m_chain.FindFork(index_most_work);
@@ -745,10 +749,10 @@ bool Chainstate::ActivateBestChainStep(BlockValidationState& state, CBlockIndex&
     bool fBlocksDisconnected = false;
     DisconnectedBlockTransactions disconnectpool{MAX_DISCONNECTED_TX_POOL_BYTES};
     while (m_chain.Tip() && m_chain.Tip() != pindexFork) {
-        if (!DisconnectTip(state, &disconnectpool)) {
+        if (!DisconnectTip(state, &disconnectpool, mempool_sync)) {
             // This is likely a fatal error, but keep the mempool consistent,
             // just in case. Only remove from the mempool in this case.
-            if (m_mempool) MaybeUpdateMempoolForReorg(*this, *m_mempool, disconnectpool, false);
+            if (mempool_sync) mempool_sync->UpdateForReorg(*this, disconnectpool, false);
 
             // If we're unable to disconnect a block during normal operation,
             // then that is a failure of our local system -- we should abort
@@ -778,7 +782,7 @@ bool Chainstate::ActivateBestChainStep(BlockValidationState& state, CBlockIndex&
 
         // Connect new blocks.
         for (CBlockIndex* pindexConnect : vpindexToConnect | std::views::reverse) {
-            if (!ConnectTip(state, pindexConnect, pindexConnect == &index_most_work ? pblock : std::shared_ptr<const CBlock>(), connected_blocks, disconnectpool)) {
+            if (!ConnectTip(state, pindexConnect, pindexConnect == &index_most_work ? pblock : std::shared_ptr<const CBlock>(), connected_blocks, disconnectpool, mempool_sync)) {
                 if (state.IsInvalid()) {
                     // The block violates a consensus rule.
                     if (state.GetResult() != BlockValidationResult::BLOCK_MUTATED) {
@@ -792,7 +796,7 @@ bool Chainstate::ActivateBestChainStep(BlockValidationState& state, CBlockIndex&
                     // A system error occurred (disk space, database error, ...).
                     // Make the mempool consistent with the current tip, just in case
                     // any observers try to use it before shutdown.
-                    if (m_mempool) MaybeUpdateMempoolForReorg(*this, *m_mempool, disconnectpool, false);
+                    if (mempool_sync) mempool_sync->UpdateForReorg(*this, disconnectpool, false);
                     return false;
                 }
             } else {
@@ -809,9 +813,9 @@ bool Chainstate::ActivateBestChainStep(BlockValidationState& state, CBlockIndex&
     if (fBlocksDisconnected) {
         // If any blocks were disconnected, disconnectpool may be non empty.  Add
         // any disconnected transactions back to the mempool.
-        if (m_mempool) MaybeUpdateMempoolForReorg(*this, *m_mempool, disconnectpool, true);
+        if (mempool_sync) mempool_sync->UpdateForReorg(*this, disconnectpool, true);
     }
-    if (m_mempool) m_mempool->check(this->CoinsTip(), this->m_chain.Height() + 1);
+    if (mempool_sync) mempool_sync->Check(this->CoinsTip(), this->m_chain.Height() + 1);
 
     CheckForkWarningConditions();
 
@@ -823,6 +827,11 @@ static SynchronizationState GetSynchronizationState(bool init, bool blockfiles_i
     if (!init) return SynchronizationState::POST_INIT;
     if (!blockfiles_indexed) return SynchronizationState::INIT_REINDEX;
     return SynchronizationState::INIT_DOWNLOAD;
+}
+
+static RecursiveMutex* MempoolMutex(ChainstateMempoolSync* mempool_sync) LOCK_RETURNED(mempool_sync->Mutex())
+{
+    return mempool_sync ? mempool_sync->Mutex() : nullptr;
 }
 
 void ChainstateManager::UpdateIBDStatus()
@@ -865,7 +874,10 @@ void LimitValidationInterfaceQueue(ValidationSignals& signals) LOCKS_EXCLUDED(cs
     }
 }
 
-bool Chainstate::ActivateBestChain(BlockValidationState& state, std::shared_ptr<const CBlock> pblock)
+bool Chainstate::ActivateBestChain(
+    BlockValidationState& state,
+    std::shared_ptr<const CBlock> pblock,
+    ChainstateMempoolSync* mempool_sync)
 {
     AssertLockNotHeld(m_chainstate_mutex);
 
@@ -897,7 +909,7 @@ bool Chainstate::ActivateBestChain(BlockValidationState& state, std::shared_ptr<
             LOCK(cs_main);
             {
             // Lock transaction pool for at least as long as it takes for connected_blocks to be consumed
-            LOCK(MempoolMutex());
+            LOCK(MempoolMutex(mempool_sync));
             const bool was_in_ibd = m_chainman.IsInitialBlockDownload();
             CBlockIndex* starting_tip = m_chain.Tip();
             bool blocks_connected = false;
@@ -917,7 +929,7 @@ bool Chainstate::ActivateBestChain(BlockValidationState& state, std::shared_ptr<
 
                 bool fInvalidFound = false;
                 std::shared_ptr<const CBlock> nullBlockPtr;
-                if (!ActivateBestChainStep(state, *pindexMostWork, pblock && pblock->GetHash() == pindexMostWork->GetBlockHash() ? pblock : nullBlockPtr, fInvalidFound, connected_blocks)) {
+                if (!ActivateBestChainStep(state, *pindexMostWork, pblock && pblock->GetHash() == pindexMostWork->GetBlockHash() ? pblock : nullBlockPtr, fInvalidFound, connected_blocks, mempool_sync)) {
                     // A system error occurred
                     return false;
                 }
@@ -965,7 +977,7 @@ bool Chainstate::ActivateBestChain(BlockValidationState& state, std::shared_ptr<
                     break;
                 }
             }
-            } // release MempoolMutex
+            } // release mempool sync mutex
             // Notify external listeners about the new tip, even if pindexFork == pindexNewTip.
             if (m_chainman.m_options.signals && this == &m_chainman.ActiveChainstate()) {
                 m_chainman.m_options.signals->ActiveTipChange(*Assert(pindexNewTip), m_chainman.IsInitialBlockDownload());
@@ -978,7 +990,7 @@ bool Chainstate::ActivateBestChain(BlockValidationState& state, std::shared_ptr<
             (void)exited_ibd;
 
             // Write changes periodically to disk, after relay.
-            if (!FlushStateToDisk(state, FlushStateMode::PERIODIC)) {
+            if (!FlushStateToDisk(state, FlushStateMode::PERIODIC, /*nManualPruneHeight=*/0, mempool_sync)) {
                 return false;
             }
         }
@@ -995,7 +1007,7 @@ bool Chainstate::ActivateBestChain(BlockValidationState& state, std::shared_ptr<
     return true;
 }
 
-bool Chainstate::PreciousBlock(BlockValidationState& state, CBlockIndex* pindex)
+bool Chainstate::PreciousBlock(BlockValidationState& state, CBlockIndex* pindex, ChainstateMempoolSync* mempool_sync)
 {
     AssertLockNotHeld(m_chainstate_mutex);
     AssertLockNotHeld(::cs_main);
@@ -1023,10 +1035,10 @@ bool Chainstate::PreciousBlock(BlockValidationState& state, CBlockIndex* pindex)
         }
     }
 
-    return ActivateBestChain(state, std::shared_ptr<const CBlock>());
+    return ActivateBestChain(state, std::shared_ptr<const CBlock>(), mempool_sync);
 }
 
-bool Chainstate::InvalidateBlock(BlockValidationState& state, CBlockIndex* const pindex)
+bool Chainstate::InvalidateBlock(BlockValidationState& state, CBlockIndex* const pindex, ChainstateMempoolSync* mempool_sync)
 {
     AssertLockNotHeld(m_chainstate_mutex);
     AssertLockNotHeld(::cs_main);
@@ -1078,9 +1090,9 @@ bool Chainstate::InvalidateBlock(BlockValidationState& state, CBlockIndex* const
         if (m_chainman.m_options.signals) LimitValidationInterfaceQueue(*m_chainman.m_options.signals);
 
         LOCK(cs_main);
-        // Lock for as long as disconnectpool is in scope to make sure MaybeUpdateMempoolForReorg is
-        // called after DisconnectTip without unlocking in between
-        LOCK(MempoolMutex());
+        // Lock for as long as disconnectpool is in scope to make sure the
+        // mempool reorg update runs after DisconnectTip without unlocking in between.
+        LOCK(MempoolMutex(mempool_sync));
         if (!m_chain.Contains(*pindex)) break;
         pindex_was_in_chain = true;
         CBlockIndex* const disconnected_tip{m_chain.Tip()};
@@ -1088,13 +1100,13 @@ bool Chainstate::InvalidateBlock(BlockValidationState& state, CBlockIndex* const
         // ActivateBestChain considers blocks already in m_chain
         // unconditionally valid already, so force disconnect away from it.
         DisconnectedBlockTransactions disconnectpool{MAX_DISCONNECTED_TX_POOL_BYTES};
-        bool ret = DisconnectTip(state, &disconnectpool);
+        bool ret = DisconnectTip(state, &disconnectpool, mempool_sync);
         // DisconnectTip will add transactions to disconnectpool.
         // Adjust the mempool to be consistent with the new tip, adding
         // transactions back to the mempool if disconnecting was successful,
         // and we're not doing a very deep invalidation (in which case
         // keeping the mempool up to date is probably futile anyway).
-        if (m_mempool) MaybeUpdateMempoolForReorg(*this, *m_mempool, disconnectpool, /* fAddToMempool = */ (++disconnected <= 10) && ret);
+        if (mempool_sync) mempool_sync->UpdateForReorg(*this, disconnectpool, /*add_to_mempool=*/(++disconnected <= 10) && ret);
         if (!ret) return false;
         CBlockIndex* new_tip{m_chain.Tip()};
         assert(disconnected_tip->pprev == new_tip);
@@ -1975,11 +1987,11 @@ double ChainstateManager::GuessVerificationProgress(const CBlockIndex* pindex) c
     return std::min<double>(pindex->m_chain_tx_count / fTxTotal, 1.0);
 }
 
-Chainstate& ChainstateManager::InitializeChainstate(CTxMemPool* mempool)
+Chainstate& ChainstateManager::InitializeChainstate()
 {
     AssertLockHeld(::cs_main);
     assert(!m_chainstate);
-    m_chainstate = std::make_unique<Chainstate>(mempool, m_blockman, *this);
+    m_chainstate = std::make_unique<Chainstate>(m_blockman, *this);
     return *m_chainstate;
 }
 
@@ -2096,7 +2108,7 @@ std::pair<int, int> Chainstate::GetPruneRange(int last_height_can_prune) const
     return {0, prune_end};
 }
 
-util::Result<void> ChainstateManager::ActivateBestChains()
+util::Result<void> ChainstateManager::ActivateBestChains(ChainstateMempoolSync* mempool_sync)
 {
     AssertLockNotHeld(cs_main);
     Chainstate* chainstate;
@@ -2106,7 +2118,7 @@ util::Result<void> ChainstateManager::ActivateBestChains()
         chainstate = m_chainstate.get();
     }
     BlockValidationState state;
-    if (!chainstate->ActivateBestChain(state, nullptr)) {
+    if (!chainstate->ActivateBestChain(state, nullptr, mempool_sync)) {
         LOCK(GetMutex());
         return util::Error{Untranslated(strprintf("%s Failed to connect best block (%s)", chainstate->ToString(), state.ToString()))};
     }

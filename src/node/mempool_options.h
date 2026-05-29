@@ -1,10 +1,10 @@
 // Copyright (c) 2022-present The Bitcoin Core developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
-#ifndef BITCOIN_KERNEL_MEMPOOL_OPTIONS_H
-#define BITCOIN_KERNEL_MEMPOOL_OPTIONS_H
+#ifndef BITCOIN_NODE_MEMPOOL_OPTIONS_H
+#define BITCOIN_NODE_MEMPOOL_OPTIONS_H
 
-#include <kernel/mempool_limits.h>
+#include <node/mempool_limits.h>
 
 #include <policy/feerate.h>
 #include <policy/policy.h>
@@ -22,7 +22,7 @@ static constexpr bool DEFAULT_PERSIST_V1_DAT{false};
 /** Default for -acceptnonstdtxn */
 static constexpr bool DEFAULT_ACCEPT_NON_STD_TXN{false};
 
-namespace kernel {
+namespace node {
 /**
  * Options struct containing options for constructing a CTxMemPool. Default
  * constructor populates the struct with sane default values which can be
@@ -53,6 +53,6 @@ struct MemPoolOptions {
 
     ValidationSignals* signals{nullptr};
 };
-} // namespace kernel
+} // namespace node
 
-#endif // BITCOIN_KERNEL_MEMPOOL_OPTIONS_H
+#endif // BITCOIN_NODE_MEMPOOL_OPTIONS_H

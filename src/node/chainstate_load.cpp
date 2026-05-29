@@ -25,6 +25,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <optional>
 #include <vector>
 
 using kernel::CacheSizes;
@@ -154,7 +155,7 @@ ChainstateLoadResult LoadChainstate(ChainstateManager& chainman, const CacheSize
     chainman.m_total_coinsdb_cache = cache_sizes.coins_db;
 
     // Load the chainstate.
-    chainman.InitializeChainstate(options.mempool);
+    chainman.InitializeChainstate();
 
     auto [init_status, init_error] = CompleteChainstateInitialization(chainman, options);
     if (init_status != ChainstateLoadStatus::SUCCESS) {

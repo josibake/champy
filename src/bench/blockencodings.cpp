@@ -12,7 +12,7 @@
 #include <sync.h>
 #include <test/util/setup_common.h>
 #include <test/util/txmempool.h>
-#include <txmempool.h>
+#include <node/txmempool.h>
 #include <util/check.h>
 
 #include <memory>

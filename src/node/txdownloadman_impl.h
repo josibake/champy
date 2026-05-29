@@ -80,7 +80,7 @@ public:
      * Similar to m_lazy_recent_rejects, this filter is used to save bandwidth when e.g. all of our peers
      * have larger mempools and thus lower minimum feerates than us.
      *
-     * When a transaction's error is TxValidationResult::TX_RECONSIDERABLE (in a package or by
+     * When a transaction's error is MempoolValidationResult::RECONSIDERABLE (in a package or by
      * itself), add its wtxid to this filter. When a package fails for any reason, add the combined
      * hash to this filter.
      *
@@ -177,7 +177,7 @@ public:
     std::optional<PackageToValidate> Find1P1CPackage(const CTransactionRef& ptx, NodeId nodeid);
 
     void MempoolAcceptedTx(const CTransactionRef& tx);
-    RejectedTxTodo MempoolRejectedTx(const CTransactionRef& ptx, const TxValidationState& state, NodeId nodeid, bool first_time_failure);
+    RejectedTxTodo MempoolRejectedTx(const CTransactionRef& ptx, const MempoolValidationState& state, NodeId nodeid, bool first_time_failure);
     void MempoolRejectedPackage(const Package& package);
 
     std::pair<bool, std::optional<PackageToValidate>> ReceivedTx(NodeId nodeid, const CTransactionRef& ptx);

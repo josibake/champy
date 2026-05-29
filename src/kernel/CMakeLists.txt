@@ -17,7 +17,6 @@ add_library(bitcoinkernel
   context.cpp
   cs_main.cpp
   disconnected_transactions.cpp
-  mempool_removal_reason.cpp
   ../chain.cpp
   ../coins.cpp
   ../compressor.cpp
@@ -30,13 +29,9 @@ add_library(bitcoinkernel
   ../node/blockimport.cpp
   ../node/blockstorage.cpp
   ../node/chainstate_load.cpp
-  ../policy/ephemeral_policy.cpp
   ../policy/feerate.cpp
-  ../policy/packages.cpp
   ../policy/policy.cpp
-  ../policy/rbf.cpp
   ../policy/settings.cpp
-  ../policy/truc_policy.cpp
   ../pow.cpp
   ../random.cpp
   ../randomenv.cpp
@@ -46,8 +41,6 @@ add_library(bitcoinkernel
   ../streams.cpp
   ../sync.cpp
   ../txdb.cpp
-  ../txgraph.cpp
-  ../txmempool.cpp
   ../util/chaintype.cpp
   ../util/check.cpp
   ../util/expected.cpp

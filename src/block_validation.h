@@ -19,6 +19,7 @@
 
 class CBlockIndex;
 class Chainstate;
+class ChainstateMempoolSync;
 class ChainstateManager;
 class ValidationSignals;
 
@@ -44,6 +45,7 @@ void UpdateUncommittedBlockStructures(const ChainstateManager& chainman, CBlock&
 void GenerateCoinbaseCommitment(const ChainstateManager& chainman, CBlock& block, const CBlockIndex* pindexPrev);
 bool ProcessNewBlockHeaders(ChainstateManager& chainman, std::span<const CBlockHeader> headers, bool min_pow_checked, BlockValidationState& state, const CBlockIndex** ppindex = nullptr) LOCKS_EXCLUDED(cs_main);
 bool AcceptBlock(ChainstateManager& chainman, const std::shared_ptr<const CBlock>& pblock, BlockValidationState& state, CBlockIndex** ppindex, bool fRequested, const FlatFilePos* dbp, bool* fNewBlock, bool min_pow_checked) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
+bool ProcessNewBlock(ChainstateManager& chainman, ChainstateMempoolSync* mempool_sync, const std::shared_ptr<const CBlock>& block, bool force_processing, bool min_pow_checked, bool* new_block) LOCKS_EXCLUDED(cs_main);
 bool ProcessNewBlock(ChainstateManager& chainman, const std::shared_ptr<const CBlock>& block, bool force_processing, bool min_pow_checked, bool* new_block) LOCKS_EXCLUDED(cs_main);
 
 /** Context-independent validity checks */

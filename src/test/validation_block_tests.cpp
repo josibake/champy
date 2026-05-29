@@ -7,7 +7,8 @@
 #include <block_validation.h>
 #include <chainparams.h>
 #include <consensus/merkle.h>
-#include <mempool_validation.h>
+#include <node/mempool_chain_sync.h>
+#include <node/mempool_validation.h>
 #include <validation_state.h>
 #include <node/miner.h>
 #include <pow.h>
@@ -232,8 +233,9 @@ BOOST_AUTO_TEST_CASE(processnewblock_signals_ordering)
 BOOST_AUTO_TEST_CASE(mempool_locks_reorg)
 {
     bool ignored;
+    node::MempoolChainSync mempool_sync{*Assert(m_node.mempool)};
     auto ProcessBlock = [&](std::shared_ptr<const CBlock> block) -> bool {
-        return ProcessNewBlock(*Assert(m_node.chainman), block, /*force_processing=*/true, /*min_pow_checked=*/true, /*new_block=*/&ignored);
+        return ProcessNewBlock(*Assert(m_node.chainman), &mempool_sync, block, /*force_processing=*/true, /*min_pow_checked=*/true, /*new_block=*/&ignored);
     };
 
     // Process all mined blocks
@@ -284,7 +286,7 @@ BOOST_AUTO_TEST_CASE(mempool_locks_reorg)
         {
             LOCK(cs_main);
             for (const auto& tx : txs) {
-                const MempoolAcceptResult result = ProcessTransaction(*m_node.chainman, tx);
+                const MempoolAcceptResult result = ProcessTransaction(*m_node.chainman, m_node.mempool.get(), tx);
                 BOOST_REQUIRE(result.m_result_type == MempoolAcceptResult::ResultType::VALID);
             }
         }

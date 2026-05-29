@@ -10,9 +10,9 @@
 class ArgsManager;
 class CChainParams;
 struct bilingual_str;
-namespace kernel {
+namespace node {
 struct MemPoolOptions;
-};
+} // namespace node
 
 /**
  * Overlay the options set in \p argsman on top of corresponding members in \p mempool_opts.
@@ -21,7 +21,7 @@ struct MemPoolOptions;
  * @param[in]  argsman The ArgsManager in which to check set options.
  * @param[in,out] mempool_opts The MemPoolOptions to modify according to \p argsman.
  */
-[[nodiscard]] util::Result<void> ApplyArgsManOptions(const ArgsManager& argsman, const CChainParams& chainparams, kernel::MemPoolOptions& mempool_opts);
+[[nodiscard]] util::Result<void> ApplyArgsManOptions(const ArgsManager& argsman, const CChainParams& chainparams, node::MemPoolOptions& mempool_opts);
 
 
 #endif // BITCOIN_NODE_MEMPOOL_ARGS_H

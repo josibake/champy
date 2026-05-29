@@ -1,14 +1,14 @@
 // Copyright (c) 2022-present The Bitcoin Core developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
-#ifndef BITCOIN_KERNEL_MEMPOOL_LIMITS_H
-#define BITCOIN_KERNEL_MEMPOOL_LIMITS_H
+#ifndef BITCOIN_NODE_MEMPOOL_LIMITS_H
+#define BITCOIN_NODE_MEMPOOL_LIMITS_H
 
 #include <policy/policy.h>
 
 #include <cstdint>
 
-namespace kernel {
+namespace node {
 /**
  * Options struct containing limit options for a CTxMemPool. Default constructor
  * populates the struct with sane default values which can be modified.
@@ -34,6 +34,6 @@ struct MemPoolLimits {
         return {std::numeric_limits<unsigned>::max(), no_limit, no_limit, no_limit};
     }
 };
-} // namespace kernel
+} // namespace node
 
-#endif // BITCOIN_KERNEL_MEMPOOL_LIMITS_H
+#endif // BITCOIN_NODE_MEMPOOL_LIMITS_H

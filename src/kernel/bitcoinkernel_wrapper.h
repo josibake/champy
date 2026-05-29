@@ -80,19 +80,9 @@ enum class BlockValidationResult : btck_BlockValidationResult {
 };
 
 enum class TxValidationResult : btck_TxValidationResult {
-    UNSET               = btck_TxValidationResult_UNSET,
-    CONSENSUS           = btck_TxValidationResult_CONSENSUS,
-    INPUTS_NOT_STANDARD = btck_TxValidationResult_INPUTS_NOT_STANDARD,
-    NOT_STANDARD        = btck_TxValidationResult_NOT_STANDARD,
-    MISSING_INPUTS      = btck_TxValidationResult_MISSING_INPUTS,
-    PREMATURE_SPEND     = btck_TxValidationResult_PREMATURE_SPEND,
-    WITNESS_MUTATED     = btck_TxValidationResult_WITNESS_MUTATED,
-    WITNESS_STRIPPED    = btck_TxValidationResult_WITNESS_STRIPPED,
-    CONFLICT            = btck_TxValidationResult_CONFLICT,
-    MEMPOOL_POLICY      = btck_TxValidationResult_MEMPOOL_POLICY,
-    NO_MEMPOOL          = btck_TxValidationResult_NO_MEMPOOL,
-    RECONSIDERABLE      = btck_TxValidationResult_RECONSIDERABLE,
-    UNKNOWN             = btck_TxValidationResult_UNKNOWN
+    UNSET     = btck_TxValidationResult_UNSET,
+    CONSENSUS = btck_TxValidationResult_CONSENSUS,
+    UNKNOWN   = btck_TxValidationResult_UNKNOWN
 };
 
 enum class ScriptVerifyStatus : btck_ScriptVerifyStatus {

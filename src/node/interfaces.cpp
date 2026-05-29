@@ -20,7 +20,7 @@
 #include <interfaces/types.h>
 #include <kernel/chain.h>
 #include <kernel/context.h>
-#include <kernel/mempool_entry.h>
+#include <node/mempool_entry.h>
 #include <logging.h>
 #include <mapport.h>
 #include <net.h>
@@ -46,7 +46,8 @@
 #include <primitives/transaction.h>
 #include <support/allocators/secure.h>
 #include <sync.h>
-#include <txmempool.h>
+#include <node/mempool_chain_sync.h>
+#include <node/txmempool.h>
 #include <uint256.h>
 #include <univalue.h>
 #include <util/check.h>
@@ -788,7 +789,9 @@ public:
     bool submitSolution(uint32_t version, uint32_t timestamp, uint32_t nonce, CTransactionRef coinbase) override
     {
         AddMerkleRootAndCoinbase(m_block_template->block, std::move(coinbase), version, timestamp, nonce);
-        return ProcessNewBlock(chainman(), std::make_shared<const CBlock>(m_block_template->block), /*force_processing=*/true, /*min_pow_checked=*/true, /*new_block=*/nullptr);
+        std::optional<MempoolChainSync> mempool_sync;
+        if (m_node.mempool) mempool_sync.emplace(*m_node.mempool);
+        return ProcessNewBlock(chainman(), mempool_sync ? &*mempool_sync : nullptr, std::make_shared<const CBlock>(m_block_template->block), /*force_processing=*/true, /*min_pow_checked=*/true, /*new_block=*/nullptr);
     }
 
     std::unique_ptr<BlockTemplate> waitNext(BlockWaitOptions options) override

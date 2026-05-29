@@ -12,7 +12,7 @@
 #include <sync.h>
 #include <test/util/setup_common.h>
 #include <test/util/txmempool.h>
-#include <txmempool.h>
+#include <node/txmempool.h>
 #include <util/check.h>
 
 #include <cstdint>
@@ -75,7 +75,7 @@ static void MempoolCheckEphemeralSpends(benchmark::Bench& bench)
 
     uint32_t iteration{0};
 
-    TxValidationState dummy_state;
+    MempoolValidationState dummy_state;
     Wtxid dummy_wtxid;
 
     bench.run([&]() NO_THREAD_SAFETY_ANALYSIS {

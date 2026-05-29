@@ -4,7 +4,7 @@
 
 #include <bench/bench.h>
 #include <consensus/consensus.h>
-#include <mempool_validation.h>
+#include <node/mempool_validation.h>
 #include <node/miner.h>
 #include <primitives/transaction.h>
 #include <random.h>
@@ -47,7 +47,7 @@ static void AssembleBlock(benchmark::Bench& bench)
         LOCK(::cs_main);
 
         for (const auto& txr : txs) {
-            const MempoolAcceptResult res = ProcessTransaction(*test_setup->m_node.chainman, txr);
+            const MempoolAcceptResult res = ProcessTransaction(*test_setup->m_node.chainman, test_setup->m_node.mempool.get(), txr);
             assert(res.m_result_type == MempoolAcceptResult::ResultType::VALID);
         }
     }

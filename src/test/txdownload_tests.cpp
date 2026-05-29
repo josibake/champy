@@ -4,7 +4,7 @@
 
 #include <addresstype.h>
 #include <validation_state.h>
-#include <mempool_validation.h>
+#include <node/mempool_validation.h>
 #include <net_processing.h>
 #include <node/txdownloadman_impl.h>
 #include <primitives/transaction.h>
@@ -58,19 +58,19 @@ struct Behaviors {
 
 // Map from failure reason to expected behavior for a segwit tx that fails
 // Txid and Wtxid are assumed to be different here. For a nonsegwit transaction, use the wtxid results.
-static std::map<TxValidationResult, Behaviors> expected_behaviors{
-    {TxValidationResult::TX_CONSENSUS,               {/*txid_rejects*/0,/*wtxid_rejects*/1,/*txid_recon*/0,/*wtxid_recon*/0,/*keep*/1,/*txid_inv*/0,/*wtxid_inv*/1}},
-    {TxValidationResult::TX_INPUTS_NOT_STANDARD,     {                1,                 1,              0,               0,        1,            1,             1}},
-    {TxValidationResult::TX_NOT_STANDARD,            {                0,                 1,              0,               0,        1,            0,             1}},
-    {TxValidationResult::TX_MISSING_INPUTS,          {                0,                 0,              0,               0,        1,            0,             1}},
-    {TxValidationResult::TX_PREMATURE_SPEND,         {                0,                 1,              0,               0,        1,            0,             1}},
-    {TxValidationResult::TX_WITNESS_MUTATED,         {                0,                 1,              0,               0,        1,            0,             1}},
-    {TxValidationResult::TX_WITNESS_STRIPPED,        {                0,                 0,              0,               0,        0,            0,             0}},
-    {TxValidationResult::TX_CONFLICT,                {                0,                 1,              0,               0,        1,            0,             1}},
-    {TxValidationResult::TX_MEMPOOL_POLICY,          {                0,                 1,              0,               0,        1,            0,             1}},
-    {TxValidationResult::TX_NO_MEMPOOL,              {                0,                 1,              0,               0,        1,            0,             1}},
-    {TxValidationResult::TX_RECONSIDERABLE,          {                0,                 0,              0,               1,        1,            0,             1}},
-    {TxValidationResult::TX_UNKNOWN,                 {                0,                 1,              0,               0,        1,            0,             1}},
+static std::map<MempoolValidationResult, Behaviors> expected_behaviors{
+    {MempoolValidationResult::CONSENSUS,               {/*txid_rejects*/0,/*wtxid_rejects*/1,/*txid_recon*/0,/*wtxid_recon*/0,/*keep*/1,/*txid_inv*/0,/*wtxid_inv*/1}},
+    {MempoolValidationResult::INPUTS_NOT_STANDARD,     {                1,                 1,              0,               0,        1,            1,             1}},
+    {MempoolValidationResult::NOT_STANDARD,            {                0,                 1,              0,               0,        1,            0,             1}},
+    {MempoolValidationResult::MISSING_INPUTS,          {                0,                 0,              0,               0,        1,            0,             1}},
+    {MempoolValidationResult::PREMATURE_SPEND,         {                0,                 1,              0,               0,        1,            0,             1}},
+    {MempoolValidationResult::WITNESS_MUTATED,         {                0,                 1,              0,               0,        1,            0,             1}},
+    {MempoolValidationResult::WITNESS_STRIPPED,        {                0,                 0,              0,               0,        0,            0,             0}},
+    {MempoolValidationResult::CONFLICT,                {                0,                 1,              0,               0,        1,            0,             1}},
+    {MempoolValidationResult::MEMPOOL_POLICY,          {                0,                 1,              0,               0,        1,            0,             1}},
+    {MempoolValidationResult::NO_MEMPOOL,              {                0,                 1,              0,               0,        1,            0,             1}},
+    {MempoolValidationResult::RECONSIDERABLE,          {                0,                 0,              0,               1,        1,            0,             1}},
+    {MempoolValidationResult::UNKNOWN,                 {                0,                 1,              0,               0,        1,            0,             1}},
 };
 
 static bool CheckOrphanBehavior(node::TxDownloadManagerImpl& txdownload_impl, const CTransactionRef& tx, const node::RejectedTxTodo& ret, std::string& err_msg,
@@ -119,7 +119,7 @@ BOOST_FIXTURE_TEST_CASE(tx_rejection_types, TestChain100Setup)
     node::TxDownloadOptions DEFAULT_OPTS{pool, det_rand, true};
 
     // A new TxDownloadManagerImpl is created for each tx so we can just reuse the same one.
-    TxValidationState state;
+    MempoolValidationState state;
     NodeId nodeid{0};
     std::chrono::microseconds now{GetTime()};
     node::TxDownloadConnectionInfo connection_info{/*m_preferred=*/false, /*m_relay_permissions=*/false, /*m_wtxid_relay=*/true};
@@ -155,7 +155,7 @@ BOOST_FIXTURE_TEST_CASE(tx_rejection_types, TestChain100Setup)
                 actual_behavior.CheckEqual(expected_behavior, /*segwit=*/segwit_parent);
 
                 // Later, a child of this transaction fails for missing inputs
-                state.Invalid(TxValidationResult::TX_MISSING_INPUTS, "");
+                state.Invalid(MempoolValidationResult::MISSING_INPUTS, "");
                 txdownload_impl.MempoolRejectedTx(ptx_child, state, nodeid, /*first_time_failure=*/true);
 
                 // If parent (by txid) was rejected, child is too.
@@ -192,8 +192,8 @@ BOOST_FIXTURE_TEST_CASE(handle_missing_inputs, TestChain100Setup)
     CAmount amount_split_half{25 * COIN - 500};
     int test_chain_height{100};
 
-    TxValidationState state_orphan;
-    state_orphan.Invalid(TxValidationResult::TX_MISSING_INPUTS, "");
+    MempoolValidationState state_orphan;
+    state_orphan.Invalid(MempoolValidationResult::MISSING_INPUTS, "");
 
     // Transactions are not all submitted to mempool. Conserve the number of m_coinbase_txns we
     // consume, and only increment this index number when we would conflict with an existing
@@ -223,7 +223,7 @@ BOOST_FIXTURE_TEST_CASE(handle_missing_inputs, TestChain100Setup)
         if (parent_recent_rej_recon) txdownload_impl.RecentRejectsReconsiderableFilter().insert(single_parent->GetHash().ToUint256());
         if (parent_recent_conf) txdownload_impl.RecentConfirmedTransactionsFilter().insert(single_parent->GetHash().ToUint256());
         if (parent_in_mempool) {
-            const auto mempool_result = WITH_LOCK(::cs_main, return ProcessTransaction(*m_node.chainman, single_parent));
+            const auto mempool_result = WITH_LOCK(::cs_main, return ProcessTransaction(*m_node.chainman, m_node.mempool.get(), single_parent));
             BOOST_CHECK(mempool_result.m_result_type == MempoolAcceptResult::ResultType::VALID);
             coinbase_idx += 1;
             assert(coinbase_idx < m_coinbase_txns.size());

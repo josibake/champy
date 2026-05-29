@@ -10,10 +10,10 @@
 #include <consensus/amount.h>
 #include <indirectmap.h>
 #include <kernel/cs_main.h>
-#include <kernel/mempool_entry.h>          // IWYU pragma: export
-#include <kernel/mempool_limits.h>         // IWYU pragma: export
-#include <kernel/mempool_options.h>        // IWYU pragma: export
-#include <kernel/mempool_removal_reason.h> // IWYU pragma: export
+#include <node/mempool_entry.h>          // IWYU pragma: export
+#include <node/mempool_limits.h>         // IWYU pragma: export
+#include <node/mempool_options.h>        // IWYU pragma: export
+#include <node/mempool_removal_reason.h> // IWYU pragma: export
 #include <policy/feerate.h>
 #include <policy/packages.h>
 #include <primitives/transaction.h>
@@ -248,7 +248,7 @@ public:
 
     typedef std::set<txiter, CompareIteratorByHash> setEntries;
 
-    using Limits = kernel::MemPoolLimits;
+    using Limits = node::MemPoolLimits;
 
     std::tuple<size_t, size_t, CAmount> CalculateAncestorData(const CTxMemPoolEntry& entry) const EXCLUSIVE_LOCKS_REQUIRED(cs);
     std::tuple<size_t, size_t, CAmount> CalculateDescendantData(const CTxMemPoolEntry& entry) const EXCLUSIVE_LOCKS_REQUIRED(cs);
@@ -279,7 +279,7 @@ public:
     indirectmap<COutPoint, txiter> mapNextTx GUARDED_BY(cs);
     std::map<Txid, CAmount> mapDeltas GUARDED_BY(cs);
 
-    using Options = kernel::MemPoolOptions;
+    using Options = node::MemPoolOptions;
 
     const Options m_opts;
 

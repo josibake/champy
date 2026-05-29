@@ -7,11 +7,12 @@
 #define BITCOIN_MEMPOOL_VALIDATION_H
 
 #include <kernel/cs_main.h>
-#include <kernel/mempool_entry.h>
+#include <node/mempool_entry.h>
+#include <node/mempool_validation_result.h>
 #include <policy/feerate.h>
 #include <policy/packages.h>
 #include <primitives/transaction.h>
-#include <txmempool.h>
+#include <node/txmempool.h>
 
 #include <list>
 #include <map>
@@ -32,7 +33,7 @@ class DisconnectedBlockTransactions;
  *+---------------------------+----------------+-------------------+------------------+----------------+-------------------+
  *| Field or property         |    VALID       |                 INVALID              |  MEMPOOL_ENTRY | DIFFERENT_WITNESS |
  *|                           |                |--------------------------------------|                |                   |
- *|                           |                | TX_RECONSIDERABLE |     Other        |                |                   |
+ *|                           |                | RECONSIDERABLE |        Other        |                |                   |
  *+---------------------------+----------------+-------------------+------------------+----------------+-------------------+
  *| txid in mempool?          | yes            | no                | no*              | yes            | yes               |
  *| wtxid in mempool?         | yes            | no                | no*              | yes            | no                |
@@ -45,7 +46,7 @@ class DisconnectedBlockTransactions;
  *+---------------------------+----------------+-------------------+------------------+----------------+-------------------+
  * (*) Individual transaction acceptance doesn't return MEMPOOL_ENTRY and DIFFERENT_WITNESS. It returns
  * INVALID, with the errors txn-already-in-mempool and txn-same-nonwitness-data-in-mempool
- * respectively. In those cases, the txid or wtxid may be in the mempool for a TX_CONFLICT.
+ * respectively. In those cases, the txid or wtxid may be in the mempool for a CONFLICT.
  */
 struct MempoolAcceptResult {
     /** Used to indicate the results of mempool validation. */
@@ -59,7 +60,7 @@ struct MempoolAcceptResult {
     const ResultType m_result_type;
 
     /** Contains information about why the transaction failed. */
-    const TxValidationState m_state;
+    const MempoolValidationState m_state;
 
     /** Mempool transactions replaced by the tx. */
     const std::list<CTransactionRef> m_replaced_transactions;
@@ -83,12 +84,12 @@ struct MempoolAcceptResult {
     /** The wtxid of the transaction in the mempool which has the same txid but different witness. */
     const std::optional<Wtxid> m_other_wtxid;
 
-    static MempoolAcceptResult Failure(TxValidationState state)
+    static MempoolAcceptResult Failure(MempoolValidationState state)
     {
         return MempoolAcceptResult(state);
     }
 
-    static MempoolAcceptResult FeeFailure(TxValidationState state,
+    static MempoolAcceptResult FeeFailure(MempoolValidationState state,
                                           CFeeRate effective_feerate,
                                           const std::vector<Wtxid>& wtxids_fee_calculations)
     {
@@ -118,7 +119,7 @@ struct MempoolAcceptResult {
     // Private constructors. Use static methods MempoolAcceptResult::Success, etc. to construct.
 private:
     /** Constructor for failure case */
-    explicit MempoolAcceptResult(TxValidationState state)
+    explicit MempoolAcceptResult(MempoolValidationState state)
         : m_result_type(ResultType::INVALID), m_state(state)
     {
         Assume(!state.IsValid()); // Can be invalid or error
@@ -138,7 +139,7 @@ private:
           m_wtxids_fee_calculations(wtxids_fee_calculations) {}
 
     /** Constructor for fee-related failure case */
-    explicit MempoolAcceptResult(TxValidationState state,
+    explicit MempoolAcceptResult(MempoolValidationState state,
                                  CFeeRate effective_feerate,
                                  const std::vector<Wtxid>& wtxids_fee_calculations)
         : m_result_type(ResultType::INVALID),
@@ -181,11 +182,14 @@ struct PackageMempoolAcceptResult {
  * Process a transaction: validate and (optionally) submit it to the mempool.
  *
  * @param[in]  chainman     The chain manager.
+ * @param[in]  mempool      The mempool to validate against.
  * @param[in]  tx           The transaction to validate.
  * @param[in]  test_accept  When true, run validation checks but don't submit to mempool.
  * @returns a MempoolAcceptResult indicating whether the transaction was accepted/rejected with reason.
  */
-MempoolAcceptResult ProcessTransaction(ChainstateManager& chainman, const CTransactionRef& tx, bool test_accept = false)
+MempoolAcceptResult ProcessTransaction(ChainstateManager& chainman, CTxMemPool& mempool, const CTransactionRef& tx, bool test_accept = false)
+    EXCLUSIVE_LOCKS_REQUIRED(cs_main);
+MempoolAcceptResult ProcessTransaction(ChainstateManager& chainman, CTxMemPool* mempool, const CTransactionRef& tx, bool test_accept = false)
     EXCLUSIVE_LOCKS_REQUIRED(cs_main);
 
 /**
@@ -193,6 +197,7 @@ MempoolAcceptResult ProcessTransaction(ChainstateManager& chainman, const CTrans
  * Client code should use ProcessTransaction()
  *
  * @param[in]  active_chainstate  Reference to the active chainstate.
+ * @param[in]  pool               The mempool to validate against.
  * @param[in]  tx                 The transaction to submit for mempool acceptance.
  * @param[in]  accept_time        The timestamp for adding the transaction to the mempool.
  *                                It is also used to determine when the entry expires.
@@ -202,7 +207,7 @@ MempoolAcceptResult ProcessTransaction(ChainstateManager& chainman, const CTrans
  *
  * @returns a MempoolAcceptResult indicating whether the transaction was accepted/rejected with reason.
  */
-MempoolAcceptResult AcceptToMemoryPool(Chainstate& active_chainstate, const CTransactionRef& tx,
+MempoolAcceptResult AcceptToMemoryPool(Chainstate& active_chainstate, CTxMemPool& pool, const CTransactionRef& tx,
                                        int64_t accept_time, bool bypass_limits, bool test_accept)
     EXCLUSIVE_LOCKS_REQUIRED(cs_main);
 
@@ -259,19 +264,5 @@ std::optional<LockPoints> CalculateLockPointsAtTip(
  */
 bool CheckSequenceLocksAtTip(CBlockIndex* tip,
                              const LockPoints& lock_points);
-
-/**
- * Re-add disconnected transactions to the mempool after a reorg.
- *
- * @param[in]  chainstate      The chainstate whose mempool to update.
- * @param[in]  mempool         The mempool to update.
- * @param[in]  disconnectpool  Transactions disconnected during reorg.
- * @param[in]  fAddToMempool   When true, attempt to re-add transactions to the mempool.
- */
-void MaybeUpdateMempoolForReorg(
-    Chainstate& chainstate,
-    CTxMemPool& mempool,
-    DisconnectedBlockTransactions& disconnectpool,
-    bool fAddToMempool) EXCLUSIVE_LOCKS_REQUIRED(cs_main, mempool.cs);
 
 #endif // BITCOIN_MEMPOOL_VALIDATION_H

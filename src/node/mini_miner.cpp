@@ -10,7 +10,7 @@
 #include <policy/feerate.h>
 #include <primitives/transaction.h>
 #include <sync.h>
-#include <txmempool.h>
+#include <node/txmempool.h>
 #include <uint256.h>
 #include <util/check.h>
 

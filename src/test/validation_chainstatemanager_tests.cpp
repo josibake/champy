@@ -37,7 +37,7 @@ BOOST_FIXTURE_TEST_CASE(chainstatemanager_ibd_exit_after_loading_blocks, ChainTe
     auto apply{[&](bool cached_is_ibd, bool loading_blocks, bool tip_exists, bool enough_work, bool tip_recent) {
         LOCK(::cs_main);
         chainman.ResetChainstates();
-        chainman.InitializeChainstate(m_node.mempool.get());
+        chainman.InitializeChainstate();
 
         const auto recent_time{Now<NodeSeconds>() - chainman.m_options.max_tip_age};
 

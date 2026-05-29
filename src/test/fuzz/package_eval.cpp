@@ -3,7 +3,7 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #include <consensus/validation.h>
-#include <mempool_validation.h>
+#include <node/mempool_validation.h>
 #include <node/context.h>
 #include <node/mempool_args.h>
 #include <node/miner.h>
@@ -322,7 +322,7 @@ FUZZ_TARGET(ephemeral_package_eval, .init = initialize_tx_pool)
         const auto result_package = WITH_LOCK(::cs_main,
                                     return ProcessNewPackage(chainstate, tx_pool, txs, /*test_accept=*/single_submit, /*client_maxfeerate=*/{}));
 
-        const auto res = WITH_LOCK(::cs_main, return AcceptToMemoryPool(chainstate, txs.back(), GetTime(),
+        const auto res = WITH_LOCK(::cs_main, return AcceptToMemoryPool(chainstate, tx_pool, txs.back(), GetTime(),
                                    /*bypass_limits=*/false, /*test_accept=*/!single_submit));
 
         if (!single_submit && result_package.m_state.GetResult() != PackageValidationResult::PCKG_POLICY) {
@@ -499,7 +499,7 @@ FUZZ_TARGET(tx_package_eval, .init = initialize_tx_pool)
 
         // Always set bypass_limits to false because it is not supported in ProcessNewPackage and
         // can be a source of divergence.
-        const auto res = WITH_LOCK(::cs_main, return AcceptToMemoryPool(chainstate, txs.back(), GetTime(),
+        const auto res = WITH_LOCK(::cs_main, return AcceptToMemoryPool(chainstate, tx_pool, txs.back(), GetTime(),
                                    /*bypass_limits=*/false, /*test_accept=*/!single_submit));
         const bool passed = res.m_result_type == MempoolAcceptResult::ResultType::VALID;
 

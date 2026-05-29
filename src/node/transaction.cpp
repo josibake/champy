@@ -5,23 +5,23 @@
 
 #include <node/transaction.h>
 
-#include <mempool_validation.h>
+#include <node/mempool_validation.h>
 #include <validation_state.h>
 #include <net.h>
 #include <net_processing.h>
 #include <node/blockstorage.h>
 #include <node/context.h>
 #include <node/types.h>
-#include <txmempool.h>
+#include <node/txmempool.h>
 #include <chainstate.h>
 #include <validationinterface.h>
 
 namespace node {
-static TransactionError HandleATMPError(const TxValidationState& state, std::string& err_string_out)
+static TransactionError HandleATMPError(const MempoolValidationState& state, std::string& err_string_out)
 {
     err_string_out = state.ToString();
     if (state.IsInvalid()) {
-        if (state.GetResult() == TxValidationResult::TX_MISSING_INPUTS) {
+        if (state.GetResult() == MempoolValidationResult::MISSING_INPUTS) {
             return TransactionError::MISSING_INPUTS;
         }
         return TransactionError::MEMPOOL_REJECTED;
@@ -76,7 +76,7 @@ TransactionError BroadcastTransaction(NodeContext& node,
             if (check_max_fee || broadcast_method == TxBroadcast::NO_MEMPOOL_PRIVATE_BROADCAST) {
                 // First, call ATMP with test_accept and check the fee. If ATMP
                 // fails here, return error immediately.
-                const MempoolAcceptResult result = ProcessTransaction(*node.chainman, tx, /*test_accept=*/true);
+                const MempoolAcceptResult result = ProcessTransaction(*node.chainman, node.mempool.get(), tx, /*test_accept=*/true);
                 if (result.m_result_type != MempoolAcceptResult::ResultType::VALID) {
                     return HandleATMPError(result.m_state, err_string);
                 } else if (check_max_fee && result.m_base_fees.value() > max_tx_fee) {
@@ -90,7 +90,7 @@ TransactionError BroadcastTransaction(NodeContext& node,
                 // Try to submit the transaction to the mempool.
                 {
                     const MempoolAcceptResult result =
-                        ProcessTransaction(*node.chainman, tx, /*test_accept=*/false);
+                        ProcessTransaction(*node.chainman, node.mempool.get(), tx, /*test_accept=*/false);
                     if (result.m_result_type != MempoolAcceptResult::ResultType::VALID) {
                         return HandleATMPError(result.m_state, err_string);
                     }

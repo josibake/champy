@@ -34,7 +34,7 @@
 #include <test/util/time.h>
 #include <test/util/txmempool.h>
 #include <test/util/validation.h>
-#include <txmempool.h>
+#include <node/txmempool.h>
 #include <uint256.h>
 #include <util/check.h>
 #include <util/task_runner.h>

@@ -15,9 +15,9 @@
 #include <crypto/sha256.h>
 #include <init.h>
 #include <init/common.h>
-#include <mempool_validation.h>
+#include <node/mempool_validation.h>
 #include <interfaces/chain.h>
-#include <kernel/mempool_entry.h>
+#include <node/mempool_entry.h>
 #include <logging.h>
 #include <net.h>
 #include <net_processing.h>
@@ -26,6 +26,7 @@
 #include <node/context.h>
 #include <node/kernel_notifications.h>
 #include <node/mempool_args.h>
+#include <node/mempool_chain_sync.h>
 #include <node/miner.h>
 #include <node/peerman_args.h>
 #include <node/warnings.h>
@@ -42,7 +43,7 @@
 #include <test/util/transaction_utils.h>
 #include <test/util/txmempool.h>
 #include <txdb.h>
-#include <txmempool.h>
+#include <node/txmempool.h>
 #include <util/chaintype.h>
 #include <util/check.h>
 #include <util/fs_helpers.h>
@@ -61,6 +62,7 @@
 #include <algorithm>
 #include <future>
 #include <functional>
+#include <optional>
 #include <stdexcept>
 
 using namespace util::hex_literals;
@@ -314,7 +316,6 @@ void ChainTestingSetup::LoadVerifyActivateChainstate()
 {
     auto& chainman{*Assert(m_node.chainman)};
     node::ChainstateLoadOptions options;
-    options.mempool = Assert(m_node.mempool.get());
     options.coins_db_in_memory = m_coins_db_in_memory;
     options.wipe_chainstate_db = m_args.GetBoolArg("-reindex", false) || m_args.GetBoolArg("-reindex-chainstate", false);
     options.prune = chainman.m_blockman.IsPruneMode();
@@ -428,7 +429,9 @@ CBlock TestChain100Setup::CreateAndProcessBlock(
 
     CBlock block = this->CreateBlock(txns, scriptPubKey, *chainstate);
     std::shared_ptr<const CBlock> shared_pblock = std::make_shared<const CBlock>(block);
-    ProcessNewBlock(*Assert(m_node.chainman), shared_pblock, true, true, nullptr);
+    std::optional<node::MempoolChainSync> mempool_sync;
+    if (m_node.mempool) mempool_sync.emplace(*m_node.mempool);
+    ProcessNewBlock(*Assert(m_node.chainman), mempool_sync ? &*mempool_sync : nullptr, shared_pblock, true, true, nullptr);
 
     return block;
 }
@@ -507,7 +510,7 @@ CMutableTransaction TestChain100Setup::CreateValidMempoolTransaction(const std::
     // If submit=true, add transaction to the mempool.
     if (submit) {
         LOCK(cs_main);
-        const MempoolAcceptResult result = ProcessTransaction(*m_node.chainman, MakeTransactionRef(mempool_txn));
+        const MempoolAcceptResult result = ProcessTransaction(*m_node.chainman, m_node.mempool.get(), MakeTransactionRef(mempool_txn));
         assert(result.m_result_type == MempoolAcceptResult::ResultType::VALID);
     }
     return mempool_txn;

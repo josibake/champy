@@ -3,7 +3,7 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #include <validation_state.h>
-#include <mempool_validation.h>
+#include <node/mempool_validation.h>
 #include <key_io.h>
 #include <policy/packages.h>
 #include <policy/policy.h>
@@ -42,7 +42,7 @@ BOOST_FIXTURE_TEST_CASE(tx_mempool_reject_coinbase, TestChain100Setup)
     LOCK(cs_main);
 
     unsigned int initialPoolSize = m_node.mempool->size();
-    const MempoolAcceptResult result = ProcessTransaction(*m_node.chainman, MakeTransactionRef(coinbaseTx));
+    const MempoolAcceptResult result = ProcessTransaction(*m_node.chainman, m_node.mempool.get(), MakeTransactionRef(coinbaseTx));
 
     BOOST_CHECK(result.m_result_type == MempoolAcceptResult::ResultType::INVALID);
 
@@ -52,7 +52,7 @@ BOOST_FIXTURE_TEST_CASE(tx_mempool_reject_coinbase, TestChain100Setup)
     // Check that the validation state reflects the unsuccessful attempt.
     BOOST_CHECK(result.m_state.IsInvalid());
     BOOST_CHECK_EQUAL(result.m_state.GetRejectReason(), "coinbase");
-    BOOST_CHECK(result.m_state.GetResult() == TxValidationResult::TX_CONSENSUS);
+    BOOST_CHECK(result.m_state.GetResult() == MempoolValidationResult::CONSENSUS);
 }
 
 // Generate a number of random, nonexistent outpoints.
@@ -118,7 +118,7 @@ BOOST_FIXTURE_TEST_CASE(ephemeral_tests, RegTestingSetup)
     LOCK2(cs_main, pool.cs);
     TestMemPoolEntryHelper entry;
 
-    TxValidationState child_state;
+    MempoolValidationState child_state;
     Wtxid child_wtxid;
 
     // Arbitrary non-0 feerate for these tests
@@ -158,19 +158,19 @@ BOOST_FIXTURE_TEST_CASE(ephemeral_tests, RegTestingSetup)
     BOOST_CHECK(!CheckEphemeralSpends({grandparent_tx_1, dust_non_spend, dust_spend}, dustrelay, pool, child_state, child_wtxid));
     BOOST_CHECK(!child_state.IsValid());
     BOOST_CHECK_EQUAL(child_wtxid, dust_non_spend_wtxid);
-    child_state = TxValidationState();
+    child_state = MempoolValidationState();
     child_wtxid = Wtxid();
 
     BOOST_CHECK(!CheckEphemeralSpends({grandparent_tx_1, dust_spend, dust_non_spend}, dustrelay, pool, child_state, child_wtxid));
     BOOST_CHECK(!child_state.IsValid());
     BOOST_CHECK_EQUAL(child_wtxid, dust_non_spend_wtxid);
-    child_state = TxValidationState();
+    child_state = MempoolValidationState();
     child_wtxid = Wtxid();
 
     BOOST_CHECK(!CheckEphemeralSpends({grandparent_tx_1, dust_non_spend}, dustrelay, pool, child_state, child_wtxid));
     BOOST_CHECK(!child_state.IsValid());
     BOOST_CHECK_EQUAL(child_wtxid, dust_non_spend_wtxid);
-    child_state = TxValidationState();
+    child_state = MempoolValidationState();
     child_wtxid = Wtxid();
 
     auto grandparent_tx_2 = make_ephemeral_tx(random_outpoints(1), /*version=*/2);
@@ -186,7 +186,7 @@ BOOST_FIXTURE_TEST_CASE(ephemeral_tests, RegTestingSetup)
     BOOST_CHECK(!CheckEphemeralSpends({grandparent_tx_1, grandparent_tx_2, dust_non_spend_both_parents}, dustrelay, pool, child_state, child_wtxid));
     BOOST_CHECK(!child_state.IsValid());
     BOOST_CHECK_EQUAL(child_wtxid, dust_non_spend_both_parents->GetWitnessHash());
-    child_state = TxValidationState();
+    child_state = MempoolValidationState();
     child_wtxid = Wtxid();
 
     auto dust_spend_both_parents = make_tx({COutPoint{dust_txid, EPHEMERAL_DUST_INDEX}, COutPoint{dust_txid_2, EPHEMERAL_DUST_INDEX}}, /*version=*/2);
@@ -256,7 +256,7 @@ BOOST_FIXTURE_TEST_CASE(ephemeral_tests, RegTestingSetup)
     BOOST_CHECK(!CheckEphemeralSpends({dust_non_spend_both_parents}, dustrelay, pool, child_state, child_wtxid));
     BOOST_CHECK(!child_state.IsValid());
     BOOST_CHECK_EQUAL(child_wtxid, dust_non_spend_both_parents->GetWitnessHash());
-    child_state = TxValidationState();
+    child_state = MempoolValidationState();
     child_wtxid = Wtxid();
 
     // Spends both parents' dust

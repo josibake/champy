@@ -8,7 +8,7 @@
 #include <chain.h>
 #include <validation_state.h>
 #include <logging.h>
-#include <txmempool.h>
+#include <node/txmempool.h>
 #include <chainstate.h>
 #include <validationinterface.h>
 
@@ -55,7 +55,7 @@ void TxDownloadManager::MempoolAcceptedTx(const CTransactionRef& tx)
 {
     m_impl->MempoolAcceptedTx(tx);
 }
-RejectedTxTodo TxDownloadManager::MempoolRejectedTx(const CTransactionRef& ptx, const TxValidationState& state, NodeId nodeid, bool first_time_failure)
+RejectedTxTodo TxDownloadManager::MempoolRejectedTx(const CTransactionRef& ptx, const MempoolValidationState& state, NodeId nodeid, bool first_time_failure)
 {
     return m_impl->MempoolRejectedTx(ptx, state, nodeid, first_time_failure);
 }
@@ -347,7 +347,7 @@ std::vector<Txid> TxDownloadManagerImpl::GetUniqueParents(const CTransaction& tx
     return unique_parents;
 }
 
-node::RejectedTxTodo TxDownloadManagerImpl::MempoolRejectedTx(const CTransactionRef& ptx, const TxValidationState& state, NodeId nodeid, bool first_time_failure)
+node::RejectedTxTodo TxDownloadManagerImpl::MempoolRejectedTx(const CTransactionRef& ptx, const MempoolValidationState& state, NodeId nodeid, bool first_time_failure)
 {
     const CTransaction& tx{*ptx};
     // Results returned to caller
@@ -358,7 +358,7 @@ node::RejectedTxTodo TxDownloadManagerImpl::MempoolRejectedTx(const CTransaction
     // Populated if failure is reconsiderable and eligible package is found.
     std::optional<node::PackageToValidate> package_to_validate;
 
-    if (state.GetResult() == TxValidationResult::TX_MISSING_INPUTS) {
+    if (state.GetResult() == MempoolValidationResult::MISSING_INPUTS) {
         // Only process a new orphan if this is a first time failure, as otherwise it must be either
         // already in orphanage or from 1p1c processing.
         if (first_time_failure && !RecentRejectsFilter().contains(ptx->GetWitnessHash().ToUint256())) {
@@ -435,7 +435,7 @@ node::RejectedTxTodo TxDownloadManagerImpl::MempoolRejectedTx(const CTransaction
                 m_txrequest.ForgetTxHash(tx.GetWitnessHash().ToUint256());
             }
         }
-    } else if (state.GetResult() == TxValidationResult::TX_WITNESS_STRIPPED) {
+    } else if (state.GetResult() == MempoolValidationResult::WITNESS_STRIPPED) {
         add_extra_compact_tx = false;
     } else {
         // We can add the wtxid of this transaction to our reject filter.
@@ -451,7 +451,7 @@ node::RejectedTxTodo TxDownloadManagerImpl::MempoolRejectedTx(const CTransaction
         // See also comments in https://github.com/bitcoin/bitcoin/pull/18044#discussion_r443419034
         // for concerns around weakening security of unupgraded nodes
         // if we start doing this too early.
-        if (state.GetResult() == TxValidationResult::TX_RECONSIDERABLE) {
+        if (state.GetResult() == MempoolValidationResult::RECONSIDERABLE) {
             // If the result is TX_RECONSIDERABLE, add it to m_lazy_recent_rejects_reconsiderable
             // because we should not download or submit this transaction by itself again, but may
             // submit it as part of a package later.
@@ -478,7 +478,7 @@ node::RejectedTxTodo TxDownloadManagerImpl::MempoolRejectedTx(const CTransaction
         // parent-fetching by txid via the orphan-handling logic).
         // We only add the txid if it differs from the wtxid, to avoid wasting entries in the
         // rolling bloom filter.
-        if (state.GetResult() == TxValidationResult::TX_INPUTS_NOT_STANDARD && ptx->HasWitness()) {
+        if (state.GetResult() == MempoolValidationResult::INPUTS_NOT_STANDARD && ptx->HasWitness()) {
             RecentRejectsFilter().insert(ptx->GetHash().ToUint256());
             m_txrequest.ForgetTxHash(ptx->GetHash().ToUint256());
         }
@@ -486,7 +486,7 @@ node::RejectedTxTodo TxDownloadManagerImpl::MempoolRejectedTx(const CTransaction
 
     // If the tx failed in ProcessOrphanTx, it should be removed from the orphanage unless the
     // tx was still missing inputs. If the tx was not in the orphanage, EraseTx does nothing and returns 0.
-    if (state.GetResult() != TxValidationResult::TX_MISSING_INPUTS && m_orphanage->EraseTx(ptx->GetWitnessHash())) {
+    if (state.GetResult() != MempoolValidationResult::MISSING_INPUTS && m_orphanage->EraseTx(ptx->GetWitnessHash())) {
         LogDebug(BCLog::TXPACKAGES, "   removed orphan tx %s (wtxid=%s)\n", ptx->GetHash().ToString(), ptx->GetWitnessHash().ToString());
     }
 

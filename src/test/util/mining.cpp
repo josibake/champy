@@ -10,6 +10,7 @@
 #include <validation_state.h>
 #include <key_io.h>
 #include <node/context.h>
+#include <node/mempool_chain_sync.h>
 #include <pow.h>
 #include <primitives/transaction.h>
 #include <test/util/script.h>
@@ -20,6 +21,7 @@
 
 #include <algorithm>
 #include <memory>
+#include <optional>
 
 using node::BlockAssembler;
 using node::NodeContext;
@@ -110,7 +112,9 @@ COutPoint ProcessBlock(const NodeContext& node, const std::shared_ptr<CBlock>& b
     bool new_block;
     BlockValidationStateCatcher bvsc{block->GetHash()};
     node.validation_signals->RegisterValidationInterface(&bvsc);
-    const bool processed{ProcessNewBlock(chainman, block, true, true, &new_block)};
+    std::optional<node::MempoolChainSync> mempool_sync;
+    if (node.mempool) mempool_sync.emplace(*node.mempool);
+    const bool processed{ProcessNewBlock(chainman, mempool_sync ? &*mempool_sync : nullptr, block, true, true, &new_block)};
     const bool duplicate{!new_block && processed};
     assert(!duplicate);
     node.validation_signals->UnregisterValidationInterface(&bvsc);

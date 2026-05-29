@@ -5,7 +5,7 @@
 #include <node/coin.h>
 
 #include <node/context.h>
-#include <txmempool.h>
+#include <node/txmempool.h>
 #include <chainstate.h>
 
 namespace node {

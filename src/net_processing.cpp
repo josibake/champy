@@ -22,7 +22,7 @@
 #include <flatfile.h>
 #include <headerssync.h>
 #include <logging.h>
-#include <mempool_validation.h>
+#include <node/mempool_validation.h>
 #include <merkleblock.h>
 #include <net.h>
 #include <net_permissions.h>
@@ -53,7 +53,8 @@
 #include <streams.h>
 #include <sync.h>
 #include <tinyformat.h>
-#include <txmempool.h>
+#include <node/mempool_chain_sync.h>
+#include <node/txmempool.h>
 #include <uint256.h>
 #include <util/check.h>
 #include <util/strencodings.h>
@@ -604,7 +605,7 @@ private:
      * @returns a PackageToValidate if this transaction has a reconsiderable failure and an eligible package was found,
      * or std::nullopt otherwise.
      */
-    std::optional<node::PackageToValidate> ProcessInvalidTx(NodeId nodeid, const CTransactionRef& tx, const TxValidationState& result,
+    std::optional<node::PackageToValidate> ProcessInvalidTx(NodeId nodeid, const CTransactionRef& tx, const MempoolValidationState& result,
                                                       bool first_time_failure)
         EXCLUSIVE_LOCKS_REQUIRED(!m_peer_mutex, g_msgproc_mutex, m_tx_download_mutex);
 
@@ -1549,7 +1550,7 @@ void PeerManagerImpl::ReattemptPrivateBroadcast(CScheduler& scheduler)
     if (!stale_txs.empty()) {
         LOCK(cs_main);
         for (const auto& stale_tx : stale_txs) {
-            auto mempool_acceptable = ProcessTransaction(m_chainman, stale_tx, /*test_accept=*/true);
+            auto mempool_acceptable = ProcessTransaction(m_chainman, m_mempool, stale_tx, /*test_accept=*/true);
             if (mempool_acceptable.m_result_type == MempoolAcceptResult::ResultType::VALID) {
                 LogDebug(BCLog::PRIVBROADCAST,
                          "Reattempting broadcast of stale txid=%s wtxid=%s",
@@ -2246,7 +2247,8 @@ void PeerManagerImpl::ProcessGetBlockData(CNode& pfrom, Peer& peer, const CInv& 
     } // release cs_main before calling ActivateBestChain
     if (need_activate_chain) {
         BlockValidationState state;
-        if (!m_chainman.ActiveChainstate().ActivateBestChain(state, a_recent_block)) {
+        node::MempoolChainSync mempool_sync{m_mempool};
+        if (!m_chainman.ActiveChainstate().ActivateBestChain(state, a_recent_block, &mempool_sync)) {
             LogDebug(BCLog::NET, "failed to activate chain (%s)\n", state.ToString());
         }
     }
@@ -3012,7 +3014,7 @@ void PeerManagerImpl::ProcessHeadersMessage(CNode& pfrom, Peer& peer,
     return;
 }
 
-std::optional<node::PackageToValidate> PeerManagerImpl::ProcessInvalidTx(NodeId nodeid, const CTransactionRef& ptx, const TxValidationState& state,
+std::optional<node::PackageToValidate> PeerManagerImpl::ProcessInvalidTx(NodeId nodeid, const CTransactionRef& ptx, const MempoolValidationState& state,
                                        bool first_time_failure)
 {
     AssertLockNotHeld(m_peer_mutex);
@@ -3126,8 +3128,8 @@ bool PeerManagerImpl::ProcessOrphanTx(Peer& peer)
     CTransactionRef porphanTx = nullptr;
 
     while (CTransactionRef porphanTx = m_txdownloadman.GetTxToReconsider(peer.m_id)) {
-        const MempoolAcceptResult result = ProcessTransaction(m_chainman, porphanTx);
-        const TxValidationState& state = result.m_state;
+        const MempoolAcceptResult result = ProcessTransaction(m_chainman, m_mempool, porphanTx);
+        const MempoolValidationState& state = result.m_state;
         const Txid& orphanHash = porphanTx->GetHash();
         const Wtxid& orphan_wtxid = porphanTx->GetWitnessHash();
 
@@ -3135,7 +3137,7 @@ bool PeerManagerImpl::ProcessOrphanTx(Peer& peer)
             LogDebug(BCLog::TXPACKAGES, "   accepted orphan tx %s (wtxid=%s)\n", orphanHash.ToString(), orphan_wtxid.ToString());
             ProcessValidTx(peer.m_id, porphanTx, result.m_replaced_transactions);
             return true;
-        } else if (state.GetResult() != TxValidationResult::TX_MISSING_INPUTS) {
+        } else if (state.GetResult() != MempoolValidationResult::MISSING_INPUTS) {
             LogDebug(BCLog::TXPACKAGES, "   invalid orphan tx %s (wtxid=%s) from peer=%d. %s\n",
                 orphanHash.ToString(),
                 orphan_wtxid.ToString(),
@@ -3143,9 +3145,9 @@ bool PeerManagerImpl::ProcessOrphanTx(Peer& peer)
                 state.ToString());
 
             if (Assume(state.IsInvalid() &&
-                       state.GetResult() != TxValidationResult::TX_UNKNOWN &&
-                       state.GetResult() != TxValidationResult::TX_NO_MEMPOOL &&
-                       state.GetResult() != TxValidationResult::TX_RESULT_UNSET)) {
+                       state.GetResult() != MempoolValidationResult::UNKNOWN &&
+                       state.GetResult() != MempoolValidationResult::NO_MEMPOOL &&
+                       state.GetResult() != MempoolValidationResult::RESULT_UNSET)) {
                 ProcessInvalidTx(peer.m_id, porphanTx, state, /*first_time_failure=*/false);
             }
             return true;
@@ -3158,7 +3160,8 @@ bool PeerManagerImpl::ProcessOrphanTx(Peer& peer)
 void PeerManagerImpl::ProcessBlock(CNode& node, const std::shared_ptr<const CBlock>& block, bool force_processing, bool min_pow_checked)
 {
     bool new_block{false};
-    ProcessNewBlock(m_chainman, block, force_processing, min_pow_checked, &new_block);
+    node::MempoolChainSync mempool_sync{m_mempool};
+    ProcessNewBlock(m_chainman, &mempool_sync, block, force_processing, min_pow_checked, &new_block);
     if (new_block) {
         node.m_last_block_time = GetTime<std::chrono::seconds>();
         // In case this block came from a different peer than we requested
@@ -3935,7 +3938,8 @@ void PeerManagerImpl::ProcessMessage(Peer& peer, CNode& pfrom, const std::string
                 a_recent_block = m_most_recent_block;
             }
             BlockValidationState state;
-            if (!m_chainman.ActiveChainstate().ActivateBestChain(state, a_recent_block)) {
+            node::MempoolChainSync mempool_sync{m_mempool};
+            if (!m_chainman.ActiveChainstate().ActivateBestChain(state, a_recent_block, &mempool_sync)) {
                 LogDebug(BCLog::NET, "failed to activate chain (%s)\n", state.ToString());
             }
         }
@@ -4178,8 +4182,8 @@ void PeerManagerImpl::ProcessMessage(Peer& peer, CNode& pfrom, const std::string
         // ReceivedTx should not be telling us to validate the tx and a package.
         Assume(!package_to_validate.has_value());
 
-        const MempoolAcceptResult result = ProcessTransaction(m_chainman, ptx);
-        const TxValidationState& state = result.m_state;
+        const MempoolAcceptResult result = ProcessTransaction(m_chainman, m_mempool, ptx);
+        const MempoolValidationState& state = result.m_state;
 
         if (result.m_result_type == MempoolAcceptResult::ResultType::VALID) {
             ProcessValidTx(pfrom.GetId(), ptx, result.m_replaced_transactions);
