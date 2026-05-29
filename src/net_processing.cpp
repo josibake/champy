@@ -7,11 +7,11 @@
 
 #include <addrman.h>
 #include <arith_uint256.h>
-#include <block_validation.h>
+#include <validation/block_validation.h>
 #include <banman.h>
 #include <blockencodings.h>
 #include <chain.h>
-#include <chain_validation.h>
+#include <validation/chain_validation.h>
 #include <chainparams.h>
 #include <common/bloom.h>
 #include <consensus/amount.h>

@@ -4,7 +4,7 @@
 
 #include <addresstype.h>
 #include <bench/bench.h>
-#include <block_validation.h>
+#include <validation/block_validation.h>
 #include <interfaces/chain.h>
 #include <kernel/cs_main.h>
 #include <policy/feerate.h>

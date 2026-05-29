@@ -2,11 +2,11 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#include <core_block_commit_adapters.h>
+#include <validation/core_block_commit_adapters.h>
 
-#include <block_data_adapters.h>
-#include <block_coin_effects.h>
-#include <block_index_adapters.h>
+#include <validation/block_data_adapters.h>
+#include <validation/block_coin_effects.h>
+#include <validation/block_index_adapters.h>
 #include <chain.h>
 #include <coins.h>
 #include <undo.h>

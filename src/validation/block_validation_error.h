@@ -5,7 +5,7 @@
 #ifndef BITCOIN_BLOCK_VALIDATION_ERROR_H
 #define BITCOIN_BLOCK_VALIDATION_ERROR_H
 
-#include <block_validation_result.h>
+#include <validation/block_validation_result.h>
 
 class BlockValidationState;
 

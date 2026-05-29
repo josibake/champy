@@ -8,11 +8,11 @@
 #include <chainstate.h>
 
 #include <arith_uint256.h>
-#include <block_data_adapters.h>
-#include <block_index_adapters.h>
-#include <block_validation.h>
+#include <validation/block_data_adapters.h>
+#include <validation/block_index_adapters.h>
+#include <validation/block_validation.h>
 #include <chain.h>
-#include <chain_validation.h>
+#include <validation/chain_validation.h>
 #include <chainstate_mempool_sync.h>
 #include <clientversion.h>
 #include <consensus/amount.h>

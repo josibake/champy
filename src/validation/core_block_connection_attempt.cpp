@@ -2,9 +2,9 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#include <core_block_connection_attempt.h>
+#include <validation/core_block_connection_attempt.h>
 
-#include <core_block_commit_adapters.h>
+#include <validation/core_block_commit_adapters.h>
 
 #include <utility>
 

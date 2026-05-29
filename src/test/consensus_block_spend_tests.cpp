@@ -5,9 +5,9 @@
 #include <addresstype.h>
 #include <chain.h>
 #include <coins.h>
-#include <block_coin_effects.h>
+#include <validation/block_coin_effects.h>
 #include <consensus/block_spend.h>
-#include <coins_view_spend_state.h>
+#include <validation/coins_view_spend_state.h>
 #include <consensus/consensus.h>
 #include <consensus/validation.h>
 #include <primitives/block.h>

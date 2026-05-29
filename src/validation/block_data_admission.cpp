@@ -2,7 +2,7 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#include <block_data_admission.h>
+#include <validation/block_data_admission.h>
 
 BlockDataAdmissionResult GetBlockDataAdmissionResult(const BlockDataAdmissionContext& context)
 {

@@ -5,7 +5,7 @@
 #include <addresstype.h>
 #include <coins.h>
 #include <consensus/consensus.h>
-#include <tx_verify.h>
+#include <validation/tx_verify.h>
 #include <key.h>
 #include <pubkey.h>
 #include <script/interpreter.h>

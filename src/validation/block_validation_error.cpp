@@ -2,7 +2,7 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#include <block_validation_error.h>
+#include <validation/block_validation_error.h>
 
 #include <consensus/block_check.h>
 #include <consensus/block_commit.h>

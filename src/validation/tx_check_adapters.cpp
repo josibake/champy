@@ -2,7 +2,7 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#include <tx_check_adapters.h>
+#include <validation/tx_check_adapters.h>
 
 #include <consensus/tx_check.h>
 #include <validation_state.h>

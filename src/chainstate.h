@@ -7,7 +7,7 @@
 #define BITCOIN_CHAINSTATE_H
 
 #include <arith_uint256.h>
-#include <block_validation.h>
+#include <validation/block_validation.h>
 #include <chain.h>
 #include <chainstate_cache.h>
 #include <checkqueue.h>

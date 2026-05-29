@@ -6,8 +6,8 @@
 
 #include <addrman.h>
 #include <banman.h>
-#include <block_validation.h>
-#include <chain_validation.h>
+#include <validation/block_validation.h>
+#include <validation/chain_validation.h>
 #include <chainparams.h>
 #include <common/system.h>
 #include <consensus/consensus.h>

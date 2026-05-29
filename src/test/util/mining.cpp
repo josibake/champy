@@ -4,8 +4,8 @@
 
 #include <test/util/mining.h>
 
-#include <block_validation.h>
-#include <chain_validation.h>
+#include <validation/block_validation.h>
+#include <validation/chain_validation.h>
 #include <chainparams.h>
 #include <consensus/merkle.h>
 #include <validation_state.h>

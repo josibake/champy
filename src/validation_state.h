@@ -6,7 +6,7 @@
 #ifndef BITCOIN_VALIDATION_STATE_H
 #define BITCOIN_VALIDATION_STATE_H
 
-#include <block_validation_result.h>
+#include <validation/block_validation_result.h>
 #include <consensus/validation.h>
 
 #include <string>

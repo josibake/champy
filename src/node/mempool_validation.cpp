@@ -5,13 +5,13 @@
 
 #include <node/mempool_validation.h>
 
-#include <block_validation_policy.h>
+#include <validation/block_validation_policy.h>
 #include <chain.h>
 #include <chainstate_cache.h>
 #include <chainstate.h>
 #include <consensus/consensus.h>
-#include <tx_check_adapters.h>
-#include <tx_verify.h>
+#include <validation/tx_check_adapters.h>
+#include <validation/tx_verify.h>
 #include <kernel/chainparams.h>
 #include <node/mempool_entry.h>
 #include <kernel/notifications_interface.h>
@@ -23,7 +23,7 @@
 #include <policy/truc_policy.h>
 #include <primitives/transaction.h>
 #include <script/sigcache.h>
-#include <script_validation.h>
+#include <validation/script_validation.h>
 #include <tinyformat.h>
 #include <node/txmempool.h>
 #include <uint256.h>

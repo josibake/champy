@@ -12,7 +12,7 @@
 #include <node/txmempool.h>
 #include <primitives/block.h>
 #include <primitives/transaction.h>
-#include <tx_verify.h>
+#include <validation/tx_verify.h>
 #include <util/check.h>
 #include <util/time.h>
 

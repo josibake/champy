@@ -2,10 +2,10 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#include <core_block_policy.h>
+#include <validation/core_block_policy.h>
 
-#include <block_index_adapters.h>
-#include <block_validation_policy.h>
+#include <validation/block_index_adapters.h>
+#include <validation/block_validation_policy.h>
 #include <chain.h>
 #include <chainstate.h>
 #include <consensus/consensus.h>

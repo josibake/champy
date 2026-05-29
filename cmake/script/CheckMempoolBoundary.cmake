@@ -130,7 +130,7 @@ forbid_glob("src/kernel/txmempool*")
 foreach(relative_path IN ITEMS
     src/chainstate.cpp
     src/chainstate.h
-    src/block_validation.h)
+    src/validation/block_validation.h)
   forbid_text("${relative_path}" "<node/txmempool.h>")
   forbid_text("${relative_path}" "<node/mempool_chain_sync.h>")
   forbid_text("${relative_path}" "<node/mempool_validation.h>")

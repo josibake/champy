@@ -5,6 +5,9 @@ This branch separates consensus rule evaluation from Core's node runtime.
 The goal is not to rewrite Bitcoin Core. The goal is to make the consensus
 path easier to test, easier to reason about, and easier to extract later.
 
+For validation locking, scheduling, and callback rules, see
+[validation-execution-contracts.md](validation-execution-contracts.md).
+
 ## Layers
 
 ### Consensus
@@ -41,6 +44,8 @@ It owns:
 
 Validation calls consensus helpers and applies their results to Core's current
 runtime.
+
+Validation-layer adapters and services live under `src/validation`.
 
 Mempool admission is separate from chain validation. It may call consensus
 transaction helpers, but relay policy, package policy, fee policy, and mempool

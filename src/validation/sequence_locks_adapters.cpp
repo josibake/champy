@@ -2,7 +2,7 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#include <sequence_locks_adapters.h>
+#include <validation/sequence_locks_adapters.h>
 
 #include <chain.h>
 #include <consensus/consensus.h>

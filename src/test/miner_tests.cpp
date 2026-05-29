@@ -3,13 +3,13 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #include <addresstype.h>
-#include <block_validation.h>
-#include <chain_validation.h>
+#include <validation/block_validation.h>
+#include <validation/chain_validation.h>
 #include <coins.h>
 #include <common/system.h>
 #include <consensus/consensus.h>
 #include <consensus/merkle.h>
-#include <tx_verify.h>
+#include <validation/tx_verify.h>
 #include <interfaces/mining.h>
 #include <node/mempool_validation.h>
 #include <node/miner.h>

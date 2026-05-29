@@ -3,7 +3,7 @@
 // file COPYING or https://opensource.org/license/mit.
 
 #include <arith_uint256.h>
-#include <block_validation.h>
+#include <validation/block_validation.h>
 #include <chain.h>
 #include <chainparams.h>
 #include <headerssync.h>

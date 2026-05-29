@@ -6,8 +6,8 @@
 #include <clientversion.h>
 #include <consensus/amount.h>
 #include <consensus/consensus.h>
-#include <tx_check_adapters.h>
-#include <tx_verify.h>
+#include <validation/tx_check_adapters.h>
+#include <validation/tx_verify.h>
 #include <validation_state.h>
 #include <core_io.h>
 #include <key.h>

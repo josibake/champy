@@ -4,7 +4,7 @@
 
 #include <boost/test/unit_test.hpp>
 
-#include <chain_validation.h>
+#include <validation/chain_validation.h>
 #include <chainparams.h>
 #include <chainstate.h>
 #include <test/util/mining.h>

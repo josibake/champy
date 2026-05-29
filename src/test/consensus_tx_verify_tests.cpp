@@ -3,7 +3,7 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #include <consensus/sequence_locks.h>
-#include <sequence_locks_adapters.h>
+#include <validation/sequence_locks_adapters.h>
 
 #include <chain.h>
 #include <consensus/consensus.h>

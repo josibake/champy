@@ -4,8 +4,8 @@
 
 #include <coins.h>
 #include <consensus/amount.h>
-#include <tx_check_adapters.h>
-#include <tx_verify.h>
+#include <validation/tx_check_adapters.h>
+#include <validation/tx_verify.h>
 #include <validation_state.h>
 #include <policy/policy.h>
 #include <primitives/transaction.h>

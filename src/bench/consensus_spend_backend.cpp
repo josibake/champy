@@ -5,7 +5,7 @@
 #include <bench/bench.h>
 #include <bench/nanobench.h>
 #include <coins.h>
-#include <coins_view_spend_state.h>
+#include <validation/coins_view_spend_state.h>
 #include <consensus/snapshot_spend_state.h>
 #include <primitives/transaction.h>
 #include <script/script.h>

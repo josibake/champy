@@ -6,7 +6,7 @@
 #define BITCOIN_TEST_UTIL_CONSENSUS_FIXTURE_H
 
 #include <consensus/amount.h>
-#include <coins_view_spend_state.h>
+#include <validation/coins_view_spend_state.h>
 #include <consensus/snapshot_spend_state.h>
 #include <consensus/spend_state.h>
 #include <consensus/block_consensus_pipeline.h>

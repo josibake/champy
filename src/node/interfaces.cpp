@@ -4,10 +4,10 @@
 
 #include <addrdb.h>
 #include <banman.h>
-#include <block_validation.h>
+#include <validation/block_validation.h>
 #include <btcsignals.h>
 #include <chain.h>
-#include <chain_validation.h>
+#include <validation/chain_validation.h>
 #include <chainparams.h>
 #include <common/args.h>
 #include <consensus/merkle.h>

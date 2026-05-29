@@ -5,16 +5,16 @@
 
 #include <node/miner.h>
 
-#include <block_validation.h>
+#include <validation/block_validation.h>
 #include <chain.h>
-#include <chain_validation.h>
+#include <validation/chain_validation.h>
 #include <chainparams.h>
 #include <coins.h>
 #include <common/args.h>
 #include <consensus/amount.h>
 #include <consensus/consensus.h>
 #include <consensus/merkle.h>
-#include <tx_verify.h>
+#include <validation/tx_verify.h>
 #include <validation_state.h>
 #include <deploymentstatus.h>
 #include <logging.h>

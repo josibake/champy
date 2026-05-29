@@ -6,14 +6,14 @@
 
 #include <kernel/bitcoinkernel.h>
 
-#include <block_data_adapters.h>
-#include <block_index_adapters.h>
-#include <block_validation.h>
+#include <validation/block_data_adapters.h>
+#include <validation/block_index_adapters.h>
+#include <validation/block_validation.h>
 #include <chain.h>
-#include <chain_validation.h>
+#include <validation/chain_validation.h>
 #include <coins.h>
 #include <consensus/block_check.h>
-#include <tx_check_adapters.h>
+#include <validation/tx_check_adapters.h>
 #include <validation_state.h>
 #include <dbwrapper.h>
 #include <kernel/caches.h>

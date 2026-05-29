@@ -9,7 +9,7 @@
 #include <coins.h>
 #include <common/system.h>
 #include <consensus/consensus.h>
-#include <tx_verify.h>
+#include <validation/tx_verify.h>
 #include <validation_state.h>
 #include <policy/policy.h>
 #include <policy/settings.h>

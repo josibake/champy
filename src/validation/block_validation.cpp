@@ -3,16 +3,16 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#include <block_validation_internal.h>
+#include <validation/block_validation_internal.h>
 
 #include <arith_uint256.h>
-#include <block_data_admission.h>
-#include <block_data_adapters.h>
-#include <block_index_adapters.h>
-#include <block_script_check_adapters.h>
-#include <block_validation_adapters.h>
-#include <block_validation_error.h>
-#include <block_validation_policy.h>
+#include <validation/block_data_admission.h>
+#include <validation/block_data_adapters.h>
+#include <validation/block_index_adapters.h>
+#include <validation/block_script_check_adapters.h>
+#include <validation/block_validation_adapters.h>
+#include <validation/block_validation_error.h>
+#include <validation/block_validation_policy.h>
 #include <chain.h>
 #include <chainstate.h>
 #include <consensus/amount.h>
@@ -21,8 +21,8 @@
 #include <consensus/block_spend.h>
 #include <consensus/consensus.h>
 #include <consensus/merkle.h>
-#include <connect_block_bench.h>
-#include <coins_view_spend_state.h>
+#include <validation/connect_block_bench.h>
+#include <validation/coins_view_spend_state.h>
 #include <flatfile.h>
 #include <hash.h>
 #include <kernel/chainparams.h>

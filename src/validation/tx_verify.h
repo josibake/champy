@@ -8,7 +8,7 @@
 #include <consensus/amount.h>
 #include <consensus/locktime.h>
 #include <consensus/sigops.h>
-#include <sequence_locks_adapters.h>
+#include <validation/sequence_locks_adapters.h>
 #include <script/verify_flags.h>
 
 #include <cstdint>

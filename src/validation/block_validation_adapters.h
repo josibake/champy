@@ -5,9 +5,9 @@
 #ifndef BITCOIN_BLOCK_VALIDATION_ADAPTERS_H
 #define BITCOIN_BLOCK_VALIDATION_ADAPTERS_H
 
-#include <block_header_context_adapters.h>
-#include <core_block_commit_adapters.h>
-#include <core_block_connection_attempt.h>
-#include <core_block_policy.h>
+#include <validation/block_header_context_adapters.h>
+#include <validation/core_block_commit_adapters.h>
+#include <validation/core_block_connection_attempt.h>
+#include <validation/core_block_policy.h>
 
 #endif // BITCOIN_BLOCK_VALIDATION_ADAPTERS_H

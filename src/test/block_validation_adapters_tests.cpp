@@ -4,12 +4,12 @@
 
 #include <boost/test/unit_test.hpp>
 
-#include <block_data_adapters.h>
-#include <block_index_adapters.h>
+#include <validation/block_data_adapters.h>
+#include <validation/block_index_adapters.h>
 #include <chain.h>
 #include <coins.h>
 #include <consensus/block_spend.h>
-#include <core_block_commit_adapters.h>
+#include <validation/core_block_commit_adapters.h>
 #include <flatfile.h>
 #include <kernel/cs_main.h>
 #include <primitives/transaction.h>

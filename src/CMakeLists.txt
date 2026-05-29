@@ -199,24 +199,24 @@ include(InstallBinaryComponent)
 # Core chain-validation sources shared by bitcoin_node and bitcoinkernel while
 # the consensus boundary is being extracted.
 set(BITCOIN_CHAIN_VALIDATION_SOURCES
-  ${CMAKE_CURRENT_SOURCE_DIR}/block_data_admission.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/block_data_adapters.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/block_index_adapters.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/block_coin_effects.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/block_header_context_adapters.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/block_script_check_adapters.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/block_validation.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/block_validation_error.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/block_validation_policy.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/chain_validation.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/coins_view_spend_state.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/connect_block_bench.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/core_block_commit_adapters.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/core_block_connection_attempt.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/core_block_policy.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/sequence_locks_adapters.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/tx_check_adapters.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/tx_verify.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/validation/block_data_admission.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/validation/block_data_adapters.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/validation/block_index_adapters.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/validation/block_coin_effects.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/validation/block_header_context_adapters.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/validation/block_script_check_adapters.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/validation/block_validation.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/validation/block_validation_error.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/validation/block_validation_policy.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/validation/chain_validation.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/validation/coins_view_spend_state.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/validation/connect_block_bench.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/validation/core_block_commit_adapters.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/validation/core_block_connection_attempt.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/validation/core_block_policy.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/validation/sequence_locks_adapters.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/validation/tx_check_adapters.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/validation/tx_verify.cpp
 )
 
 add_library(bitcoin_chain_validation STATIC EXCLUDE_FROM_ALL

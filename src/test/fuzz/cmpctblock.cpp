@@ -3,7 +3,7 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #include <addrman.h>
-#include <block_validation.h>
+#include <validation/block_validation.h>
 #include <blockencodings.h>
 #include <chain.h>
 #include <chainparams.h>

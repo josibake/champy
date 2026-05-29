@@ -5,7 +5,7 @@
 #ifndef BITCOIN_CHAIN_VALIDATION_H
 #define BITCOIN_CHAIN_VALIDATION_H
 
-#include <block_validation.h>
+#include <validation/block_validation.h>
 
 #include <memory>
 #include <span>

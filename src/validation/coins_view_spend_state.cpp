@@ -2,11 +2,11 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#include <coins_view_spend_state.h>
+#include <validation/coins_view_spend_state.h>
 
 #include <chain.h>
 #include <coins.h>
-#include <block_coin_effects.h>
+#include <validation/block_coin_effects.h>
 #include <undo.h>
 
 #include <algorithm>

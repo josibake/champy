@@ -3,7 +3,7 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#include <block_script_check_adapters.h>
+#include <validation/block_script_check_adapters.h>
 
 #include <chainstate.h>
 #include <coins.h>
@@ -14,7 +14,7 @@
 #include <script/interpreter.h>
 #include <script/script_check.h>
 #include <script/script_error.h>
-#include <script_validation.h>
+#include <validation/script_validation.h>
 #include <span.h>
 #include <tinyformat.h>
 #include <validation_state.h>

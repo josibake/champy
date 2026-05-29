@@ -2,7 +2,7 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#include <tx_verify.h>
+#include <validation/tx_verify.h>
 
 #include <chain.h>
 #include <coins.h>

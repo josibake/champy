@@ -2,7 +2,7 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#include <block_coin_effects.h>
+#include <validation/block_coin_effects.h>
 
 #include <coins.h>
 #include <primitives/transaction.h>

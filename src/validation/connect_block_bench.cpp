@@ -2,7 +2,7 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#include <connect_block_bench.h>
+#include <validation/connect_block_bench.h>
 
 #include <chainstate.h>
 #include <util/log.h>

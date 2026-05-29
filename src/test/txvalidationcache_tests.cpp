@@ -9,7 +9,7 @@
 #include <script/sigcache.h>
 #include <script/sign.h>
 #include <script/signingprovider.h>
-#include <script_validation.h>
+#include <validation/script_validation.h>
 #include <test/util/setup_common.h>
 #include <node/txmempool.h>
 #include <util/chaintype.h>

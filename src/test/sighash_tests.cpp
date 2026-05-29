@@ -3,7 +3,7 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #include <common/system.h>
-#include <tx_check_adapters.h>
+#include <validation/tx_check_adapters.h>
 #include <validation_state.h>
 #include <hash.h>
 #include <script/interpreter.h>

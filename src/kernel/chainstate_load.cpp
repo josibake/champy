@@ -4,7 +4,7 @@
 
 #include <kernel/chainstate_load.h>
 
-#include <block_validation.h>
+#include <validation/block_validation.h>
 #include <arith_uint256.h>
 #include <chain.h>
 #include <coins.h>

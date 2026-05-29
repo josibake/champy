@@ -2,7 +2,7 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#include <block_index_adapters.h>
+#include <validation/block_index_adapters.h>
 
 #include <chainstate.h>
 #include <flatfile.h>

@@ -4,7 +4,7 @@
 
 #include <blockencodings.h>
 
-#include <block_validation.h>
+#include <validation/block_validation.h>
 #include <chainparams.h>
 #include <common/system.h>
 #include <consensus/consensus.h>
