@@ -141,10 +141,6 @@ bool RollforwardBlock(Chainstate& chainstate, const CBlockIndex* pindex, CCoinsV
 bool ReplayBlocks(Chainstate& chainstate);
 void UpdateUncommittedBlockStructures(const ChainstateManager& chainman, CBlock& block, const CBlockIndex* pindexPrev);
 void GenerateCoinbaseCommitment(const ChainstateManager& chainman, CBlock& block, const CBlockIndex* pindexPrev);
-[[nodiscard]] NewBlockHeadersResult ProcessNewBlockHeaders(ChainstateManager& chainman, std::span<const CBlockHeader> headers, BlockHeaderAcceptanceOptions options, BlockValidationTime time, BlockValidationState& state) LOCKS_EXCLUDED(cs_main);
-[[nodiscard]] BlockAcceptanceResult AcceptBlock(ChainstateManager& chainman, const std::shared_ptr<const CBlock>& pblock, BlockValidationState& state, BlockAcceptanceOptions options, BlockValidationTime time) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
-[[nodiscard]] NewBlockProcessingResult ProcessNewBlock(ChainstateManager& chainman, ChainstateMempoolSync* mempool_sync, const std::shared_ptr<const CBlock>& block, NewBlockProcessingOptions options, BlockValidationTime time) LOCKS_EXCLUDED(cs_main);
-[[nodiscard]] NewBlockProcessingResult ProcessNewBlock(ChainstateManager& chainman, const std::shared_ptr<const CBlock>& block, NewBlockProcessingOptions options, BlockValidationTime time) LOCKS_EXCLUDED(cs_main);
 
 /** Context-independent validity checks */
 bool CheckBlock(const CBlock& block, BlockValidationState& state, const Consensus::Params& consensusParams, const Consensus::BlockCheckOptions& options = {});
@@ -160,28 +156,6 @@ bool IsBlockMutated(const CBlock& block, BlockMutationOptions options);
 
 /** Return the sum of the claimed work on a given set of headers. No verification of PoW is done. */
 arith_uint256 CalculateClaimedHeadersWork(std::span<const CBlockHeader> headers);
-
-/**
- * Verify a block, including transactions.
- *
- * @param[in]   block       The block we want to process. Must connect to the
- *                          current tip.
- * @param[in]   chainstate  The chainstate to connect to.
- * @param[in]   options     Context-free block checks to run before contextual
- *                          validation. Header nBits is always checked.
- *
- * @return Valid or Invalid state. This doesn't currently return an Error state,
- *         and shouldn't unless there is something wrong with the existing
- *         chainstate. (This is different from functions like AcceptBlock which
- *         can fail trying to save new data.)
- *
- * For signets the challenge verification is skipped when check_pow is false.
- */
-BlockValidationState TestBlockValidity(
-    Chainstate& chainstate,
-    const CBlock& block,
-    const Consensus::BlockCheckOptions& options,
-    BlockValidationTime time) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
 
 void LimitValidationInterfaceQueue(ValidationSignals& signals) LOCKS_EXCLUDED(cs_main);
 

@@ -3,6 +3,7 @@
 // file COPYING or https://www.opensource.org/licenses/mit-license.php.
 
 #include <block_validation.h>
+#include <chain_validation.h>
 #include <chainparams.h>
 #include <node/miner.h>
 #include <net_processing.h>
@@ -26,8 +27,7 @@ static void mineBlock(const node::NodeContext& node, std::chrono::seconds block_
     while (!CheckProofOfWork(block.GetHash(), block.nBits, node.chainman->GetConsensus())) ++block.nNonce;
     block.fChecked = true; // little speedup
     SetMockTime(curr_time); // process block at current time
-    Assert(ProcessNewBlock(
-        *node.chainman,
+    Assert(ChainValidationService{*node.chainman}.ProcessNewBlock(
         std::make_shared<const CBlock>(block),
         {.force_processing = true, .header = {.min_pow_checked = true}},
         CurrentBlockValidationTime())

@@ -12,6 +12,7 @@
 #include <block_index_adapters.h>
 #include <block_validation.h>
 #include <chain.h>
+#include <chain_validation.h>
 #include <chainstate_mempool_sync.h>
 #include <clientversion.h>
 #include <consensus/amount.h>
@@ -1595,8 +1596,7 @@ void ChainstateManager::LoadExternalBlockFile(
                         nRewind = blkdat.GetPos();
 
                         BlockValidationState state;
-                        if (AcceptBlock(
-                                *this,
+                        if (ChainValidationService{*this}.AcceptBlock(
                                 pblock,
                                 state,
                                 {.block_data_requested = true, .existing_block_pos = dbp, .header = {.min_pow_checked = true}},
@@ -1659,8 +1659,7 @@ void ChainstateManager::LoadExternalBlockFile(
                             LogDebug(BCLog::REINDEX, "%s: Processing out of order child %s of %s", __func__, block_hash.ToString(), head.ToString());
                             LOCK(cs_main);
                             BlockValidationState dummy;
-                            if (AcceptBlock(
-                                    *this,
+                            if (ChainValidationService{*this}.AcceptBlock(
                                     pblockrecursive,
                                     dummy,
                                     {.block_data_requested = true, .existing_block_pos = &it->second, .header = {.min_pow_checked = true}},

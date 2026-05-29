@@ -34,7 +34,10 @@ foreach(relative_path IN ITEMS
     src/block_data_adapters.cpp
     src/block_data_adapters.h
     src/block_index_adapters.cpp
-    src/block_index_adapters.h)
+    src/block_index_adapters.h
+    src/block_validation_internal.h
+    src/chain_validation.cpp
+    src/chain_validation.h)
   require_file("${relative_path}")
 endforeach()
 
@@ -45,6 +48,13 @@ require_text("src/CMakeLists.txt" "BITCOIN_CHAIN_VALIDATION_SOURCES")
 require_text("src/CMakeLists.txt" "target_link_libraries(bitcoin_chain_validation")
 require_text("src/CMakeLists.txt" "bitcoin_chain_validation")
 require_text("src/kernel/CMakeLists.txt" "bitcoin_chain_validation")
+require_text("src/block_validation.cpp" "#include <block_validation_internal.h>")
+require_text("src/chain_validation.cpp" "#include <block_validation_internal.h>")
+require_text("src/chain_validation.h" "class ChainValidationService")
+require_text("src/block_validation_internal.h" "ProcessNewBlockHeaders(")
+require_text("src/block_validation_internal.h" "AcceptBlock(")
+require_text("src/block_validation_internal.h" "ProcessNewBlock(")
+require_text("src/block_validation_internal.h" "TestBlockValidity(")
 require_text("src/block_data_admission.h" "struct BlockDataAdmissionContext")
 require_text("src/CMakeLists.txt" "block_index_adapters.cpp")
 require_text("src/block_data_adapters.h" "class BlockDataStore")
@@ -61,6 +71,26 @@ require_text("src/chainstate.cpp" "CoreBlockIndexStore")
 require_text("src/core_block_policy.cpp" "CoreBlockIndexStore")
 require_text("src/kernel/bitcoinkernel.cpp" "CoreBlockDataStore")
 require_text("src/kernel/bitcoinkernel.cpp" "CoreBlockIndexStore")
+
+foreach(needle IN ITEMS
+    "ProcessNewBlockHeaders("
+    "AcceptBlock("
+    "ProcessNewBlock("
+    "TestBlockValidity(")
+  forbid_text("src/block_validation.h" "${needle}")
+endforeach()
+
+file(GLOB_RECURSE validation_boundary_sources
+  "${SOURCE_DIR}/src/*.cpp"
+  "${SOURCE_DIR}/src/*.h"
+)
+foreach(path IN LISTS validation_boundary_sources)
+  file(RELATIVE_PATH relative_path "${SOURCE_DIR}" "${path}")
+  if(NOT relative_path STREQUAL "src/block_validation.cpp" AND
+     NOT relative_path STREQUAL "src/chain_validation.cpp")
+    forbid_text("${relative_path}" "#include <block_validation_internal.h>")
+  endif()
+endforeach()
 
 foreach(relative_path IN ITEMS
     src/block_validation.cpp

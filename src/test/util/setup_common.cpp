@@ -7,6 +7,7 @@
 #include <addrman.h>
 #include <banman.h>
 #include <block_validation.h>
+#include <chain_validation.h>
 #include <chainparams.h>
 #include <common/system.h>
 #include <consensus/consensus.h>
@@ -431,8 +432,7 @@ CBlock TestChain100Setup::CreateAndProcessBlock(
     std::shared_ptr<const CBlock> shared_pblock = std::make_shared<const CBlock>(block);
     std::optional<node::MempoolChainSync> mempool_sync;
     if (m_node.mempool) mempool_sync.emplace(*m_node.mempool);
-    (void)ProcessNewBlock(
-        *Assert(m_node.chainman),
+    (void)ChainValidationService{*Assert(m_node.chainman)}.ProcessNewBlock(
         mempool_sync ? &*mempool_sync : nullptr,
         shared_pblock,
         {.force_processing = true, .header = {.min_pow_checked = true}},

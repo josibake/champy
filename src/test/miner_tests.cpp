@@ -4,6 +4,7 @@
 
 #include <addresstype.h>
 #include <block_validation.h>
+#include <chain_validation.h>
 #include <coins.h>
 #include <common/system.h>
 #include <consensus/consensus.h>
@@ -809,12 +810,11 @@ BOOST_AUTO_TEST_CASE(CreateNewBlock_validity)
             block.nNonce = bi.nonce;
         }
         std::shared_ptr<const CBlock> shared_pblock = std::make_shared<const CBlock>(block);
-        // Alternate calls between Chainman's ProcessNewBlock and submitSolution
-        // via the Mining interface. The former is used by net_processing as well
-        // as the submitblock RPC.
+        // Alternate calls between ChainValidationService and submitSolution via
+        // the Mining interface. The former is used by net_processing as well as
+        // the submitblock RPC.
         if (current_height % 2 == 0) {
-            BOOST_REQUIRE(ProcessNewBlock(
-                *Assert(m_node.chainman),
+            BOOST_REQUIRE(ChainValidationService{*Assert(m_node.chainman)}.ProcessNewBlock(
                 shared_pblock,
                 {.force_processing = true, .header = {.min_pow_checked = true}},
                 CurrentBlockValidationTime())

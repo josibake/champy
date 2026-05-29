@@ -5,6 +5,7 @@
 #include <test/util/mining.h>
 
 #include <block_validation.h>
+#include <chain_validation.h>
 #include <chainparams.h>
 #include <consensus/merkle.h>
 #include <validation_state.h>
@@ -113,8 +114,7 @@ COutPoint ProcessBlock(const NodeContext& node, const std::shared_ptr<CBlock>& b
     node.validation_signals->RegisterValidationInterface(&bvsc);
     std::optional<node::MempoolChainSync> mempool_sync;
     if (node.mempool) mempool_sync.emplace(*node.mempool);
-    const NewBlockProcessingResult result{ProcessNewBlock(
-        chainman,
+    const NewBlockProcessingResult result{ChainValidationService{chainman}.ProcessNewBlock(
         mempool_sync ? &*mempool_sync : nullptr,
         block,
         {.force_processing = true, .header = {.min_pow_checked = true}},

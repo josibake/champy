@@ -10,6 +10,7 @@
 #include <block_index_adapters.h>
 #include <block_validation.h>
 #include <chain.h>
+#include <chain_validation.h>
 #include <coins.h>
 #include <consensus/block_check.h>
 #include <tx_check_adapters.h>
@@ -1340,8 +1341,7 @@ int btck_chainstate_manager_process_block(
     const btck_Block* block,
     int* _new_block)
 {
-    const NewBlockProcessingResult result{ProcessNewBlock(
-        *btck_ChainstateManager::get(chainman).m_chainman,
+    const NewBlockProcessingResult result{ChainValidationService{*btck_ChainstateManager::get(chainman).m_chainman}.ProcessNewBlock(
         btck_Block::get(block),
         {.force_processing = true, .header = {.min_pow_checked = true}},
         CurrentBlockValidationTime())};
@@ -1359,8 +1359,8 @@ btck_BlockValidationState* btck_chainstate_manager_process_block_header(
         auto& chainman = btck_ChainstateManager::get(chainstate_manager).m_chainman;
 
         auto state = btck_BlockValidationState::create();
-        const NewBlockHeadersResult result{ProcessNewBlockHeaders(
-            *chainman,
+        ChainValidationService chain_validation{*chainman};
+        const NewBlockHeadersResult result{chain_validation.ProcessNewBlockHeaders(
             {&btck_BlockHeader::get(header), 1},
             {.min_pow_checked = true},
             CurrentBlockValidationTime(),

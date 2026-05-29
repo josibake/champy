@@ -11,6 +11,7 @@
 #include <banman.h>
 #include <blockencodings.h>
 #include <chain.h>
+#include <chain_validation.h>
 #include <chainparams.h>
 #include <common/bloom.h>
 #include <consensus/amount.h>
@@ -2976,8 +2977,8 @@ void PeerManagerImpl::ProcessHeadersMessage(CNode& pfrom, Peer& peer,
 
     // Now process all the headers.
     BlockValidationState state;
-    const NewBlockHeadersResult headers_result{ProcessNewBlockHeaders(
-        m_chainman,
+    ChainValidationService chain_validation{m_chainman};
+    const NewBlockHeadersResult headers_result{chain_validation.ProcessNewBlockHeaders(
         headers,
         {.min_pow_checked = true},
         CurrentBlockValidationTime(),
@@ -3165,8 +3166,7 @@ bool PeerManagerImpl::ProcessOrphanTx(Peer& peer)
 void PeerManagerImpl::ProcessBlock(CNode& node, const std::shared_ptr<const CBlock>& block, bool force_processing, bool min_pow_checked)
 {
     node::MempoolChainSync mempool_sync{m_mempool};
-    const NewBlockProcessingResult result{ProcessNewBlock(
-        m_chainman,
+    const NewBlockProcessingResult result{ChainValidationService{m_chainman}.ProcessNewBlock(
         &mempool_sync,
         block,
         {.force_processing = force_processing, .header = {.min_pow_checked = min_pow_checked}},
@@ -4247,7 +4247,7 @@ void PeerManagerImpl::ProcessMessage(Peer& peer, CNode& pfrom, const std::string
 
         const CBlockIndex *pindex = nullptr;
         BlockValidationState state;
-        const NewBlockHeadersResult headers_result{ProcessNewBlockHeaders(m_chainman, {{cmpctblock.header}}, {.min_pow_checked = true}, CurrentBlockValidationTime(), state)};
+        const NewBlockHeadersResult headers_result{ChainValidationService{m_chainman}.ProcessNewBlockHeaders({{cmpctblock.header}}, {.min_pow_checked = true}, CurrentBlockValidationTime(), state)};
         if (!headers_result.accepted) {
             if (state.IsInvalid()) {
                 MaybePunishNodeForBlock(pfrom.GetId(), state, /*via_compact_block=*/true, "invalid header via cmpctblock");

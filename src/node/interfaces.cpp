@@ -7,6 +7,7 @@
 #include <block_validation.h>
 #include <btcsignals.h>
 #include <chain.h>
+#include <chain_validation.h>
 #include <chainparams.h>
 #include <common/args.h>
 #include <consensus/merkle.h>
@@ -791,8 +792,7 @@ public:
         AddMerkleRootAndCoinbase(m_block_template->block, std::move(coinbase), version, timestamp, nonce);
         std::optional<MempoolChainSync> mempool_sync;
         if (m_node.mempool) mempool_sync.emplace(*m_node.mempool);
-        return ProcessNewBlock(
-            chainman(),
+        return ChainValidationService{chainman()}.ProcessNewBlock(
             mempool_sync ? &*mempool_sync : nullptr,
             std::make_shared<const CBlock>(m_block_template->block),
             {.force_processing = true, .header = {.min_pow_checked = true}},
@@ -895,7 +895,7 @@ public:
         const Consensus::BlockCheckOptions validity_options{
             .check_pow = options.check_pow,
             .check_merkle_root = options.check_merkle_root};
-        BlockValidationState state{TestBlockValidity(chainman().ActiveChainstate(), block, validity_options, CurrentBlockValidationTime())};
+        BlockValidationState state{ChainValidationService{chainman()}.TestBlockValidity(chainman().ActiveChainstate(), block, validity_options, CurrentBlockValidationTime())};
         reason = state.GetRejectReason();
         debug = state.GetDebugMessage();
         return state.IsValid();

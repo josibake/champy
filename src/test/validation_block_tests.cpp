@@ -5,6 +5,7 @@
 #include <boost/test/unit_test.hpp>
 
 #include <block_validation.h>
+#include <chain_validation.h>
 #include <chainparams.h>
 #include <consensus/consensus.h>
 #include <consensus/merkle.h>
@@ -144,7 +145,7 @@ std::shared_ptr<CBlock> MinerTestingSetup::FinalizeBlock(std::shared_ptr<CBlock>
     // submit block header, so that miner can get the block height from the
     // global state and the node has the topology of the chain
     BlockValidationState ignored;
-    BOOST_CHECK(ProcessNewBlockHeaders(*Assert(m_node.chainman), {{*pblock}}, {.min_pow_checked = true}, CurrentBlockValidationTime(), ignored).accepted);
+    BOOST_CHECK(ChainValidationService{*Assert(m_node.chainman)}.ProcessNewBlockHeaders({{*pblock}}, {.min_pow_checked = true}, CurrentBlockValidationTime(), ignored).accepted);
 
     return pblock;
 }
@@ -201,8 +202,7 @@ BOOST_AUTO_TEST_CASE(processnewblock_signals_ordering)
     }
 
     // Connect the genesis block and drain any outstanding events
-    BOOST_CHECK(ProcessNewBlock(
-        *Assert(m_node.chainman),
+    BOOST_CHECK(ChainValidationService{*Assert(m_node.chainman)}.ProcessNewBlock(
         std::make_shared<CBlock>(Params().GenesisBlock()),
         {.force_processing = true, .header = {.min_pow_checked = true}},
         CurrentBlockValidationTime())
@@ -228,8 +228,7 @@ BOOST_AUTO_TEST_CASE(processnewblock_signals_ordering)
             FastRandomContext insecure;
             for (int i = 0; i < 1000; i++) {
                 const auto& block = blocks[insecure.randrange(blocks.size() - 1)];
-                (void)ProcessNewBlock(
-                    *Assert(m_node.chainman),
+                (void)ChainValidationService{*Assert(m_node.chainman)}.ProcessNewBlock(
                     block,
                     {.force_processing = true, .header = {.min_pow_checked = true}},
                     CurrentBlockValidationTime());
@@ -238,8 +237,7 @@ BOOST_AUTO_TEST_CASE(processnewblock_signals_ordering)
             // to make sure that eventually we process the full chain - do it here
             for (const auto& block : blocks) {
                 if (block->vtx.size() == 1) {
-                    const NewBlockProcessingResult result{ProcessNewBlock(
-                        *Assert(m_node.chainman),
+                    const NewBlockProcessingResult result{ChainValidationService{*Assert(m_node.chainman)}.ProcessNewBlock(
                         block,
                         {.force_processing = true, .header = {.min_pow_checked = true}},
                         CurrentBlockValidationTime())};
@@ -281,8 +279,7 @@ BOOST_AUTO_TEST_CASE(mempool_locks_reorg)
 {
     node::MempoolChainSync mempool_sync{*Assert(m_node.mempool)};
     auto ProcessBlock = [&](std::shared_ptr<const CBlock> block) -> bool {
-        return ProcessNewBlock(
-            *Assert(m_node.chainman),
+        return ChainValidationService{*Assert(m_node.chainman)}.ProcessNewBlock(
             &mempool_sync,
             block,
             {.force_processing = true, .header = {.min_pow_checked = true}},
