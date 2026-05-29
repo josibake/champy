@@ -21,9 +21,17 @@ env:
   CACHIX_AUTH_TOKEN: ${{ secrets.CACHIX_AUTH_TOKEN }}
 
 jobs:
-  champix-smoke:
-    name: Champix smoke
-    runs-on: ubuntu-24.04
+  champy:
+    name: Champy (${{ matrix.nix_system }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            nix_system: x86_64-linux
+          - runner: macos-15
+            nix_system: aarch64-darwin
     steps:
       - name: Checkout Champy
         uses: actions/checkout@v6
@@ -51,8 +59,8 @@ jobs:
 
       - name: Evaluate Champix against this Champy checkout
         working-directory: champix
-        run: nix flake check --no-build --override-input champy path:${{ github.workspace }}/champy --print-build-logs
+        run: nix flake check --no-build --all-systems --override-input champy path:${{ github.workspace }}/champy --print-build-logs
 
-      - name: Build smoke job
+      - name: Build and test Champy
         working-directory: champix
-        run: nix build .#hydraJobs.x86_64-linux.formatting --override-input champy path:${{ github.workspace }}/champy --no-link --print-build-logs
+        run: nix build .#packages.${{ matrix.nix_system }}.champy --override-input champy path:${{ github.workspace }}/champy --no-link --print-build-logs
