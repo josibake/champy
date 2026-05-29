@@ -5,7 +5,7 @@
 #ifndef BITCOIN_CONSENSUS_SNAPSHOT_SPEND_STATE_H
 #define BITCOIN_CONSENSUS_SNAPSHOT_SPEND_STATE_H
 
-#include <consensus/block_spend.h>
+#include <consensus/block_commit.h>
 
 #include <map>
 #include <memory>
@@ -44,7 +44,7 @@ private:
     SnapshotSequenceLockTimeView m_sequence_lock_times;
 };
 
-class SnapshotSpendState final : public BlockSpendBackend, public SpendStateView {
+class SnapshotSpendState final : public BlockSpendBackend, public SpendStateView, public BlockSpendStateCommitter {
 public:
     void AddCoin(const COutPoint& outpoint, CoinSnapshot coin);
     void AddCoin(const COutPoint& outpoint, CoinSnapshot coin, int64_t previous_median_time_past);
@@ -53,6 +53,7 @@ public:
     [[nodiscard]] std::optional<CoinSnapshot> GetCoin(const COutPoint& outpoint) const override;
     [[nodiscard]] SnapshotSpendWorkspace MakeWorkspace(int64_t previous_median_time_past = 0) const;
     [[nodiscard]] BlockSpendResult<std::unique_ptr<BlockSpendWorkspace>> BeginBlockSpend(const BlockSpendContext& context) override;
+    [[nodiscard]] BlockCommitResult<void> CommitSpendState(const BlockCommitContext& context, const BlockSpendEffects& effects) override;
 
 private:
     std::map<COutPoint, CoinSnapshot> m_coins;

@@ -14,6 +14,30 @@
 #include <boost/test/unit_test.hpp>
 
 #include <optional>
+#include <string>
+
+namespace {
+
+std::string OptionalString(const std::optional<std::string>& value)
+{
+    return value ? *value : "<none>";
+}
+
+void CheckConformanceResultsEqual(
+    const test::consensus::ConformanceResult& expected,
+    const test::consensus::ConformanceResult& actual)
+{
+    BOOST_CHECK_EQUAL(actual.valid, expected.valid);
+    BOOST_CHECK_EQUAL(
+        std::string{Consensus::BlockConsensusStageName(actual.stage)},
+        std::string{Consensus::BlockConsensusStageName(expected.stage)});
+    BOOST_CHECK_EQUAL(OptionalString(actual.reject_reason), OptionalString(expected.reject_reason));
+    BOOST_CHECK_EQUAL(actual.fees, expected.fees);
+    BOOST_CHECK_EQUAL(actual.inputs, expected.inputs);
+    BOOST_CHECK_EQUAL(actual.sigop_cost, expected.sigop_cost);
+}
+
+} // namespace
 
 BOOST_AUTO_TEST_SUITE(consensus_conformance_tests)
 
@@ -128,6 +152,19 @@ BOOST_AUTO_TEST_CASE(core_spend_state_adapter_validates_orchestrated_stages)
         if (const auto mismatch{test::consensus::CompareConformanceResult(fixture.expected, result)}) {
             BOOST_ERROR(mismatch->field << " mismatch: expected " << mismatch->expected << ", got " << mismatch->actual);
         }
+    }
+}
+
+BOOST_AUTO_TEST_CASE(spend_state_backends_agree_on_conformance_fixtures)
+{
+    const UniValue fixtures{read_json(json_tests::consensus_conformance)};
+    for (const auto& fixture_value : fixtures.getValues()) {
+        const auto fixture{test::consensus::ReadConformanceFixture(fixture_value)};
+
+        const auto snapshot_result{test::consensus::RunInternalConsensusFixture(fixture)};
+        const auto core_result{test::consensus::RunCoreSpendStateConsensusFixture(fixture)};
+
+        CheckConformanceResultsEqual(snapshot_result, core_result);
     }
 }
 

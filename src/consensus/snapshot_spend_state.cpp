@@ -5,6 +5,7 @@
 #include <consensus/snapshot_spend_state.h>
 
 #include <memory>
+#include <string>
 #include <utility>
 
 namespace Consensus {
@@ -17,6 +18,18 @@ BlockSpendError SnapshotSpendStateError(const std::string& reject_reason, const 
         .reject_reason = reject_reason,
         .debug_message = debug_message,
     };
+}
+
+BlockCommitError SnapshotSpendCommitError(std::string reject_reason)
+{
+    return BlockCommitError{.reject_reason = std::move(reject_reason)};
+}
+
+bool CoinSnapshotEqual(const CoinSnapshot& a, const CoinSnapshot& b)
+{
+    return a.output == b.output &&
+           a.height == b.height &&
+           a.is_coinbase == b.is_coinbase;
 }
 
 } // namespace
@@ -121,6 +134,38 @@ BlockSpendResult<std::unique_ptr<BlockSpendWorkspace>> SnapshotSpendState::Begin
 {
     std::unique_ptr<BlockSpendWorkspace> workspace{std::make_unique<SnapshotSpendWorkspace>(m_coins, context.previous_median_time_past, m_previous_median_time_past_by_outpoint)};
     return std::move(workspace);
+}
+
+BlockCommitResult<void> SnapshotSpendState::CommitSpendState(const BlockCommitContext& context, const BlockSpendEffects& effects)
+{
+    auto committed_coins{m_coins};
+    auto committed_previous_median_time_past{m_previous_median_time_past_by_outpoint};
+
+    for (const TransactionCoinEffects& transaction_effects : effects.transaction_effects) {
+        for (const SpentCoinEffect& spend : transaction_effects.spends) {
+            const auto coin{committed_coins.find(spend.outpoint)};
+            if (coin == committed_coins.end()) {
+                return Consensus::Unexpected<BlockCommitError>{SnapshotSpendCommitError("snapshot-commit-missing-spend")};
+            }
+            if (!CoinSnapshotEqual(coin->second, spend.coin)) {
+                return Consensus::Unexpected<BlockCommitError>{SnapshotSpendCommitError("snapshot-commit-spend-mismatch")};
+            }
+            committed_coins.erase(coin);
+            committed_previous_median_time_past.erase(spend.outpoint);
+        }
+
+        for (const CreatedCoinEffect& create : transaction_effects.creates) {
+            const auto [_, inserted]{committed_coins.emplace(create.outpoint, create.coin)};
+            if (!inserted) {
+                return Consensus::Unexpected<BlockCommitError>{SnapshotSpendCommitError("snapshot-commit-duplicate-create")};
+            }
+            committed_previous_median_time_past.insert_or_assign(create.outpoint, context.previous_median_time_past);
+        }
+    }
+
+    m_coins = std::move(committed_coins);
+    m_previous_median_time_past_by_outpoint = std::move(committed_previous_median_time_past);
+    return {};
 }
 
 } // namespace Consensus

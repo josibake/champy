@@ -8,6 +8,7 @@
 #include <consensus/block_spend.h>
 #include <uint256.h>
 
+#include <cstdint>
 #include <string>
 
 namespace Consensus {
@@ -18,6 +19,8 @@ struct BlockCommitError {
 
 struct BlockCommitContext {
     uint256 new_best_block;
+    int block_height{0};
+    int64_t previous_median_time_past{0};
 };
 
 template <typename T>

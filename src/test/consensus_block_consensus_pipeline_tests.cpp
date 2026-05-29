@@ -324,6 +324,8 @@ BOOST_AUTO_TEST_CASE(pipeline_builds_consensus_context_from_header_context)
     BOOST_CHECK_EQUAL(context.spend.block_height, 42);
     BOOST_CHECK_EQUAL(context.spend.previous_median_time_past, 1000);
     BOOST_CHECK(context.commit.new_best_block == new_best_block);
+    BOOST_CHECK_EQUAL(context.commit.block_height, 42);
+    BOOST_CHECK_EQUAL(context.commit.previous_median_time_past, 1000);
     BOOST_CHECK_EQUAL(context.block_subsidy, 50);
 }
 
@@ -639,6 +641,55 @@ BOOST_AUTO_TEST_CASE(pipeline_validates_full_spend_stage)
     BOOST_REQUIRE(effects);
     BOOST_CHECK_EQUAL(effects->inputs, 1);
     BOOST_CHECK_EQUAL(script_checker.completions, 1);
+}
+
+BOOST_AUTO_TEST_CASE(pipeline_split_spend_completion_matches_combined_stage)
+{
+    const Consensus::BlockConsensusContext context{
+        .spend = Consensus::BlockSpendContext{
+            .block_height = 2,
+            .previous_median_time_past = 0,
+        },
+        .commit = Consensus::BlockCommitContext{.new_best_block = uint256::ONE},
+        .block_subsidy = 50,
+    };
+
+    const COutPoint spent_outpoint{Txid::FromUint256(uint256::ONE), 0};
+    CBlock block;
+    block.vtx = {MakeCoinbase(51), MakeSpend(spent_outpoint, 49)};
+
+    Consensus::BlockConsensusPipeline pipeline{block, context};
+
+    FakeBlockSpendWorkspace combined_spend_state;
+    combined_spend_state.AddCoin(spent_outpoint, Consensus::CoinSnapshot{
+        .output = CTxOut{50, CScript{} << OP_TRUE},
+        .height = 1,
+        .is_coinbase = false,
+    });
+    NoopScriptChecker combined_script_checker;
+    const auto combined{pipeline.ValidateAndCompleteSpendStage(combined_spend_state, combined_script_checker, Consensus::BlockSpendConsensusOptions{})};
+    BOOST_REQUIRE(combined);
+
+    FakeBlockSpendWorkspace split_spend_state;
+    split_spend_state.AddCoin(spent_outpoint, Consensus::CoinSnapshot{
+        .output = CTxOut{50, CScript{} << OP_TRUE},
+        .height = 1,
+        .is_coinbase = false,
+    });
+    NoopScriptChecker split_script_checker;
+    auto split{pipeline.ValidateAndStageSpend(split_spend_state, split_script_checker, Consensus::BlockSpendConsensusOptions{})};
+    BOOST_REQUIRE(split);
+    BOOST_CHECK_EQUAL(split_script_checker.completions, 0);
+
+    split = pipeline.CompleteSpendStage(std::move(split), split_script_checker);
+    BOOST_REQUIRE(split);
+
+    BOOST_CHECK_EQUAL(split->fees, combined->fees);
+    BOOST_CHECK_EQUAL(split->inputs, combined->inputs);
+    BOOST_CHECK_EQUAL(split->sigop_cost, combined->sigop_cost);
+    BOOST_CHECK_EQUAL(split->transaction_effects.size(), combined->transaction_effects.size());
+    BOOST_CHECK_EQUAL(split_script_checker.checks, combined_script_checker.checks);
+    BOOST_CHECK_EQUAL(split_script_checker.completions, combined_script_checker.completions);
 }
 
 BOOST_AUTO_TEST_CASE(pipeline_completes_scripts_after_full_spend_stage_failure)

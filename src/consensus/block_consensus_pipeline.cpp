@@ -43,11 +43,20 @@ BlockCommitContext BuildBlockCommitContext(const uint256& new_best_block)
     };
 }
 
+BlockCommitContext BuildBlockCommitContext(const BlockHeaderContext& headers, const uint256& new_best_block)
+{
+    return BlockCommitContext{
+        .new_best_block = new_best_block,
+        .block_height = headers.Height(),
+        .previous_median_time_past = headers.PreviousMedianTimePast(),
+    };
+}
+
 BlockConsensusContext BuildBlockConsensusContext(const BlockHeaderContext& headers, const uint256& new_best_block, CAmount block_subsidy)
 {
     return BlockConsensusContext{
         .spend = BuildBlockSpendContext(headers),
-        .commit = BuildBlockCommitContext(new_best_block),
+        .commit = BuildBlockCommitContext(headers, new_best_block),
         .block_subsidy = block_subsidy,
     };
 }

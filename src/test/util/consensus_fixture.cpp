@@ -230,7 +230,11 @@ Consensus::BlockConsensusContext BuildBlockConsensusContext(const ConformanceFix
             .block_height = fixture.spend_context.block_height,
             .previous_median_time_past = fixture.spend_context.previous_median_time_past,
         },
-        .commit = Consensus::BlockCommitContext{.new_best_block = fixture.block.GetHash()},
+        .commit = Consensus::BlockCommitContext{
+            .new_best_block = fixture.block.GetHash(),
+            .block_height = fixture.spend_context.block_height,
+            .previous_median_time_past = fixture.spend_context.previous_median_time_past,
+        },
         .block_subsidy = fixture.block_subsidy,
     };
 }
@@ -265,11 +269,13 @@ Consensus::BlockContextualConsensusOptions BuildBlockContextualConsensusOptions(
     };
 }
 
-ConformanceResult RunConformanceSpendAndCommitStages(const ConformanceFixture& fixture, Consensus::BlockSpendBackend& spend_backend)
+ConformanceResult RunConformanceSpendAndCommitStages(
+    const ConformanceFixture& fixture,
+    Consensus::BlockSpendBackend& spend_backend,
+    Consensus::BlockSpendStateCommitter& spend_state_committer)
 {
     const Consensus::BlockConsensusContext consensus_context{BuildBlockConsensusContext(fixture)};
     Consensus::DirectBlockScriptChecker script_checker;
-    RecordingBlockSpendStateCommitter spend_state_committer;
     RecordingBlockCommitSideEffects side_effects;
     auto workspace{spend_backend.BeginBlockSpend(consensus_context.spend)};
     if (!workspace) {
@@ -305,7 +311,7 @@ ConformanceResult RunInternalConsensusFixture(const ConformanceFixture& fixture)
     if (const auto result{RunPreSpendConformanceStages(fixture)}) return *result;
 
     Consensus::SnapshotSpendState spend_backend{LoadSnapshotSpendState(fixture)};
-    return RunConformanceSpendAndCommitStages(fixture, spend_backend);
+    return RunConformanceSpendAndCommitStages(fixture, spend_backend, spend_backend);
 }
 
 ConformanceResult RunInternalConsensusFixtureStagedApi(const ConformanceFixture& fixture)
@@ -313,7 +319,6 @@ ConformanceResult RunInternalConsensusFixtureStagedApi(const ConformanceFixture&
     const Consensus::BlockConsensusContext consensus_context{BuildBlockConsensusContext(fixture)};
     Consensus::SnapshotSpendState spend_backend{LoadSnapshotSpendState(fixture)};
     Consensus::DirectBlockScriptChecker script_checker;
-    RecordingBlockSpendStateCommitter spend_state_committer;
     RecordingBlockCommitSideEffects side_effects;
     auto workspace{spend_backend.BeginBlockSpend(consensus_context.spend)};
     if (!workspace) {
@@ -332,7 +337,7 @@ ConformanceResult RunInternalConsensusFixtureStagedApi(const ConformanceFixture&
         script_checker,
         fixture.spend_options,
         side_effects,
-        spend_state_committer,
+        spend_backend,
         side_effects)};
     if (!effects) {
         return RejectedConformanceResult(effects.error());
@@ -356,7 +361,8 @@ ConformanceResult RunCoreSpendStateConsensusFixture(const ConformanceFixture& fi
     CoreConformanceAdapter adapter{coins};
     adapter.LoadSpendState(fixture.spend_state);
     auto spend_backend{adapter.BlockSpendBackend()};
-    return RunConformanceSpendAndCommitStages(fixture, spend_backend);
+    RecordingBlockSpendStateCommitter spend_state_committer;
+    return RunConformanceSpendAndCommitStages(fixture, spend_backend, spend_state_committer);
 }
 
 std::optional<ConformanceMismatch> CompareConformanceResult(const ConformanceExpected& expected, const ConformanceResult& actual)

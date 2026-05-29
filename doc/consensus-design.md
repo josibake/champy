@@ -541,7 +541,11 @@ Consensus::BlockConsensusContext context{
         .block_height = height,
         .previous_median_time_past = previous_mtp,
     },
-    .commit = Consensus::BlockCommitContext{.new_best_block = block_hash},
+    .commit = Consensus::BlockCommitContext{
+        .new_best_block = block_hash,
+        .block_height = height,
+        .previous_median_time_past = previous_mtp,
+    },
     .block_subsidy = block_subsidy,
 };
 
@@ -585,6 +589,10 @@ public:
         const BlockSpendEffects& effects) = 0;
 };
 ```
+
+`BlockCommitContext` carries the block hash, height, and previous median time
+past. Stateful backends use this metadata when publishing created coins for
+future blocks.
 
 API:
 
@@ -729,7 +737,8 @@ anything to the parent chainstate.
 Current backends:
 
 - `Consensus::CoinsViewBlockSpendBackend`: Core adapter over `CCoinsViewCache`
-- `Consensus::SnapshotSpendState`: map-backed backend for tests and fixtures
+- `Consensus::SnapshotSpendState`: map-backed backend and committer for tests
+  and fixtures
 
 The backend interface is the main extension point for alternate state
 accumulation models.

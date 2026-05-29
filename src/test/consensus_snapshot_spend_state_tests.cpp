@@ -34,6 +34,21 @@ void CheckRejectReason(const Consensus::BlockSpendResult<void>& result, const st
     BOOST_CHECK_EQUAL(result.error().reject_reason, reason);
 }
 
+void CheckCommitRejectReason(const Consensus::BlockCommitResult<void>& result, const std::string& reason)
+{
+    BOOST_REQUIRE(!result);
+    BOOST_CHECK_EQUAL(result.error().reject_reason, reason);
+}
+
+Consensus::BlockCommitContext CommitContext(int block_height = 2, int64_t previous_median_time_past = 123)
+{
+    return Consensus::BlockCommitContext{
+        .new_best_block = uint256::ONE,
+        .block_height = block_height,
+        .previous_median_time_past = previous_median_time_past,
+    };
+}
+
 } // namespace
 
 BOOST_AUTO_TEST_SUITE(consensus_snapshot_spend_state_tests)
@@ -147,6 +162,63 @@ BOOST_AUTO_TEST_CASE(snapshot_spend_state_begins_independent_workspaces)
     BOOST_CHECK(!(*first)->StagedSpendView().HaveCoin(OutPoint(0)));
     BOOST_CHECK((*second)->StagedSpendView().HaveCoin(OutPoint(0)));
     BOOST_CHECK(state.HaveCoin(OutPoint(0)));
+}
+
+BOOST_AUTO_TEST_CASE(snapshot_spend_state_commits_effects_to_parent_state)
+{
+    Consensus::SnapshotSpendState state;
+    state.AddCoin(OutPoint(0), Coin(5), /*previous_median_time_past=*/111);
+
+    Consensus::BlockSpendEffects effects;
+    effects.transaction_effects.push_back({
+        .spends = {{
+            .outpoint = OutPoint(0),
+            .coin = Coin(5),
+        }},
+        .creates = {{
+            .outpoint = OutPoint(1),
+            .coin = Coin(4, 2),
+        }},
+    });
+
+    BOOST_CHECK(state.CommitSpendState(CommitContext(), effects));
+    BOOST_CHECK(!state.HaveCoin(OutPoint(0)));
+    const auto created{state.GetCoin(OutPoint(1))};
+    BOOST_REQUIRE(created);
+    BOOST_CHECK_EQUAL(created->output.nValue, 4);
+
+    const Consensus::BlockSpendContext next_block_context{
+        .block_height = 3,
+        .previous_median_time_past = 999,
+    };
+    const auto workspace{state.BeginBlockSpend(next_block_context)};
+    BOOST_REQUIRE(workspace);
+    BOOST_CHECK_EQUAL((*workspace)->SequenceLockTimes().PreviousMedianTimePast(OutPoint(1), /*coin_height=*/2), 123);
+}
+
+BOOST_AUTO_TEST_CASE(snapshot_spend_state_commit_is_atomic_on_error)
+{
+    Consensus::SnapshotSpendState state;
+    state.AddCoin(OutPoint(0), Coin(5));
+    state.AddCoin(OutPoint(1), Coin(8));
+
+    Consensus::BlockSpendEffects effects;
+    effects.transaction_effects.push_back({
+        .spends = {{
+            .outpoint = OutPoint(0),
+            .coin = Coin(5),
+        }},
+        .creates = {{
+            .outpoint = OutPoint(1),
+            .coin = Coin(4, 2),
+        }},
+    });
+
+    CheckCommitRejectReason(state.CommitSpendState(CommitContext(), effects), "snapshot-commit-duplicate-create");
+    BOOST_CHECK(state.HaveCoin(OutPoint(0)));
+    const auto unchanged{state.GetCoin(OutPoint(1))};
+    BOOST_REQUIRE(unchanged);
+    BOOST_CHECK_EQUAL(unchanged->output.nValue, 8);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

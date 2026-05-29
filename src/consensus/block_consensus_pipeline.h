@@ -139,6 +139,7 @@ private:
 
 [[nodiscard]] BlockSpendContext BuildBlockSpendContext(const BlockHeaderContext& headers);
 [[nodiscard]] BlockCommitContext BuildBlockCommitContext(const uint256& new_best_block);
+[[nodiscard]] BlockCommitContext BuildBlockCommitContext(const BlockHeaderContext& headers, const uint256& new_best_block);
 [[nodiscard]] BlockConsensusContext BuildBlockConsensusContext(const BlockHeaderContext& headers, const uint256& new_best_block, CAmount block_subsidy);
 [[nodiscard]] BlockContextualBodyOptions BuildBlockContextualBodyOptions(const CBlockHeader& block, const BlockHeaderContext& headers);
 [[nodiscard]] BlockContextualConsensusOptions BuildBlockContextualConsensusOptions(const CBlockHeader& block, const BlockHeaderContext& headers, const Params& params, int64_t max_block_time);
