@@ -14,9 +14,9 @@ class CBlock;
 class CBlockIndex;
 class CCoinsViewCache;
 class BlockValidationState;
-class BlockDataStore;
+class BlockUndoWriter;
 class BlockConnectionTrace;
-class BlockIndexStore;
+class BlockIndexValidityCommitter;
 
 namespace kernel {
 class Notifications;
@@ -56,8 +56,8 @@ struct BlockConnectionContext {
  */
 struct BlockConnectionRuntime {
     kernel::Notifications& notifications;
-    BlockDataStore& block_store;
-    BlockIndexStore& block_index_store;
+    BlockUndoWriter& undo_writer;
+    BlockIndexValidityCommitter& block_index_committer;
     Consensus::BlockScriptChecker& script_checker;
     BlockConnectionTrace& trace;
 };
@@ -79,9 +79,22 @@ struct BlockConnectionRequest {
     BlockConnectionOptions options{};
 };
 
+enum class BlockConnectionStatus {
+    Connected,
+    Failed,
+};
+
+struct BlockConnectionResult {
+    BlockConnectionStatus status{BlockConnectionStatus::Failed};
+
+    [[nodiscard]] static BlockConnectionResult Connected() { return {BlockConnectionStatus::Connected}; }
+    [[nodiscard]] static BlockConnectionResult Failed() { return {BlockConnectionStatus::Failed}; }
+    [[nodiscard]] bool Succeeded() const { return status == BlockConnectionStatus::Connected; }
+};
+
 class BlockConnectionEngine final {
 public:
-    [[nodiscard]] bool Connect(const BlockConnectionRequest& request, BlockValidationState& state) const
+    [[nodiscard]] BlockConnectionResult Connect(const BlockConnectionRequest& request, BlockValidationState& state) const
         EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
 };
 

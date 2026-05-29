@@ -20,22 +20,41 @@ namespace kernel {
 class BlockManager;
 } // namespace kernel
 
-class BlockDataStore
+class BlockDataReader
 {
 public:
-    virtual ~BlockDataStore() = default;
+    virtual ~BlockDataReader() = default;
 
     virtual bool ReadBlock(CBlock& block, const CBlockIndex& index) = 0;
     virtual bool ReadBlockFromPosition(CBlock& block, const FlatFilePos& pos, const std::optional<uint256>& expected_hash) = 0;
+};
+
+class BlockUndoReader
+{
+public:
+    virtual ~BlockUndoReader() = default;
+
     virtual bool ReadBlockUndo(CBlockUndo& blockundo, const CBlockIndex& index) = 0;
+};
+
+class BlockUndoWriter
+{
+public:
+    virtual ~BlockUndoWriter() = default;
+
     virtual Consensus::BlockCommitResult<void> WriteBlockUndo(const CBlockUndo& blockundo, CBlockIndex& index) EXCLUSIVE_LOCKS_REQUIRED(::cs_main) = 0;
-    virtual bool IsPruneMode() const = 0;
-    virtual bool HasIndexedBlockFiles() const = 0;
+};
+
+class BlockDataWriter
+{
+public:
+    virtual ~BlockDataWriter() = default;
+
     virtual FlatFilePos WriteBlock(const CBlock& block, int height) = 0;
     virtual void UpdateBlockInfo(const CBlock& block, unsigned int height, const FlatFilePos& pos) = 0;
 };
 
-class CoreBlockDataStore final : public BlockDataStore
+class CoreBlockDataStore final : public BlockDataReader, public BlockUndoReader, public BlockUndoWriter, public BlockDataWriter
 {
 public:
     explicit CoreBlockDataStore(kernel::BlockManager& blockman) : m_blockman{blockman} {}
@@ -44,8 +63,8 @@ public:
     bool ReadBlockFromPosition(CBlock& block, const FlatFilePos& pos, const std::optional<uint256>& expected_hash) override;
     bool ReadBlockUndo(CBlockUndo& blockundo, const CBlockIndex& index) override;
     Consensus::BlockCommitResult<void> WriteBlockUndo(const CBlockUndo& blockundo, CBlockIndex& index) override EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
-    bool IsPruneMode() const override;
-    bool HasIndexedBlockFiles() const override;
+    bool IsPruneMode() const;
+    bool HasIndexedBlockFiles() const;
     FlatFilePos WriteBlock(const CBlock& block, int height) override;
     void UpdateBlockInfo(const CBlock& block, unsigned int height, const FlatFilePos& pos) override;
 

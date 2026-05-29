@@ -30,7 +30,7 @@ TRACEPOINT_SEMAPHORE(validation, block_connected);
 
 namespace validation {
 
-bool BlockConnectionEngine::Connect(const BlockConnectionRequest& request, BlockValidationState& state) const
+BlockConnectionResult BlockConnectionEngine::Connect(const BlockConnectionRequest& request, BlockValidationState& state) const
 {
     AssertLockHeld(cs_main);
 
@@ -55,10 +55,11 @@ bool BlockConnectionEngine::Connect(const BlockConnectionRequest& request, Block
             // problems.
             const bilingual_str message = _("Corrupt block found indicating potential hardware failure.");
             runtime.notifications.fatalError(message);
-            return state.Error(message.original);
+            state.Error(message.original);
+            return BlockConnectionResult::Failed();
         }
         LogError("%s: Consensus::CheckBlock: %s\n", __func__, state.ToString());
-        return false;
+        return BlockConnectionResult::Failed();
     }
 
     // Verify that the view's current state corresponds to the previous block.
@@ -73,11 +74,11 @@ bool BlockConnectionEngine::Connect(const BlockConnectionRequest& request, Block
         if (options.commit) {
             view.SetBestBlock(block_index.GetBlockHash());
         }
-        return true;
+        return BlockConnectionResult::Connected();
     }
 
-    BlockDataStore& block_store{runtime.block_store};
-    BlockIndexStore& block_index_store{runtime.block_index_store};
+    BlockUndoWriter& undo_writer{runtime.undo_writer};
+    BlockIndexValidityCommitter& block_index_committer{runtime.block_index_committer};
 
     trace.SanityChecksDone();
     trace.ForkChecksDone();
@@ -88,8 +89,8 @@ bool BlockConnectionEngine::Connect(const BlockConnectionRequest& request, Block
         block,
         block_index,
         view,
-        block_store,
-        block_index_store,
+        undo_writer,
+        block_index_committer,
         spend_workspace,
         spend_state_committer,
         context.consensus_context,
@@ -104,24 +105,26 @@ bool BlockConnectionEngine::Connect(const BlockConnectionRequest& request, Block
     if (!spend_effects) {
         ApplyBlockSpendError(state, spend_effects.error());
         LogInfo("Block validation error: %s", state.ToString());
-        return false;
+        return BlockConnectionResult::Failed();
     }
     assert(spend_effects);
     const Consensus::BlockSpendEffects& effects{*spend_effects};
     trace.SpendStageCompleted(effects.inputs);
 
     if (!options.commit) {
-        return true;
+        return BlockConnectionResult::Connected();
     }
 
     if (const auto spend_state_commit{connection_attempt.WriteUndoAndCommitSpendState(effects)}; !spend_state_commit) {
-        return ApplyBlockCommitError(state, spend_state_commit.error());
+        ApplyBlockCommitError(state, spend_state_commit.error());
+        return BlockConnectionResult::Failed();
     }
 
     trace.UndoWritten();
 
     if (const auto index_commit{connection_attempt.CommitBlockIndex(effects)}; !index_commit) {
-        return ApplyBlockCommitError(state, index_commit.error());
+        ApplyBlockCommitError(state, index_commit.error());
+        return BlockConnectionResult::Failed();
     }
 
     trace.IndexCommitted();
@@ -134,7 +137,7 @@ bool BlockConnectionEngine::Connect(const BlockConnectionRequest& request, Block
                effects.sigop_cost,
                trace.TraceDuration().count());
 
-    return true;
+    return BlockConnectionResult::Connected();
 }
 
 } // namespace validation

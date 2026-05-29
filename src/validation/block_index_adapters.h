@@ -25,17 +25,36 @@ public:
     virtual std::vector<const CBlockIndex*> SnapshotBlockIndices() const EXCLUSIVE_LOCKS_REQUIRED(::cs_main) = 0;
 };
 
-class BlockIndexStore
+class BlockIndexLookup
 {
 public:
-    virtual ~BlockIndexStore() = default;
+    virtual ~BlockIndexLookup() = default;
 
     virtual CBlockIndex* LookupBlockIndex(const uint256& block_hash) EXCLUSIVE_LOCKS_REQUIRED(::cs_main) = 0;
-    //! Return mutable block-index entries present at snapshot time. Persisted field changes must be marked dirty.
-    virtual std::vector<CBlockIndex*> SnapshotBlockIndices() EXCLUSIVE_LOCKS_REQUIRED(::cs_main) = 0;
+};
+
+class BlockIndexValidityCommitter
+{
+public:
+    virtual ~BlockIndexValidityCommitter() = default;
+
     virtual void MarkBlockIndexDirty(CBlockIndex& block_index) EXCLUSIVE_LOCKS_REQUIRED(::cs_main) = 0;
-    virtual void MarkBlockDataReceived(const CBlock& block, CBlockIndex& block_index, const FlatFilePos& pos) EXCLUSIVE_LOCKS_REQUIRED(::cs_main) = 0;
+};
+
+class BlockIndexHeaderStore : public BlockIndexLookup
+{
+public:
+    ~BlockIndexHeaderStore() override = default;
+
     virtual CBlockIndex* AddToBlockIndex(const CBlockHeader& block) EXCLUSIVE_LOCKS_REQUIRED(::cs_main) = 0;
+};
+
+class BlockIndexDataReceiver
+{
+public:
+    virtual ~BlockIndexDataReceiver() = default;
+
+    virtual void MarkBlockDataReceived(const CBlock& block, CBlockIndex& block_index, const FlatFilePos& pos) EXCLUSIVE_LOCKS_REQUIRED(::cs_main) = 0;
 };
 
 class CoreBlockIndexView final : public BlockIndexView
@@ -50,13 +69,14 @@ private:
     const ChainstateManager& m_chainman;
 };
 
-class CoreBlockIndexStore final : public BlockIndexStore
+class CoreBlockIndexStore final : public BlockIndexHeaderStore, public BlockIndexDataReceiver, public BlockIndexValidityCommitter
 {
 public:
     explicit CoreBlockIndexStore(ChainstateManager& chainman) : m_chainman{chainman} {}
 
     CBlockIndex* LookupBlockIndex(const uint256& block_hash) override EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
-    std::vector<CBlockIndex*> SnapshotBlockIndices() override EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
+    //! Return mutable block-index entries present at snapshot time. Persisted field changes must be marked dirty.
+    std::vector<CBlockIndex*> SnapshotBlockIndices() EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
     void MarkBlockIndexDirty(CBlockIndex& block_index) override EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
     void MarkBlockDataReceived(const CBlock& block, CBlockIndex& block_index, const FlatFilePos& pos) override EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
     CBlockIndex* AddToBlockIndex(const CBlockHeader& block) override EXCLUSIVE_LOCKS_REQUIRED(::cs_main);

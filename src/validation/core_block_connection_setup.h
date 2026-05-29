@@ -16,8 +16,8 @@
 class CBlock;
 class CBlockIndex;
 class CCoinsViewCache;
-class BlockDataStore;
-class BlockIndexStore;
+class BlockUndoWriter;
+class BlockIndexValidityCommitter;
 class ValidationCache;
 class uint256;
 
@@ -27,8 +27,8 @@ class Notifications;
 
 struct CoreBlockConnectionRuntimeInputs {
     kernel::Notifications& notifications;
-    BlockDataStore& block_store;
-    BlockIndexStore& block_index_store;
+    BlockUndoWriter& undo_writer;
+    BlockIndexValidityCommitter& block_index_committer;
     CCheckQueue<CScriptCheck>& script_check_queue;
     ValidationCache& validation_cache;
     BlockConnectionTraceCounters trace_counters;
@@ -52,8 +52,8 @@ public:
 private:
     kernel::Notifications& m_notifications;
     CBlockIndex& m_block_index;
-    BlockDataStore& m_block_store;
-    BlockIndexStore& m_block_index_store;
+    BlockUndoWriter& m_undo_writer;
+    BlockIndexValidityCommitter& m_block_index_committer;
     CoreBlockConnectionPlan m_connection_plan;
     CoreBlockScriptChecks m_script_checks;
     BlockConnectionTrace m_trace;

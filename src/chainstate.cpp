@@ -602,7 +602,7 @@ static std::shared_ptr<const CBlock> LoadBlockForConnection(
     BlockValidationState& state,
     CBlockIndex& block_index,
     std::shared_ptr<const CBlock> cached_block,
-    BlockDataStore& block_store) EXCLUSIVE_LOCKS_REQUIRED(cs_main)
+    BlockDataReader& block_reader) EXCLUSIVE_LOCKS_REQUIRED(cs_main)
 {
     AssertLockHeld(cs_main);
 
@@ -612,7 +612,7 @@ static std::shared_ptr<const CBlock> LoadBlockForConnection(
     }
 
     std::shared_ptr<CBlock> block{std::make_shared<CBlock>()};
-    if (!block_store.ReadBlock(*block, block_index)) {
+    if (!block_reader.ReadBlock(*block, block_index)) {
         FatalError(notifications, state, _("Failed to read block."));
         return nullptr;
     }
@@ -621,15 +621,15 @@ static std::shared_ptr<const CBlock> LoadBlockForConnection(
 
 static CoreBlockConnectionRuntimeInputs MakeCoreBlockConnectionRuntimeInputs(
     ChainstateManager& chainman,
-    BlockDataStore& block_store,
-    BlockIndexStore& block_index_store) EXCLUSIVE_LOCKS_REQUIRED(cs_main)
+    BlockUndoWriter& undo_writer,
+    BlockIndexValidityCommitter& block_index_committer) EXCLUSIVE_LOCKS_REQUIRED(cs_main)
 {
     AssertLockHeld(cs_main);
 
     return {
         .notifications = chainman.GetNotifications(),
-        .block_store = block_store,
-        .block_index_store = block_index_store,
+        .undo_writer = undo_writer,
+        .block_index_committer = block_index_committer,
         .script_check_queue = chainman.GetCheckQueue(),
         .validation_cache = chainman.m_validation_cache,
         .trace_counters = BlockConnectionTraceCountersFor(chainman),
@@ -655,15 +655,14 @@ static bool RunBlockConnection(
         /*cache_script_results=*/false};
     connection_setup.MaybeLogScriptPolicy(last_reason_logged, block->GetHash());
     const validation::BlockConnectionRequest request{connection_setup.Request(*block, view)};
-    const bool connected{validation::BlockConnectionEngine{}.Connect(request, state)};
+    const validation::BlockConnectionResult connection_result{validation::BlockConnectionEngine{}.Connect(request, state)};
     if (signals) {
         signals->BlockChecked(block, state);
     }
-    if (!connected) {
+    if (!connection_result.Succeeded()) {
         LogError("%s: Block connection %s failed, %s\n", "ConnectTip", block_index.GetBlockHash().ToString(), state.ToString());
-        return false;
     }
-    return true;
+    return connection_result.Succeeded();
 }
 
 static void AccumulateAndLogConnectTipStep(

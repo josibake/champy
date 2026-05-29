@@ -109,6 +109,16 @@ The important interfaces are:
 - `ChainValidationService`: Core-facing service for block/header admission.
 - `ChainstateEventSink`: validation-to-node hook for chain events.
 
+Validation and kernel adapters use smaller runtime capabilities:
+
+- `BlockDataReader`: reads block bytes.
+- `BlockUndoReader` and `BlockUndoWriter`: read or write undo data.
+- `BlockDataWriter`: writes block bytes.
+- `BlockIndexLookup`: finds known headers.
+- `BlockIndexHeaderStore`: admits headers.
+- `BlockIndexDataReceiver`: records that block data exists.
+- `BlockIndexValidityCommitter`: marks validated block-index state dirty.
+
 These names are intentional:
 
 - Consensus decides rules.
@@ -213,7 +223,9 @@ When adding runtime behavior:
 This is not yet a standalone external library release.
 
 The consensus target is much closer to extraction, but Core still supplies many
-protocol value types and default runtime adapters.
+protocol value types and default runtime adapters. The remaining extraction step
+is mostly build/package boundary work plus replacing Core-only validation result
+mapping at the exported API edge.
 
 Kernel is still Core's default runtime, not pure consensus. It intentionally
 contains Core's block storage, chainstate loading, and block-index-backed

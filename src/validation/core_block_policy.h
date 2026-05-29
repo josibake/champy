@@ -14,7 +14,7 @@
 
 class CBlockIndex;
 class ChainstateManager;
-class BlockIndexStore;
+class BlockIndexLookup;
 class uint256;
 
 struct CoreBlockScriptCheckDecision {
@@ -28,7 +28,7 @@ struct CoreBlockScriptCheckPolicy {
     arith_uint256 minimum_chain_work;
 };
 
-[[nodiscard]] CoreBlockScriptCheckDecision DetermineCoreBlockScriptChecks(const CoreBlockScriptCheckPolicy& policy, BlockIndexStore& block_index_store, const CBlockIndex& block_index, const Consensus::Params& consensus_params)
+[[nodiscard]] CoreBlockScriptCheckDecision DetermineCoreBlockScriptChecks(const CoreBlockScriptCheckPolicy& policy, BlockIndexLookup& block_index, const CBlockIndex& block_index_entry, const Consensus::Params& consensus_params)
     EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
 
 void MaybeLogCoreBlockScriptCheckDecision(std::optional<const char*>& last_reason_logged, const CBlockIndex& block_index, const uint256& block_hash, const CoreBlockScriptCheckDecision& decision)

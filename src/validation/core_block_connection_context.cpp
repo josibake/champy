@@ -26,12 +26,12 @@ CoreBlockConnectionPolicySnapshot SnapshotCoreBlockConnectionPolicy(ChainstateMa
     };
 }
 
-CoreBlockConnectionPlan PlanCoreBlockConnection(const CoreBlockConnectionPolicySnapshot& policy, BlockIndexStore& block_index_store, const CBlockIndex& block_index)
+CoreBlockConnectionPlan PlanCoreBlockConnection(const CoreBlockConnectionPolicySnapshot& policy, BlockIndexLookup& block_index, const CBlockIndex& block_index_entry)
 {
-    const bool has_spend_stage{block_index.pprev != nullptr};
+    const bool has_spend_stage{block_index_entry.pprev != nullptr};
     CoreBlockScriptCheckDecision script_check_decision{.run_script_checks = true};
     if (has_spend_stage) {
-        script_check_decision = DetermineCoreBlockScriptChecks(policy.script_check_policy, block_index_store, block_index, policy.consensus_params);
+        script_check_decision = DetermineCoreBlockScriptChecks(policy.script_check_policy, block_index, block_index_entry, policy.consensus_params);
     }
 
     return {
@@ -39,8 +39,8 @@ CoreBlockConnectionPlan PlanCoreBlockConnection(const CoreBlockConnectionPolicyS
             .consensus_params = policy.consensus_params,
             .consensus_context = Consensus::BuildBlockConsensusContext(
                 policy.header_context,
-                block_index.GetBlockHash(),
-                Consensus::CalculateBlockSubsidy(block_index.nHeight, policy.consensus_params)),
+                block_index_entry.GetBlockHash(),
+                Consensus::CalculateBlockSubsidy(block_index_entry.nHeight, policy.consensus_params)),
             .spend_options = has_spend_stage ? policy.spend_options : Consensus::BlockSpendConsensusOptions{},
         },
         .script_check_decision = script_check_decision,

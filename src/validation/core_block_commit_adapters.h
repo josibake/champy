@@ -8,21 +8,21 @@
 #include <consensus/block_commit.h>
 #include <kernel/cs_main.h>
 
-class BlockDataStore;
+class BlockUndoWriter;
 class CBlockIndex;
 class CCoinsViewCache;
-class BlockIndexStore;
+class BlockIndexValidityCommitter;
 
 class CoreBlockEffectsWriter final : public Consensus::BlockRevertDataWriter, public Consensus::BlockMetadataCommitter {
 public:
-    CoreBlockEffectsWriter(BlockDataStore& block_store, BlockIndexStore& block_index_store, CCoinsViewCache& view, CBlockIndex& block_index);
+    CoreBlockEffectsWriter(BlockUndoWriter& undo_writer, BlockIndexValidityCommitter& block_index_committer, CCoinsViewCache& view, CBlockIndex& block_index);
 
     [[nodiscard]] Consensus::BlockCommitResult<void> WriteBlockRevertData(const Consensus::BlockCommitContext& context, const Consensus::BlockSpendEffects& effects) override EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
     [[nodiscard]] Consensus::BlockCommitResult<void> CommitBlockMetadata(const Consensus::BlockCommitContext& context, const Consensus::BlockSpendEffects& effects) override EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
 
 private:
-    BlockDataStore& m_block_store;
-    BlockIndexStore& m_block_index_store;
+    BlockUndoWriter& m_undo_writer;
+    BlockIndexValidityCommitter& m_block_index_committer;
     CCoinsViewCache& m_view;
     CBlockIndex& m_block_index;
 };

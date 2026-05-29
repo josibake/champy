@@ -13,7 +13,7 @@
 
 class CBlockIndex;
 class ChainstateManager;
-class BlockIndexStore;
+class BlockIndexLookup;
 class uint256;
 
 struct CoreBlockConnectionPolicySnapshot {
@@ -32,7 +32,7 @@ struct CoreBlockConnectionPlan {
 [[nodiscard]] CoreBlockConnectionPolicySnapshot SnapshotCoreBlockConnectionPolicy(ChainstateManager& chainman, const CBlockIndex& block_index)
     EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
 
-[[nodiscard]] CoreBlockConnectionPlan PlanCoreBlockConnection(const CoreBlockConnectionPolicySnapshot& policy, BlockIndexStore& block_index_store, const CBlockIndex& block_index)
+[[nodiscard]] CoreBlockConnectionPlan PlanCoreBlockConnection(const CoreBlockConnectionPolicySnapshot& policy, BlockIndexLookup& block_index, const CBlockIndex& block_index_entry)
     EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
 
 void MaybeLogCoreBlockConnectionScriptPolicy(std::optional<const char*>& last_reason_logged, const CBlockIndex& block_index, const uint256& block_hash, const CoreBlockConnectionPlan& plan)

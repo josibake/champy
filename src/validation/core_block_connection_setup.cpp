@@ -13,8 +13,8 @@
 CoreBlockConnectionSetup::CoreBlockConnectionSetup(CoreBlockConnectionRuntimeInputs runtime, CoreBlockConnectionPlan connection_plan, CBlockIndex& block_index, bool cache_script_results)
     : m_notifications{runtime.notifications},
       m_block_index{block_index},
-      m_block_store{runtime.block_store},
-      m_block_index_store{runtime.block_index_store},
+      m_undo_writer{runtime.undo_writer},
+      m_block_index_committer{runtime.block_index_committer},
       m_connection_plan{std::move(connection_plan)},
       m_script_checks{
           runtime.script_check_queue,
@@ -35,8 +35,8 @@ validation::BlockConnectionRequest CoreBlockConnectionSetup::Request(const CBloc
     return {
         .runtime = {
             .notifications = m_notifications,
-            .block_store = m_block_store,
-            .block_index_store = m_block_index_store,
+            .undo_writer = m_undo_writer,
+            .block_index_committer = m_block_index_committer,
             .script_checker = m_script_checks.Checker(),
             .trace = m_trace,
         },

@@ -64,15 +64,15 @@ using fsbridge::FopenFn;
 
 static CoreBlockConnectionRuntimeInputs MakeCoreBlockConnectionRuntimeInputs(
     ChainstateManager& chainman,
-    BlockDataStore& block_store,
-    BlockIndexStore& block_index_store) EXCLUSIVE_LOCKS_REQUIRED(cs_main)
+    BlockUndoWriter& undo_writer,
+    BlockIndexValidityCommitter& block_index_committer) EXCLUSIVE_LOCKS_REQUIRED(cs_main)
 {
     AssertLockHeld(cs_main);
 
     return {
         .notifications = chainman.GetNotifications(),
-        .block_store = block_store,
-        .block_index_store = block_index_store,
+        .undo_writer = undo_writer,
+        .block_index_committer = block_index_committer,
         .script_check_queue = chainman.GetCheckQueue(),
         .validation_cache = chainman.m_validation_cache,
         .trace_counters = BlockConnectionTraceCountersFor(chainman),
@@ -81,14 +81,14 @@ static CoreBlockConnectionRuntimeInputs MakeCoreBlockConnectionRuntimeInputs(
 
 /** Undo the effects of this block (with given index) on the UTXO set represented by coins.
  *  When FAILED is returned, view is left in an indeterminate state. */
-static DisconnectResult DisconnectBlock(BlockDataStore& block_store, const CBlock& block, const CBlockIndex* pindex, CCoinsViewCache& view)
+static DisconnectResult DisconnectBlock(BlockUndoReader& undo_reader, const CBlock& block, const CBlockIndex* pindex, CCoinsViewCache& view)
     EXCLUSIVE_LOCKS_REQUIRED(::cs_main)
 {
     AssertLockHeld(::cs_main);
     bool fClean = true;
 
     CBlockUndo blockUndo;
-    if (!block_store.ReadBlockUndo(blockUndo, *pindex)) {
+    if (!undo_reader.ReadBlockUndo(blockUndo, *pindex)) {
         LogError("DisconnectBlock(): failure reading undo data\n");
         return DISCONNECT_FAILED;
     }
@@ -393,7 +393,7 @@ static bool ContextualCheckBlock(const CBlock& block, BlockValidationState& stat
     return true;
 }
 
-static BlockHeaderAcceptanceResult AcceptBlockHeader(ChainstateManager& chainman, BlockIndexStore& block_index, const CBlockHeader& block, BlockValidationState& state, BlockHeaderAcceptanceOptions options, int64_t max_future_block_time) EXCLUSIVE_LOCKS_REQUIRED(cs_main)
+static BlockHeaderAcceptanceResult AcceptBlockHeader(ChainstateManager& chainman, BlockIndexHeaderStore& block_index, const CBlockHeader& block, BlockValidationState& state, BlockHeaderAcceptanceOptions options, int64_t max_future_block_time) EXCLUSIVE_LOCKS_REQUIRED(cs_main)
 {
     AssertLockHeld(cs_main);
 
@@ -494,6 +494,35 @@ static BlockAcceptanceStatus BlockAcceptanceStatusFromDataAdmission(BlockDataAdm
     assert(false);
 }
 
+static bool StoreBlockData(
+    Notifications& notifications,
+    BlockDataWriter& block_writer,
+    BlockIndexDataReceiver& block_index_data,
+    const CBlock& block,
+    CBlockIndex& block_index,
+    const FlatFilePos* existing_block_pos,
+    BlockValidationState& state) EXCLUSIVE_LOCKS_REQUIRED(cs_main)
+{
+    AssertLockHeld(cs_main);
+
+    try {
+        FlatFilePos block_pos{};
+        if (existing_block_pos) {
+            block_pos = *existing_block_pos;
+            block_writer.UpdateBlockInfo(block, block_index.nHeight, block_pos);
+        } else {
+            block_pos = block_writer.WriteBlock(block, block_index.nHeight);
+            if (block_pos.IsNull()) {
+                return state.Error("AcceptBlock: Failed to find position to write new block to disk");
+            }
+        }
+        block_index_data.MarkBlockDataReceived(block, block_index, block_pos);
+    } catch (const std::runtime_error& e) {
+        FatalError(notifications, state, strprintf(_("System error while saving block to disk: %s"), e.what()));
+        return false;
+    }
+    return true;
+}
 
 BlockAcceptanceResult AcceptBlock(ChainstateManager& chainman, const std::shared_ptr<const CBlock>& pblock, BlockValidationState& state, BlockAcceptanceOptions options, BlockValidationTime time)
 {
@@ -534,7 +563,6 @@ BlockAcceptanceResult AcceptBlock(ChainstateManager& chainman, const std::shared
     }
 
     const CChainParams& params{chainman.GetParams()};
-    CoreBlockDataStore block_store{chainman.m_blockman};
 
     if (!CheckBlock(block, state, params.GetConsensus()) ||
         !ContextualCheckBlock(block, state, chainman, block_index_entry.pprev)) {
@@ -551,22 +579,8 @@ BlockAcceptanceResult AcceptBlock(ChainstateManager& chainman, const std::shared
         chainman.m_options.signals->NewPoWValidBlock(&block_index_entry, pblock);
     }
 
-    // Write block to history file
-    try {
-        FlatFilePos blockPos{};
-        if (options.existing_block_pos) {
-            blockPos = *options.existing_block_pos;
-            block_store.UpdateBlockInfo(block, block_index_entry.nHeight, blockPos);
-        } else {
-            blockPos = block_store.WriteBlock(block, block_index_entry.nHeight);
-            if (blockPos.IsNull()) {
-                state.Error(strprintf("%s: Failed to find position to write new block to disk", __func__));
-                return {.status = BlockAcceptanceStatus::StorageFailed, .block_index = &block_index_entry};
-            }
-        }
-        block_index.MarkBlockDataReceived(block, block_index_entry, blockPos);
-    } catch (const std::runtime_error& e) {
-        FatalError(chainman.GetNotifications(), state, strprintf(_("System error while saving block to disk: %s"), e.what()));
+    CoreBlockDataStore block_store{chainman.m_blockman};
+    if (!StoreBlockData(chainman.GetNotifications(), block_store, block_index, block, block_index_entry, options.existing_block_pos, state)) {
         return {.status = BlockAcceptanceStatus::StorageFailed, .block_index = &block_index_entry};
     }
 
@@ -726,7 +740,7 @@ BlockValidationState TestBlockValidity(
         /*cache_script_results=*/true};
     connection_setup.MaybeLogScriptPolicy(chainstate.LastScriptCheckReasonLogged(), block_hash);
     const validation::BlockConnectionRequest request{connection_setup.Request(block, view_dummy, connect_options)};
-    if (!validation::BlockConnectionEngine{}.Connect(request, state)) {
+    if (!validation::BlockConnectionEngine{}.Connect(request, state).Succeeded()) {
         if (state.IsValid()) NONFATAL_UNREACHABLE();
         return state;
     }
@@ -810,7 +824,7 @@ VerifyDBResult CVerifyDB::VerifyDB(
             return VerifyDBResult::CORRUPTED_BLOCK_DB;
         }
         // check level 2: verify undo validity
-        if (nCheckLevel >= 2 && pindex) {
+        if (nCheckLevel >= 2) {
             CBlockUndo undo;
             if (!pindex->GetUndoPos().IsNull()) {
                 if (!block_store.ReadBlockUndo(undo, *pindex)) {
@@ -820,12 +834,12 @@ VerifyDBResult CVerifyDB::VerifyDB(
             }
         }
         // check level 3: check for inconsistencies during memory-only disconnect of tip blocks
-        size_t curr_coins_usage = coins.DynamicMemoryUsage() + chainstate.CoinsTip().DynamicMemoryUsage();
+        const size_t curr_coins_usage{coins.DynamicMemoryUsage() + chainstate.CoinsTip().DynamicMemoryUsage()};
 
         if (nCheckLevel >= 3) {
             if (curr_coins_usage <= chainstate.m_coinstip_cache_size_bytes) {
                 assert(coins.GetBestBlock() == pindex->GetBlockHash());
-                DisconnectResult res = DisconnectBlock(chainstate, block, pindex, coins);
+                DisconnectResult res = DisconnectBlock(block_store, block, pindex, coins);
                 if (res == DISCONNECT_FAILED) {
                     LogError("Verification error: irrecoverable inconsistency in block data at %d, hash=%s", pindex->nHeight, pindex->GetBlockHash().ToString());
                     return VerifyDBResult::CORRUPTED_BLOCK_DB;
@@ -876,7 +890,7 @@ VerifyDBResult CVerifyDB::VerifyDB(
                 /*cache_script_results=*/false};
             connection_setup.MaybeLogScriptPolicy(chainstate.LastScriptCheckReasonLogged(), block.GetHash());
             const validation::BlockConnectionRequest request{connection_setup.Request(block, coins)};
-            if (!validation::BlockConnectionEngine{}.Connect(request, state)) {
+            if (!validation::BlockConnectionEngine{}.Connect(request, state).Succeeded()) {
                 LogError("Verification error: found unconnectable block at %d, hash=%s (%s)", pindex->nHeight, pindex->GetBlockHash().ToString(), state.ToString());
                 return VerifyDBResult::CORRUPTED_BLOCK_DB;
             }
@@ -896,7 +910,7 @@ VerifyDBResult CVerifyDB::VerifyDB(
 }
 
 /** Apply the effects of a block on the utxo cache, ignoring that it may already have been applied. */
-static bool RollforwardBlock(BlockDataStore& block_store, const CBlockIndex* pindex, CCoinsViewCache& inputs)
+static bool RollforwardBlock(BlockDataReader& block_reader, const CBlockIndex* pindex, CCoinsViewCache& inputs)
     EXCLUSIVE_LOCKS_REQUIRED(cs_main)
 {
     AssertLockHeld(cs_main);
@@ -904,7 +918,7 @@ static bool RollforwardBlock(BlockDataStore& block_store, const CBlockIndex* pin
     // directly instead of using block connection effects; see
     // doc/legacy-compatibility.md.
     CBlock block;
-    if (!block_store.ReadBlock(block, *pindex)) {
+    if (!block_reader.ReadBlock(block, *pindex)) {
         LogError("ReplayBlock(): ReadBlock failed at %d, hash=%s\n", pindex->nHeight, pindex->GetBlockHash().ToString());
         return false;
     }

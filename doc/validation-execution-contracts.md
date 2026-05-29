@@ -96,6 +96,16 @@ gather Core state under required locks
 Only the commit section should mutate active chainstate. Consensus-facing
 validation stages should not rely on hidden global state.
 
+Current block connection capabilities are intentionally narrow:
+
+- `BlockUndoWriter` writes undo data during commit.
+- `BlockIndexValidityCommitter` records validated block metadata.
+- `BlockScriptChecker` owns script execution and caching.
+- `SpendState` owns UTXO reads for spend validation.
+
+Do not pass `Chainstate`, `ChainstateManager`, `CoreBlockDataStore`,
+`CoreBlockIndexStore`, or another broad store into the block connection engine.
+
 ## Execution Contract
 
 The validation API should not commit to one runtime model.
@@ -140,3 +150,4 @@ For validation changes, check:
 - Does consensus remain independent of validation, kernel, and node?
 - Can script execution be replaced without changing spend accounting?
 - Can storage behavior be replaced without changing consensus rules?
+- Does a runtime request expose only the capabilities used by the callee?

@@ -48,6 +48,7 @@ add_executable(test_bitcoin
   consensus_snapshot_spend_state_tests.cpp
   consensus_tx_verify_tests.cpp
   consensus_block_consensus_pipeline_tests.cpp
+  core_block_policy_tests.cpp
   common_url_tests.cpp
   compress_tests.cpp
   crypto_tests.cpp

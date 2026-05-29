@@ -109,8 +109,8 @@ void BenchmarkBlockConnectionEngine(benchmark::Bench& bench, std::vector<CKey>& 
         CoreBlockIndexStore block_index_store{chainstate.m_chainman};
         const CoreBlockConnectionRuntimeInputs runtime_inputs{
             .notifications = chainstate.m_chainman.GetNotifications(),
-            .block_store = block_store,
-            .block_index_store = block_index_store,
+            .undo_writer = block_store,
+            .block_index_committer = block_index_store,
             .script_check_queue = chainstate.m_chainman.GetCheckQueue(),
             .validation_cache = chainstate.m_chainman.m_validation_cache,
             .trace_counters = BlockConnectionTraceCountersFor(chainstate.m_chainman),
@@ -122,7 +122,7 @@ void BenchmarkBlockConnectionEngine(benchmark::Bench& bench, std::vector<CKey>& 
             /*cache_script_results=*/false};
         connection_setup.MaybeLogScriptPolicy(chainstate.LastScriptCheckReasonLogged(), test_block.GetHash());
         const validation::BlockConnectionRequest request{connection_setup.Request(test_block, viewNew)};
-        assert(validation::BlockConnectionEngine{}.Connect(request, test_block_state));
+        assert(validation::BlockConnectionEngine{}.Connect(request, test_block_state).Succeeded());
     });
 }
 

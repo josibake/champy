@@ -22,6 +22,11 @@ Target:
 - pass copied facts for read-only context
 - keep live mutable Core objects only at commit boundaries
 
+The block connection engine no longer receives broad storage/index stores. It
+receives `BlockUndoWriter` and `BlockIndexValidityCommitter` for commit effects.
+Other validation paths still use broader adapters while admission, replay, and
+verification are being kept behavior-compatible.
+
 ## `cs_main`
 
 `cs_main` still protects broad parts of chain validation.

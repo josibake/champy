@@ -42,21 +42,21 @@ CBlockUndo BuildBlockUndoFromSpendEffects(const Consensus::BlockSpendEffects& ef
 
 } // namespace
 
-CoreBlockEffectsWriter::CoreBlockEffectsWriter(BlockDataStore& block_store, BlockIndexStore& block_index_store, CCoinsViewCache& view, CBlockIndex& block_index)
-    : m_block_store{block_store}, m_block_index_store{block_index_store}, m_view{view}, m_block_index{block_index}
+CoreBlockEffectsWriter::CoreBlockEffectsWriter(BlockUndoWriter& undo_writer, BlockIndexValidityCommitter& block_index_committer, CCoinsViewCache& view, CBlockIndex& block_index)
+    : m_undo_writer{undo_writer}, m_block_index_committer{block_index_committer}, m_view{view}, m_block_index{block_index}
 {
 }
 
 Consensus::BlockCommitResult<void> CoreBlockEffectsWriter::WriteBlockRevertData(const Consensus::BlockCommitContext&, const Consensus::BlockSpendEffects& effects)
 {
-    return m_block_store.WriteBlockUndo(BuildBlockUndoFromSpendEffects(effects), m_block_index);
+    return m_undo_writer.WriteBlockUndo(BuildBlockUndoFromSpendEffects(effects), m_block_index);
 }
 
 Consensus::BlockCommitResult<void> CoreBlockEffectsWriter::CommitBlockMetadata(const Consensus::BlockCommitContext& context, const Consensus::BlockSpendEffects&)
 {
     if (!m_block_index.IsValid(BLOCK_VALID_SCRIPTS)) {
         m_block_index.RaiseValidity(BLOCK_VALID_SCRIPTS);
-        m_block_index_store.MarkBlockIndexDirty(m_block_index);
+        m_block_index_committer.MarkBlockIndexDirty(m_block_index);
     }
 
     m_view.SetBestBlock(context.new_best_block);

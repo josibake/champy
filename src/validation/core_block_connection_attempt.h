@@ -11,11 +11,11 @@
 #include <kernel/cs_main.h>
 #include <validation/core_block_commit_adapters.h>
 
-class BlockDataStore;
+class BlockUndoWriter;
 class CBlock;
 class CBlockIndex;
 class CCoinsViewCache;
-class BlockIndexStore;
+class BlockIndexValidityCommitter;
 
 class CoreBlockConnectionAttempt final {
 public:
@@ -23,8 +23,8 @@ public:
         const CBlock& block,
         CBlockIndex& block_index,
         CCoinsViewCache& view,
-        BlockDataStore& block_store,
-        BlockIndexStore& block_index_store,
+        BlockUndoWriter& undo_writer,
+        BlockIndexValidityCommitter& block_index_committer,
         Consensus::BlockSpendWorkspace& spend_workspace,
         Consensus::BlockSpendStateCommitter& spend_state_committer,
         Consensus::BlockConsensusContext consensus_context,
