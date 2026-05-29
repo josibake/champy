@@ -10,21 +10,22 @@
 #include <chainstate.h>
 #include <consensus/consensus.h>
 #include <pow.h>
+#include <util/check.h>
 #include <util/log.h>
 
 #include <cassert>
 #include <cstdint>
 
-CoreBlockScriptCheckDecision DetermineCoreBlockScriptChecks(ChainstateManager& chainman, BlockIndexStore& block_index_store, const CBlockIndex& block_index, const Consensus::Params& consensus_params)
+CoreBlockScriptCheckDecision DetermineCoreBlockScriptChecks(const CoreBlockScriptCheckPolicy& policy, BlockIndexStore& block_index_store, const CBlockIndex& block_index, const Consensus::Params& consensus_params)
 {
-    if (chainman.AssumedValidBlock().IsNull()) {
+    if (policy.assumed_valid_block.IsNull()) {
         return {.run_script_checks = true, .reason = "assumevalid=0 (always verify)"};
     }
 
     constexpr int64_t TWO_WEEKS_IN_SECONDS{60 * 60 * 24 * 7 * 2};
     // Assumevalid is Core validation policy, not consensus. It decides whether
     // this node executes script checks for ancestors of a configured block.
-    const CBlockIndex* assumed_valid_index{block_index_store.LookupBlockIndex(chainman.AssumedValidBlock())};
+    const CBlockIndex* assumed_valid_index{block_index_store.LookupBlockIndex(policy.assumed_valid_block)};
     if (!assumed_valid_index) {
         return {.run_script_checks = true, .reason = "assumevalid hash not in headers"};
     }
@@ -33,13 +34,14 @@ CoreBlockScriptCheckDecision DetermineCoreBlockScriptChecks(ChainstateManager& c
             .run_script_checks = true,
             .reason = block_index.nHeight > assumed_valid_index->nHeight ? "block height above assumevalid height" : "block not in assumevalid chain"};
     }
-    if (chainman.m_best_header->GetAncestor(block_index.nHeight) != &block_index) {
+    const CBlockIndex& best_header{*Assert(policy.best_header)};
+    if (best_header.GetAncestor(block_index.nHeight) != &block_index) {
         return {.run_script_checks = true, .reason = "block not in best header chain"};
     }
-    if (chainman.m_best_header->nChainWork < chainman.MinimumChainWork()) {
+    if (best_header.nChainWork < policy.minimum_chain_work) {
         return {.run_script_checks = true, .reason = "best header chainwork below minimumchainwork"};
     }
-    if (GetBlockProofEquivalentTime(*chainman.m_best_header, block_index, *chainman.m_best_header, consensus_params) <= TWO_WEEKS_IN_SECONDS) {
+    if (GetBlockProofEquivalentTime(best_header, block_index, best_header, consensus_params) <= TWO_WEEKS_IN_SECONDS) {
         return {.run_script_checks = true, .reason = "block too recent relative to best header"};
     }
 

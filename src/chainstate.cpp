@@ -9,14 +9,12 @@
 
 #include <arith_uint256.h>
 #include <validation/block_data_adapters.h>
-#include <validation/block_connection.h>
-#include <validation/block_connection_trace.h>
 #include <validation/block_index_adapters.h>
-#include <validation/block_script_check_adapters.h>
+#include <validation/block_connection.h>
 #include <validation/block_validation.h>
 #include <chain.h>
 #include <validation/chain_validation.h>
-#include <validation/core_block_connection_context.h>
+#include <validation/core_block_connection_setup.h>
 #include <chainstate_event_sink.h>
 #include <clientversion.h>
 #include <consensus/amount.h>
@@ -599,6 +597,145 @@ struct ConnectedBlock {
     std::shared_ptr<const CBlock> pblock;
 };
 
+static std::shared_ptr<const CBlock> LoadBlockForConnection(
+    Notifications& notifications,
+    BlockValidationState& state,
+    CBlockIndex& block_index,
+    std::shared_ptr<const CBlock> cached_block,
+    BlockDataStore& block_store) EXCLUSIVE_LOCKS_REQUIRED(cs_main)
+{
+    AssertLockHeld(cs_main);
+
+    if (cached_block) {
+        LogDebug(BCLog::BENCH, "  - Using cached block\n");
+        return cached_block;
+    }
+
+    std::shared_ptr<CBlock> block{std::make_shared<CBlock>()};
+    if (!block_store.ReadBlock(*block, block_index)) {
+        FatalError(notifications, state, _("Failed to read block."));
+        return nullptr;
+    }
+    return block;
+}
+
+static CoreBlockConnectionRuntimeInputs MakeCoreBlockConnectionRuntimeInputs(
+    ChainstateManager& chainman,
+    BlockDataStore& block_store,
+    BlockIndexStore& block_index_store) EXCLUSIVE_LOCKS_REQUIRED(cs_main)
+{
+    AssertLockHeld(cs_main);
+
+    return {
+        .notifications = chainman.GetNotifications(),
+        .block_store = block_store,
+        .block_index_store = block_index_store,
+        .script_check_queue = chainman.GetCheckQueue(),
+        .validation_cache = chainman.m_validation_cache,
+        .trace_counters = BlockConnectionTraceCountersFor(chainman),
+    };
+}
+
+static bool RunBlockConnection(
+    BlockValidationState& state,
+    CBlockIndex& block_index,
+    const std::shared_ptr<const CBlock>& block,
+    CCoinsViewCache& view,
+    CoreBlockConnectionRuntimeInputs runtime_inputs,
+    CoreBlockConnectionPlan connection_plan,
+    std::optional<const char*>& last_reason_logged,
+    ValidationSignals* signals) EXCLUSIVE_LOCKS_REQUIRED(cs_main)
+{
+    AssertLockHeld(cs_main);
+
+    CoreBlockConnectionSetup connection_setup{
+        runtime_inputs,
+        std::move(connection_plan),
+        block_index,
+        /*cache_script_results=*/false};
+    connection_setup.MaybeLogScriptPolicy(last_reason_logged, block->GetHash());
+    const validation::BlockConnectionRequest request{connection_setup.Request(*block, view)};
+    const bool connected{validation::BlockConnectionEngine{}.Connect(request, state)};
+    if (signals) {
+        signals->BlockChecked(block, state);
+    }
+    if (!connected) {
+        LogError("%s: Block connection %s failed, %s\n", "ConnectTip", block_index.GetBlockHash().ToString(), state.ToString());
+        return false;
+    }
+    return true;
+}
+
+static void AccumulateAndLogConnectTipStep(
+    const char* label,
+    SteadyClock::duration elapsed,
+    SteadyClock::duration& total,
+    int64_t blocks_total) EXCLUSIVE_LOCKS_REQUIRED(cs_main)
+{
+    AssertLockHeld(cs_main);
+
+    total += elapsed;
+    assert(blocks_total > 0);
+    LogDebug(BCLog::BENCH, "  - %s: %.2fms [%.2fs (%.2fms/blk)]\n",
+             label,
+             Ticks<MillisecondsDouble>(elapsed),
+             Ticks<SecondsDouble>(total),
+             Ticks<MillisecondsDouble>(total) / blocks_total);
+}
+
+static void AccumulateAndLogConnectTipTotal(
+    SteadyClock::duration elapsed,
+    SteadyClock::duration& total,
+    int64_t blocks_total) EXCLUSIVE_LOCKS_REQUIRED(cs_main)
+{
+    AssertLockHeld(cs_main);
+
+    total += elapsed;
+    assert(blocks_total > 0);
+    LogDebug(BCLog::BENCH, "- Connect block: %.2fms [%.2fs (%.2fms/blk)]\n",
+             Ticks<MillisecondsDouble>(elapsed),
+             Ticks<SecondsDouble>(total),
+             Ticks<MillisecondsDouble>(total) / blocks_total);
+}
+
+static void CommitBlockConnectionView(CCoinsViewCache& view) EXCLUSIVE_LOCKS_REQUIRED(cs_main)
+{
+    AssertLockHeld(cs_main);
+
+    view.Flush(/*reallocate_cache=*/false); // No need to reallocate since it only has capacity for 1 block
+}
+
+static bool PersistConnectedChainstate(
+    Chainstate& chainstate,
+    BlockValidationState& state,
+    ChainstateEventSink* chain_events) EXCLUSIVE_LOCKS_REQUIRED(cs_main)
+{
+    AssertLockHeld(cs_main);
+
+    return chainstate.FlushStateToDisk(state, FlushStateMode::IF_NEEDED, /*nManualPruneHeight=*/0, ExternalCacheUsageForEvents(chain_events));
+}
+
+static void PublishConnectedBlock(
+    ChainstateEventSink* chain_events,
+    const CBlock& block,
+    int height) EXCLUSIVE_LOCKS_REQUIRED(cs_main)
+{
+    AssertLockHeld(cs_main);
+
+    if (chain_events) {
+        chain_events->BlockConnected(block, height);
+    }
+}
+
+void Chainstate::AdvanceActiveChainTip(CBlockIndex& block_index, ChainstateEventSink* chain_events)
+{
+    AssertLockHeld(cs_main);
+
+    m_chain.SetTip(block_index);
+    m_chainman.UpdateIBDStatus();
+    UpdateTip(&block_index, chain_events);
+}
+
 /**
  * Connect a new block to m_chain. block_to_connect is either nullptr or a pointer to a CBlock
  * corresponding to pindexNew, to bypass loading it again from disk.
@@ -616,105 +753,57 @@ bool Chainstate::ConnectTip(
 
     assert(pindexNew->pprev == m_chain.Tip());
     CoreBlockDataStore block_store{m_blockman};
-    // Read block from disk.
-    const auto time_1{SteadyClock::now()};
-    if (!block_to_connect) {
-        std::shared_ptr<CBlock> pblockNew = std::make_shared<CBlock>();
-        if (!block_store.ReadBlock(*pblockNew, *pindexNew)) {
-            return FatalError(m_chainman.GetNotifications(), state, _("Failed to read block."));
-        }
-        block_to_connect = std::move(pblockNew);
-    } else {
-        LogDebug(BCLog::BENCH, "  - Using cached block\n");
-    }
-    // Apply the block atomically to the chain state.
-    const auto time_2{SteadyClock::now()};
-    SteadyClock::time_point time_3;
-    // When adding aggregate statistics in the future, keep in mind that
-    // num_blocks_total may be zero until the block connection call below.
+    CoreBlockIndexStore block_index_store{m_chainman};
+
+    const auto time_start{SteadyClock::now()};
+    block_to_connect = LoadBlockForConnection(m_chainman.GetNotifications(), state, *pindexNew, std::move(block_to_connect), block_store);
+    if (!block_to_connect) return false;
+
+    const auto time_block_loaded{SteadyClock::now()};
     LogDebug(BCLog::BENCH, "  - Load block from disk: %.2fms\n",
-             Ticks<MillisecondsDouble>(time_2 - time_1));
+             Ticks<MillisecondsDouble>(time_block_loaded - time_start));
+
+    SteadyClock::time_point time_block_connected;
     {
         CCoinsViewCache& view{*m_coins_views->m_block_connection_view};
         const auto reset_guard{view.CreateResetGuard()};
-        CoreBlockIndexStore block_index_store{m_chainman};
-        const uint256 block_hash{block_to_connect->GetHash()};
-        const CoreBlockConnectionPlan connection_plan{PlanCoreBlockConnection(m_chainman, block_index_store, *pindexNew)};
-        MaybeLogCoreBlockConnectionScriptPolicy(LastScriptCheckReasonLogged(), *pindexNew, block_hash, connection_plan);
-        CoreBlockScriptChecks script_checks{
-            m_chainman.GetCheckQueue(),
-            connection_plan.script_check_decision.run_script_checks,
-            /*cache_results=*/false,
-            m_chainman.m_validation_cache};
-        BlockConnectionTrace trace{BlockConnectionTraceCountersFor(m_chainman)};
-        const validation::BlockConnectionRequest request{
-            .runtime = {
-                .notifications = m_chainman.GetNotifications(),
-                .block_store = block_store,
-                .block_index_store = block_index_store,
-                .script_checker = script_checks.Checker(),
-                .trace = trace,
-            },
-            .context = connection_plan.context,
-            .block = *block_to_connect,
-            .block_index = *pindexNew,
-            .coins_view = view,
-        };
-        bool rv = validation::BlockConnectionEngine{}.Connect(request, state);
-        if (m_chainman.m_options.signals) {
-            m_chainman.m_options.signals->BlockChecked(block_to_connect, state);
-        }
-        if (!rv) {
-            if (state.IsInvalid())
+        if (!RunBlockConnection(
+                state,
+                *pindexNew,
+                block_to_connect,
+                view,
+                MakeCoreBlockConnectionRuntimeInputs(m_chainman, block_store, block_index_store),
+                PlanCoreBlockConnection(SnapshotCoreBlockConnectionPolicy(m_chainman, *pindexNew), block_index_store, *pindexNew),
+                LastScriptCheckReasonLogged(),
+                m_chainman.m_options.signals)) {
+            if (state.IsInvalid()) {
                 InvalidBlockFound(pindexNew, state);
-            LogError("%s: Block connection %s failed, %s\n", __func__, pindexNew->GetBlockHash().ToString(), state.ToString());
+            }
             return false;
         }
-        time_3 = SteadyClock::now();
-        m_chainman.time_connect_total += time_3 - time_2;
-        assert(m_chainman.num_blocks_total > 0);
-        LogDebug(BCLog::BENCH, "  - Connect total: %.2fms [%.2fs (%.2fms/blk)]\n",
-                 Ticks<MillisecondsDouble>(time_3 - time_2),
-                 Ticks<SecondsDouble>(m_chainman.time_connect_total),
-                 Ticks<MillisecondsDouble>(m_chainman.time_connect_total) / m_chainman.num_blocks_total);
-        view.Flush(/*reallocate_cache=*/false); // No need to reallocate since it only has capacity for 1 block
+
+        time_block_connected = SteadyClock::now();
+        AccumulateAndLogConnectTipStep("Connect total", time_block_connected - time_block_loaded, m_chainman.time_connect_total, m_chainman.num_blocks_total);
+        CommitBlockConnectionView(view);
     }
-    const auto time_4{SteadyClock::now()};
-    m_chainman.time_flush += time_4 - time_3;
-    LogDebug(BCLog::BENCH, "  - Flush: %.2fms [%.2fs (%.2fms/blk)]\n",
-             Ticks<MillisecondsDouble>(time_4 - time_3),
-             Ticks<SecondsDouble>(m_chainman.time_flush),
-             Ticks<MillisecondsDouble>(m_chainman.time_flush) / m_chainman.num_blocks_total);
-    // Write the chain state to disk, if necessary.
-    if (!FlushStateToDisk(state, FlushStateMode::IF_NEEDED, /*nManualPruneHeight=*/0, ExternalCacheUsageForEvents(chain_events))) {
+
+    const auto time_coins_committed{SteadyClock::now()};
+    AccumulateAndLogConnectTipStep("Flush", time_coins_committed - time_block_connected, m_chainman.time_flush, m_chainman.num_blocks_total);
+
+    if (!PersistConnectedChainstate(*this, state, chain_events)) {
         return false;
     }
-    const auto time_5{SteadyClock::now()};
-    m_chainman.time_chainstate += time_5 - time_4;
-    LogDebug(BCLog::BENCH, "  - Writing chainstate: %.2fms [%.2fs (%.2fms/blk)]\n",
-             Ticks<MillisecondsDouble>(time_5 - time_4),
-             Ticks<SecondsDouble>(m_chainman.time_chainstate),
-             Ticks<MillisecondsDouble>(m_chainman.time_chainstate) / m_chainman.num_blocks_total);
-    // Notify node-owned state about transactions confirmed by this block.
-    if (chain_events) {
-        chain_events->BlockConnected(*block_to_connect, pindexNew->nHeight);
-    }
-    // Update m_chain & related variables.
-    m_chain.SetTip(*pindexNew);
-    m_chainman.UpdateIBDStatus();
-    UpdateTip(pindexNew, chain_events);
 
-    const auto time_6{SteadyClock::now()};
-    m_chainman.time_post_connect += time_6 - time_5;
-    m_chainman.time_total += time_6 - time_1;
-    LogDebug(BCLog::BENCH, "  - Connect postprocess: %.2fms [%.2fs (%.2fms/blk)]\n",
-             Ticks<MillisecondsDouble>(time_6 - time_5),
-             Ticks<SecondsDouble>(m_chainman.time_post_connect),
-             Ticks<MillisecondsDouble>(m_chainman.time_post_connect) / m_chainman.num_blocks_total);
-    LogDebug(BCLog::BENCH, "- Connect block: %.2fms [%.2fs (%.2fms/blk)]\n",
-             Ticks<MillisecondsDouble>(time_6 - time_1),
-             Ticks<SecondsDouble>(m_chainman.time_total),
-             Ticks<MillisecondsDouble>(m_chainman.time_total) / m_chainman.num_blocks_total);
+    const auto time_chainstate_persisted{SteadyClock::now()};
+    AccumulateAndLogConnectTipStep("Writing chainstate", time_chainstate_persisted - time_coins_committed, m_chainman.time_chainstate, m_chainman.num_blocks_total);
+
+    PublishConnectedBlock(chain_events, *block_to_connect, pindexNew->nHeight);
+
+    AdvanceActiveChainTip(*pindexNew, chain_events);
+
+    const auto time_tip_advanced{SteadyClock::now()};
+    AccumulateAndLogConnectTipStep("Connect postprocess", time_tip_advanced - time_chainstate_persisted, m_chainman.time_post_connect, m_chainman.num_blocks_total);
+    AccumulateAndLogConnectTipTotal(time_tip_advanced - time_start, m_chainman.time_total, m_chainman.num_blocks_total);
 
     connected_blocks.emplace_back(pindexNew, std::move(block_to_connect));
     return true;

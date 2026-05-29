@@ -452,6 +452,8 @@ protected:
         std::shared_ptr<const CBlock> block_to_connect,
         std::vector<ConnectedBlock>& connected_blocks,
         ChainstateEventSink* chain_events) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
+    void AdvanceActiveChainTip(CBlockIndex& block_index, ChainstateEventSink* chain_events)
+        EXCLUSIVE_LOCKS_REQUIRED(cs_main);
 
     CBlockIndex* FindMostWorkChain() EXCLUSIVE_LOCKS_REQUIRED(cs_main);
 

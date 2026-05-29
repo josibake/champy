@@ -5,8 +5,10 @@
 #ifndef BITCOIN_CORE_BLOCK_POLICY_H
 #define BITCOIN_CORE_BLOCK_POLICY_H
 
+#include <arith_uint256.h>
 #include <consensus/block_spend.h>
 #include <kernel/cs_main.h>
+#include <uint256.h>
 
 #include <optional>
 
@@ -20,7 +22,13 @@ struct CoreBlockScriptCheckDecision {
     const char* reason{nullptr};
 };
 
-[[nodiscard]] CoreBlockScriptCheckDecision DetermineCoreBlockScriptChecks(ChainstateManager& chainman, BlockIndexStore& block_index_store, const CBlockIndex& block_index, const Consensus::Params& consensus_params)
+struct CoreBlockScriptCheckPolicy {
+    uint256 assumed_valid_block;
+    const CBlockIndex* best_header{nullptr};
+    arith_uint256 minimum_chain_work;
+};
+
+[[nodiscard]] CoreBlockScriptCheckDecision DetermineCoreBlockScriptChecks(const CoreBlockScriptCheckPolicy& policy, BlockIndexStore& block_index_store, const CBlockIndex& block_index, const Consensus::Params& consensus_params)
     EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
 
 void MaybeLogCoreBlockScriptCheckDecision(std::optional<const char*>& last_reason_logged, const CBlockIndex& block_index, const uint256& block_hash, const CoreBlockScriptCheckDecision& decision)

@@ -8,10 +8,8 @@
 #include <arith_uint256.h>
 #include <validation/block_data_admission.h>
 #include <validation/block_data_adapters.h>
-#include <validation/block_connection.h>
-#include <validation/block_connection_trace.h>
 #include <validation/block_index_adapters.h>
-#include <validation/block_script_check_adapters.h>
+#include <validation/block_connection.h>
 #include <validation/block_validation_adapters.h>
 #include <validation/block_validation_error.h>
 #include <validation/block_validation_policy.h>
@@ -45,7 +43,7 @@
 #include <util/time.h>
 #include <util/trace.h>
 #include <util/translation.h>
-#include <validation/core_block_connection_context.h>
+#include <validation/core_block_connection_setup.h>
 #include <validation_state.h>
 #include <validationinterface.h>
 
@@ -63,6 +61,23 @@
 using kernel::Notifications;
 
 using fsbridge::FopenFn;
+
+static CoreBlockConnectionRuntimeInputs MakeCoreBlockConnectionRuntimeInputs(
+    ChainstateManager& chainman,
+    BlockDataStore& block_store,
+    BlockIndexStore& block_index_store) EXCLUSIVE_LOCKS_REQUIRED(cs_main)
+{
+    AssertLockHeld(cs_main);
+
+    return {
+        .notifications = chainman.GetNotifications(),
+        .block_store = block_store,
+        .block_index_store = block_index_store,
+        .script_check_queue = chainman.GetCheckQueue(),
+        .validation_cache = chainman.m_validation_cache,
+        .trace_counters = BlockConnectionTraceCountersFor(chainman),
+    };
+}
 
 /** Undo the effects of this block (with given index) on the UTXO set represented by coins.
  *  When FAILED is returned, view is left in an indeterminate state. */
@@ -702,28 +717,15 @@ BlockValidationState TestBlockValidity(
     };
     CoreBlockDataStore block_store{chainstate.m_blockman};
     CoreBlockIndexStore block_index_store{chainstate.m_chainman};
-    const CoreBlockConnectionPlan connection_plan{PlanCoreBlockConnection(chainstate.m_chainman, block_index_store, index_dummy)};
-    MaybeLogCoreBlockConnectionScriptPolicy(chainstate.LastScriptCheckReasonLogged(), index_dummy, block_hash, connection_plan);
-    CoreBlockScriptChecks script_checks{
-        chainstate.m_chainman.GetCheckQueue(),
-        connection_plan.script_check_decision.run_script_checks,
-        /*cache_results=*/true,
-        chainstate.m_chainman.m_validation_cache};
-    BlockConnectionTrace trace{BlockConnectionTraceCountersFor(chainstate.m_chainman)};
-    const validation::BlockConnectionRequest request{
-        .runtime = {
-            .notifications = chainstate.m_chainman.GetNotifications(),
-            .block_store = block_store,
-            .block_index_store = block_index_store,
-            .script_checker = script_checks.Checker(),
-            .trace = trace,
-        },
-        .context = connection_plan.context,
-        .block = block,
-        .block_index = index_dummy,
-        .coins_view = view_dummy,
-        .options = connect_options,
-    };
+    const CoreBlockConnectionRuntimeInputs runtime_inputs{
+        MakeCoreBlockConnectionRuntimeInputs(chainstate.m_chainman, block_store, block_index_store)};
+    CoreBlockConnectionSetup connection_setup{
+        runtime_inputs,
+        PlanCoreBlockConnection(SnapshotCoreBlockConnectionPolicy(chainstate.m_chainman, index_dummy), block_index_store, index_dummy),
+        index_dummy,
+        /*cache_script_results=*/true};
+    connection_setup.MaybeLogScriptPolicy(chainstate.LastScriptCheckReasonLogged(), block_hash);
+    const validation::BlockConnectionRequest request{connection_setup.Request(block, view_dummy, connect_options)};
     if (!validation::BlockConnectionEngine{}.Connect(request, state)) {
         if (state.IsValid()) NONFATAL_UNREACHABLE();
         return state;
@@ -773,6 +775,9 @@ VerifyDBResult CVerifyDB::VerifyDB(
     bool skipped_no_block_data{false};
     bool skipped_l3_checks{false};
     CoreBlockDataStore block_store{chainstate.m_blockman};
+    CoreBlockIndexStore block_index_store{chainstate.m_chainman};
+    const CoreBlockConnectionRuntimeInputs runtime_inputs{
+        MakeCoreBlockConnectionRuntimeInputs(chainstate.m_chainman, block_store, block_index_store)};
     LogInfo("Verification progress: 0%%");
 
     for (pindex = chainstate.m_chain.Tip(); pindex && pindex->pprev; pindex = pindex->pprev) {
@@ -864,29 +869,13 @@ VerifyDBResult CVerifyDB::VerifyDB(
                 LogError("Verification error: ReadBlock failed at %d, hash=%s", pindex->nHeight, pindex->GetBlockHash().ToString());
                 return VerifyDBResult::CORRUPTED_BLOCK_DB;
             }
-            CoreBlockIndexStore block_index_store{chainstate.m_chainman};
-            const uint256 block_hash{block.GetHash()};
-            const CoreBlockConnectionPlan connection_plan{PlanCoreBlockConnection(chainstate.m_chainman, block_index_store, *pindex)};
-            MaybeLogCoreBlockConnectionScriptPolicy(chainstate.LastScriptCheckReasonLogged(), *pindex, block_hash, connection_plan);
-            CoreBlockScriptChecks script_checks{
-                chainstate.m_chainman.GetCheckQueue(),
-                connection_plan.script_check_decision.run_script_checks,
-                /*cache_results=*/false,
-                chainstate.m_chainman.m_validation_cache};
-            BlockConnectionTrace trace{BlockConnectionTraceCountersFor(chainstate.m_chainman)};
-            const validation::BlockConnectionRequest request{
-                .runtime = {
-                    .notifications = chainstate.m_chainman.GetNotifications(),
-                    .block_store = block_store,
-                    .block_index_store = block_index_store,
-                    .script_checker = script_checks.Checker(),
-                    .trace = trace,
-                },
-                .context = connection_plan.context,
-                .block = block,
-                .block_index = *pindex,
-                .coins_view = coins,
-            };
+            CoreBlockConnectionSetup connection_setup{
+                runtime_inputs,
+                PlanCoreBlockConnection(SnapshotCoreBlockConnectionPolicy(chainstate.m_chainman, *pindex), block_index_store, *pindex),
+                *pindex,
+                /*cache_script_results=*/false};
+            connection_setup.MaybeLogScriptPolicy(chainstate.LastScriptCheckReasonLogged(), block.GetHash());
+            const validation::BlockConnectionRequest request{connection_setup.Request(block, coins)};
             if (!validation::BlockConnectionEngine{}.Connect(request, state)) {
                 LogError("Verification error: found unconnectable block at %d, hash=%s (%s)", pindex->nHeight, pindex->GetBlockHash().ToString(), state.ToString());
                 return VerifyDBResult::CORRUPTED_BLOCK_DB;

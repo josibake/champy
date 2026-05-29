@@ -16,13 +16,23 @@ class ChainstateManager;
 class BlockIndexStore;
 class uint256;
 
+struct CoreBlockConnectionPolicySnapshot {
+    const Consensus::Params& consensus_params;
+    Consensus::BlockHeaderContext header_context;
+    Consensus::BlockSpendConsensusOptions spend_options;
+    CoreBlockScriptCheckPolicy script_check_policy;
+};
+
 struct CoreBlockConnectionPlan {
     validation::BlockConnectionContext context;
     CoreBlockScriptCheckDecision script_check_decision;
     bool has_spend_stage{false};
 };
 
-[[nodiscard]] CoreBlockConnectionPlan PlanCoreBlockConnection(ChainstateManager& chainman, BlockIndexStore& block_index_store, const CBlockIndex& block_index)
+[[nodiscard]] CoreBlockConnectionPolicySnapshot SnapshotCoreBlockConnectionPolicy(ChainstateManager& chainman, const CBlockIndex& block_index)
+    EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
+
+[[nodiscard]] CoreBlockConnectionPlan PlanCoreBlockConnection(const CoreBlockConnectionPolicySnapshot& policy, BlockIndexStore& block_index_store, const CBlockIndex& block_index)
     EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
 
 void MaybeLogCoreBlockConnectionScriptPolicy(std::optional<const char*>& last_reason_logged, const CBlockIndex& block_index, const uint256& block_hash, const CoreBlockConnectionPlan& plan)

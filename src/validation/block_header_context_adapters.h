@@ -13,7 +13,4 @@ class ChainstateManager;
 
 [[nodiscard]] Consensus::BlockHeaderContext BuildCoreBlockHeaderContext(const ChainstateManager& chainman, const CBlockIndex* previous_index);
 
-[[nodiscard]] Consensus::BlockConsensusContext BuildCoreBlockConsensusContext(const CBlockIndex& block_index, const ChainstateManager& chainman, const Consensus::Params& consensus_params)
-    EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
-
 #endif // BITCOIN_BLOCK_HEADER_CONTEXT_ADAPTERS_H

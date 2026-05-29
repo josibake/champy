@@ -6,7 +6,6 @@
 
 #include <chain.h>
 #include <chainstate.h>
-#include <consensus/amount.h>
 
 Consensus::BlockHeaderContext BuildCoreBlockHeaderContext(const ChainstateManager& chainman, const CBlockIndex* previous_index)
 {
@@ -26,12 +25,4 @@ Consensus::BlockHeaderContext BuildCoreBlockHeaderContext(const ChainstateManage
             .segwit_active = ::DeploymentActiveAfter(previous_index, chainman, Consensus::DEPLOYMENT_SEGWIT),
         },
     };
-}
-
-Consensus::BlockConsensusContext BuildCoreBlockConsensusContext(const CBlockIndex& block_index, const ChainstateManager& chainman, const Consensus::Params& consensus_params)
-{
-    return Consensus::BuildBlockConsensusContext(
-        BuildCoreBlockHeaderContext(chainman, block_index.pprev),
-        block_index.GetBlockHash(),
-        Consensus::CalculateBlockSubsidy(block_index.nHeight, consensus_params));
 }

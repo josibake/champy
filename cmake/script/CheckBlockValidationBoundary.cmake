@@ -41,6 +41,8 @@ foreach(relative_path IN ITEMS
     src/validation/block_connection_trace.h
     src/validation/core_block_connection_context.cpp
     src/validation/core_block_connection_context.h
+    src/validation/core_block_connection_setup.cpp
+    src/validation/core_block_connection_setup.h
     src/validation/block_validation_internal.h
     src/validation/chain_validation.cpp
     src/validation/chain_validation.h)
@@ -51,6 +53,7 @@ require_text("src/CMakeLists.txt" "block_data_adapters.cpp")
 require_text("src/CMakeLists.txt" "block_data_admission.cpp")
 require_text("src/CMakeLists.txt" "block_connection_trace.cpp")
 require_text("src/CMakeLists.txt" "core_block_connection_context.cpp")
+require_text("src/CMakeLists.txt" "core_block_connection_setup.cpp")
 require_text("src/CMakeLists.txt" "add_library(bitcoin_chain_validation")
 require_text("src/CMakeLists.txt" "BITCOIN_CHAIN_VALIDATION_SOURCES")
 require_text("src/CMakeLists.txt" "target_link_libraries(bitcoin_chain_validation")
@@ -99,9 +102,28 @@ require_text("src/validation/block_validation.cpp" "CoreBlockIndexStore")
 require_text("src/chainstate.cpp" "CoreBlockDataStore")
 require_text("src/chainstate.cpp" "CoreBlockIndexStore")
 require_text("src/validation/core_block_policy.cpp" "BlockIndexStore&")
+require_text("src/validation/core_block_policy.h" "struct CoreBlockScriptCheckPolicy")
+require_text("src/validation/core_block_policy.h" "const CoreBlockScriptCheckPolicy& policy")
+forbid_text("src/validation/core_block_policy.h" "DetermineCoreBlockScriptChecks(ChainstateManager&")
+forbid_text("src/validation/core_block_policy.cpp" "DetermineCoreBlockScriptChecks(ChainstateManager&")
+require_text("src/validation/core_block_connection_context.h" "struct CoreBlockConnectionPolicySnapshot")
+require_text("src/validation/core_block_connection_context.h" "SnapshotCoreBlockConnectionPolicy")
 require_text("src/validation/core_block_connection_context.h" "PlanCoreBlockConnection")
+require_text("src/validation/core_block_connection_context.h" "const CoreBlockConnectionPolicySnapshot& policy")
+forbid_text("src/validation/core_block_connection_context.h" "PlanCoreBlockConnection(ChainstateManager&")
+forbid_text("src/validation/core_block_connection_context.cpp" "PlanCoreBlockConnection(ChainstateManager&")
 require_text("src/validation/core_block_connection_context.h" "MaybeLogCoreBlockConnectionScriptPolicy")
-require_text("src/chainstate.cpp" "PlanCoreBlockConnection")
+require_text("src/validation/core_block_connection_setup.h" "class CoreBlockConnectionSetup")
+require_text("src/validation/core_block_connection_setup.h" "struct CoreBlockConnectionRuntimeInputs")
+require_text("src/validation/core_block_connection_setup.h" "BlockDataStore& m_block_store")
+require_text("src/validation/core_block_connection_setup.h" "BlockIndexStore& m_block_index_store")
+require_text("src/validation/core_block_connection_setup.h" "CoreBlockScriptChecks m_script_checks")
+require_text("src/validation/core_block_connection_setup.h" "BlockConnectionTrace m_trace")
+forbid_text("src/validation/core_block_connection_setup.h" "Chainstate&")
+forbid_text("src/validation/core_block_connection_setup.h" "ChainstateManager&")
+forbid_text("src/validation/core_block_connection_setup.h" "CoreBlockDataStore m_block_store")
+forbid_text("src/validation/core_block_connection_setup.h" "CoreBlockIndexStore m_block_index_store")
+require_text("src/chainstate.cpp" "CoreBlockConnectionSetup")
 require_text("src/kernel/bitcoinkernel.cpp" "CoreBlockDataStore")
 require_text("src/kernel/bitcoinkernel.cpp" "CoreBlockIndexStore")
 
