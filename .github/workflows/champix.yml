@@ -43,7 +43,6 @@ jobs:
         with:
           repository: ${{ env.CHAMPIX_REPOSITORY }}
           path: champix
-          token: ${{ secrets.CHAMPIX_CHECKOUT_TOKEN || github.token }}
 
       - uses: cachix/install-nix-action@v31
         with:
