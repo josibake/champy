@@ -13,6 +13,7 @@
 #include <tinyformat.h>
 #include <uint256.h>
 #include <validation/block_connection.h>
+#include <validation/block_connection_state.h>
 #include <validation/block_data_adapters.h>
 #include <validation/block_index_adapters.h>
 #include <validation/block_validation_error.h>
@@ -82,7 +83,7 @@ bool RunBlockConnection(
     BlockValidationState& state,
     CBlockIndex& block_index,
     const std::shared_ptr<const CBlock>& block,
-    CCoinsViewCache& view,
+    validation::BlockConnectionState& connection_state,
     CoreBlockConnectionRuntimeInputs runtime_inputs,
     CoreBlockConnectionPlan connection_plan,
     std::optional<const char*>& last_reason_logged,
@@ -96,7 +97,7 @@ bool RunBlockConnection(
         block_index,
         /*cache_script_results=*/false};
     connection_setup.MaybeLogScriptPolicy(last_reason_logged, block->GetHash());
-    const validation::BlockConnectionRequest request{connection_setup.Request(*block, view)};
+    const validation::BlockConnectionRequest request{connection_setup.Request(*block, connection_state)};
     const validation::BlockConnectionResult connection_result{validation::BlockConnectionEngine{}.Connect(request, state)};
     if (signals) {
         signals->BlockChecked(block, state);
@@ -137,13 +138,6 @@ void AccumulateAndLogConnectTipTotal(
              Ticks<MillisecondsDouble>(elapsed),
              Ticks<SecondsDouble>(total),
              Ticks<MillisecondsDouble>(total) / blocks_total);
-}
-
-void CommitBlockConnectionView(CCoinsViewCache& view) EXCLUSIVE_LOCKS_REQUIRED(cs_main)
-{
-    AssertLockHeld(cs_main);
-
-    view.Flush(/*reallocate_cache=*/false); // No need to reallocate since it only has capacity for 1 block
 }
 
 void PublishConnectedBlock(
@@ -228,12 +222,12 @@ CoreConnectTipResult ConnectCoreChainTip(CoreConnectTipRequest request, BlockVal
 
     SteadyClock::time_point time_block_connected;
     {
-        const auto reset_guard{resources.connection_view.CreateResetGuard()};
+        const std::unique_ptr<validation::BlockConnectionAttemptGuard> connection_attempt{resources.connection_state.BeginConnectionAttempt()};
         if (!RunBlockConnection(
                 state,
                 request.block_index,
                 block_to_connect,
-                resources.connection_view,
+                resources.connection_state,
                 MakeCoreBlockConnectionRuntimeInputs(resources.context, resources.undo_writer, resources.block_index_committer),
                 PlanCoreBlockConnection(SnapshotCoreBlockConnectionPolicy(resources.context, request.block_index), resources.block_index_lookup, request.block_index),
                 resources.last_script_check_reason_logged,
@@ -246,7 +240,7 @@ CoreConnectTipResult ConnectCoreChainTip(CoreConnectTipRequest request, BlockVal
 
         time_block_connected = SteadyClock::now();
         AccumulateAndLogConnectTipStep("Connect total", time_block_connected - time_block_loaded, resources.timing.time_connect_total, resources.timing.blocks_total);
-        CommitBlockConnectionView(resources.connection_view);
+        connection_attempt->Commit();
     }
 
     const auto time_coins_committed{SteadyClock::now()};

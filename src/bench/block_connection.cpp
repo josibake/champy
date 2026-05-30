@@ -13,6 +13,7 @@
 #include <validation/block_data_adapters.h>
 #include <validation/block_index_adapters.h>
 #include <validation/block_connection.h>
+#include <validation/core_coins_block_connection_state.h>
 #include <validation/core_chain_validation_context.h>
 #include <validation/core_block_connection_setup.h>
 #include <validation_state.h>
@@ -123,7 +124,8 @@ void BenchmarkBlockConnectionEngine(benchmark::Bench& bench, std::vector<CKey>& 
             *pindex,
             /*cache_script_results=*/false};
         connection_setup.MaybeLogScriptPolicy(chainstate.LastScriptCheckReasonLogged(), test_block.GetHash());
-        const validation::BlockConnectionRequest request{connection_setup.Request(test_block, viewNew)};
+        validation::CoreCoinsBlockConnectionState connection_state{viewNew};
+        const validation::BlockConnectionRequest request{connection_setup.Request(test_block, connection_state)};
         assert(validation::BlockConnectionEngine{}.Connect(request, test_block_state).Succeeded());
     });
 }

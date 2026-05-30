@@ -5,24 +5,25 @@
 #include <validation/block_coin_effects.h>
 
 #include <coins.h>
+#include <primitives/block.h>
 #include <primitives/transaction.h>
 #include <undo.h>
 
 #include <cassert>
 #include <vector>
 
-namespace Consensus {
+namespace validation {
 
 namespace {
 
-Coin ToCoreCoin(const CoinSnapshot& coin)
+Coin ToCoreCoin(const Consensus::CoinSnapshot& coin)
 {
     return Coin{coin.output, coin.height, coin.is_coinbase};
 }
 
-CoinSnapshot ToConsensusCoin(const Coin& coin)
+Consensus::CoinSnapshot ToConsensusCoin(const Coin& coin)
 {
-    return CoinSnapshot{
+    return Consensus::CoinSnapshot{
         .output = coin.out,
         .height = static_cast<int>(coin.nHeight),
         .is_coinbase = coin.IsCoinBase(),
@@ -31,23 +32,23 @@ CoinSnapshot ToConsensusCoin(const Coin& coin)
 
 } // namespace
 
-void ApplyTransactionCoinEffectsForBlock(const TransactionCoinEffects& effects, CCoinsViewCache& coins, CTxUndo& undo)
+void ApplyTransactionCoinEffectsForBlock(const Consensus::TransactionCoinEffects& effects, CCoinsViewCache& coins, CTxUndo& undo)
 {
     undo.vprevout.reserve(effects.spends.size());
-    for (const SpentCoinEffect& spend : effects.spends) {
+    for (const Consensus::SpentCoinEffect& spend : effects.spends) {
         undo.vprevout.push_back(ToCoreCoin(spend.coin));
         const bool is_spent{coins.SpendCoin(spend.outpoint)};
         assert(is_spent);
     }
 
-    for (const CreatedCoinEffect& create : effects.creates) {
+    for (const Consensus::CreatedCoinEffect& create : effects.creates) {
         coins.AddCoin(create.outpoint, ToCoreCoin(create.coin), /*possible_overwrite=*/create.coin.is_coinbase);
     }
 }
 
 void StageTransactionCoinsForBlock(const CTransaction& tx, CCoinsViewCache& coins, CTxUndo& undo, int block_height)
 {
-    std::vector<CoinSnapshot> input_coins;
+    std::vector<Consensus::CoinSnapshot> input_coins;
     if (!tx.IsCoinBase()) {
         input_coins.reserve(tx.vin.size());
         for (const CTxIn& txin : tx.vin) {
@@ -56,8 +57,26 @@ void StageTransactionCoinsForBlock(const CTransaction& tx, CCoinsViewCache& coin
             input_coins.push_back(ToConsensusCoin(*coin));
         }
     }
-    const TransactionCoinEffects effects{BuildTransactionCoinEffectsForBlock(tx, input_coins, block_height)};
+    const Consensus::TransactionCoinEffects effects{Consensus::BuildTransactionCoinEffectsForBlock(tx, input_coins, block_height)};
     ApplyTransactionCoinEffectsForBlock(effects, coins, undo);
+}
+
+void ReplayTransactionCoinsForRecovery(const CTransaction& tx, CCoinsViewCache& coins, int block_height)
+{
+    if (!tx.IsCoinBase()) {
+        for (const CTxIn& txin : tx.vin) {
+            coins.SpendCoin(txin.prevout);
+        }
+    }
+
+    AddCoins(coins, tx, block_height, /*possible_overwrite=*/true);
+}
+
+void ReplayBlockCoinsForRecovery(const CBlock& block, CCoinsViewCache& coins, int block_height)
+{
+    for (const CTransactionRef& tx : block.vtx) {
+        ReplayTransactionCoinsForRecovery(*tx, coins, block_height);
+    }
 }
 
 void CommitStagedCoinsForBlock(CCoinsViewCache& staged_coins, CCoinsViewCache& coins)
@@ -66,4 +85,4 @@ void CommitStagedCoinsForBlock(CCoinsViewCache& staged_coins, CCoinsViewCache& c
     staged_coins.Flush(/*reallocate_cache=*/false);
 }
 
-} // namespace Consensus
+} // namespace validation

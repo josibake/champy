@@ -13,13 +13,13 @@
 class CBlockIndex;
 class CTransaction;
 
-namespace Consensus {
+namespace validation {
 
 [[nodiscard]] std::pair<int, int64_t> CalculateSequenceLocksAtBlock(const CTransaction& tx, int flags, std::span<const int> prev_heights, const CBlockIndex& block);
 [[nodiscard]] std::pair<int, int64_t> CalculateSequenceLocks(const CTransaction& tx, int flags, std::span<const int> prev_heights, const CBlockIndex& block);
 [[nodiscard]] bool EvaluateSequenceLocks(const CBlockIndex& block, std::pair<int, int64_t> lock_pair);
 [[nodiscard]] bool SequenceLocks(const CTransaction& tx, int flags, std::span<const int> prev_heights, const CBlockIndex& block);
 
-} // namespace Consensus
+} // namespace validation
 
 #endif // BITCOIN_SEQUENCE_LOCKS_ADAPTERS_H

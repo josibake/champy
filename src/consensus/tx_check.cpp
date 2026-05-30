@@ -58,8 +58,8 @@ TransactionCheckResult<void> CheckTransaction(const CTransaction& tx)
     }
 
     // Check for duplicate inputs (see CVE-2018-17144)
-    // While Consensus::CheckTxInputs does check if all inputs of a tx are available, and UpdateCoins marks all inputs
-    // of a tx as spent, it does not check if the tx has duplicate inputs.
+    // UTXO input checks can prove all inputs are available, and coin-effect
+    // commit code can mark inputs spent, but neither implies inputs are unique.
     // Failure to run this check will result in either a crash or an inflation bug, depending on the implementation of
     // the underlying coins database.
     std::set<COutPoint> vInOutPoints;

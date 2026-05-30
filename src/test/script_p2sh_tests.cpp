@@ -372,13 +372,13 @@ BOOST_AUTO_TEST_CASE(ValidateInputsStandardness)
 
     BOOST_CHECK(::ValidateInputsStandardness(CTransaction(txTo), coins).IsValid());
     // 22 P2SH sigops for all inputs (1 for vin[0], 6 for vin[3], 15 for vin[4]
-    BOOST_CHECK_EQUAL(Consensus::GetP2SHSigOpCount(CTransaction(txTo), coins), 22U);
+    BOOST_CHECK_EQUAL(validation::GetP2SHSigOpCount(CTransaction(txTo), coins), 22U);
 
     CMutableTransaction coinbase_tx_mut;
     coinbase_tx_mut.vin.resize(1);
     CTransaction coinbase_tx{coinbase_tx_mut};
     BOOST_CHECK(coinbase_tx.IsCoinBase());
-    BOOST_CHECK_EQUAL(Consensus::GetP2SHSigOpCount(coinbase_tx, coins), 0U);
+    BOOST_CHECK_EQUAL(validation::GetP2SHSigOpCount(coinbase_tx, coins), 0U);
 
     // TxoutType::SCRIPTHASH
     CMutableTransaction txToNonStd1;
@@ -395,7 +395,7 @@ BOOST_AUTO_TEST_CASE(ValidateInputsStandardness)
     BOOST_CHECK_EQUAL(txToNonStd1_res.GetRejectReason(), "bad-txns-nonstandard-inputs");
     BOOST_CHECK_EQUAL(txToNonStd1_res.GetDebugMessage(), "p2sh redeemscript sigops exceed limit (input 0: 16 > 15)");
 
-    BOOST_CHECK_EQUAL(Consensus::GetP2SHSigOpCount(CTransaction(txToNonStd1), coins), 16U);
+    BOOST_CHECK_EQUAL(validation::GetP2SHSigOpCount(CTransaction(txToNonStd1), coins), 16U);
 
     CMutableTransaction txToNonStd2;
     txToNonStd2.vout.resize(1);
@@ -410,7 +410,7 @@ BOOST_AUTO_TEST_CASE(ValidateInputsStandardness)
     BOOST_CHECK(txToNonStd2_res.IsInvalid());
     BOOST_CHECK_EQUAL(txToNonStd2_res.GetRejectReason(), "bad-txns-nonstandard-inputs");
     BOOST_CHECK_EQUAL(txToNonStd2_res.GetDebugMessage(), "p2sh redeemscript sigops exceed limit (input 0: 20 > 15)");
-    BOOST_CHECK_EQUAL(Consensus::GetP2SHSigOpCount(CTransaction(txToNonStd2), coins), 20U);
+    BOOST_CHECK_EQUAL(validation::GetP2SHSigOpCount(CTransaction(txToNonStd2), coins), 20U);
 
     CMutableTransaction txToNonStd2_no_scriptSig;
     txToNonStd2_no_scriptSig.vout.resize(1);
@@ -424,7 +424,7 @@ BOOST_AUTO_TEST_CASE(ValidateInputsStandardness)
     BOOST_CHECK(txToNonStd2_no_scriptSig_res.IsInvalid());
     BOOST_CHECK_EQUAL(txToNonStd2_no_scriptSig_res.GetRejectReason(), "bad-txns-nonstandard-inputs");
     BOOST_CHECK_EQUAL(txToNonStd2_no_scriptSig_res.GetDebugMessage(), "input 0 P2SH redeemscript missing");
-    BOOST_CHECK_EQUAL(Consensus::GetP2SHSigOpCount(CTransaction(txToNonStd2), coins), 20U);
+    BOOST_CHECK_EQUAL(validation::GetP2SHSigOpCount(CTransaction(txToNonStd2), coins), 20U);
 
     // TxoutType::NONSTANDARD
     CMutableTransaction txToNonStd3;

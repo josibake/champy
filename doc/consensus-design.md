@@ -29,6 +29,7 @@ It must not depend on node runtime state:
 - no Core validation-state objects
 
 Consensus helpers should take explicit inputs and return explicit results.
+Protocol values should not carry hidden validation cache state.
 
 ### Validation
 
@@ -111,6 +112,9 @@ The important interfaces are:
 
 Validation and kernel adapters use smaller runtime capabilities:
 
+- `BlockConnectionState`: validation-facing state capability for block
+  connection. Core implements this with `CCoinsViewCache`; tests can implement
+  it with snapshot state.
 - `CoreChainValidationContext`: Core-backed block/header admission context.
 - `CoreChainActivationState`: Core-backed active-chain mutation capability for
   bounded activation steps.
@@ -158,7 +162,8 @@ but the concrete mempool repair logic belongs to node.
 
 Storage is not consensus. Core's block storage and chainstate loading live in
 kernel as default runtime capabilities. Alternate implementations should
-provide equivalent capabilities without changing consensus code.
+provide equivalent capabilities without changing consensus or block-connection
+engine code.
 
 ## Example: Spend Validation
 
@@ -182,6 +187,11 @@ commit interface.
 
 The practical result is that spend rules can be tested without Core chainstate,
 and commit code can be reviewed as mutation rather than validation.
+
+`BlockConnectionEngine` now reads and commits UTXO state through
+`BlockConnectionState`. That is the boundary for experiments such as SwiftSync
+or Utreexo: an experiment can provide a different state backend while reusing
+the same validation stages.
 
 ## Example: Mempool Reorg Effects
 

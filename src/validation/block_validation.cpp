@@ -10,6 +10,7 @@
 #include <validation/block_data_adapters.h>
 #include <validation/block_header_context_adapters.h>
 #include <validation/block_index_adapters.h>
+#include <validation/block_coin_effects.h>
 #include <validation/block_connection.h>
 #include <validation/block_validation_adapters.h>
 #include <validation/block_validation_error.h>
@@ -22,7 +23,6 @@
 #include <consensus/block_spend.h>
 #include <consensus/consensus.h>
 #include <consensus/merkle.h>
-#include <validation/coins_view_spend_state.h>
 #include <flatfile.h>
 #include <hash.h>
 #include <kernel/chainparams.h>
@@ -46,6 +46,7 @@
 #include <util/translation.h>
 #include <validation/core_chain_validation_context.h>
 #include <validation/core_block_connection_setup.h>
+#include <validation/core_coins_block_connection_state.h>
 #include <validation_state.h>
 #include <validationinterface.h>
 
@@ -163,13 +164,10 @@ DisconnectResult DisconnectBlock(Chainstate& chainstate, const CBlock& block, co
 
 static bool CheckMerkleRoot(const CBlock& block, const Consensus::BlockStructuralFacts& facts, BlockValidationState& state)
 {
-    if (block.m_checked_merkle_root) return true;
-
     if (const auto merkle_check{Consensus::CheckBlockMerkleRoot(block, facts)}; !merkle_check) {
         return ApplyBlockCheckError(state, merkle_check.error());
     }
 
-    block.m_checked_merkle_root = true;
     return true;
 }
 
@@ -181,15 +179,9 @@ static bool CheckMerkleRoot(const CBlock& block, const Consensus::BlockStructura
  * first transaction needs to have at least one input. */
 static bool CheckWitnessMalleation(const CBlock& block, const Consensus::BlockFacts& facts, bool expect_witness_commitment, BlockValidationState& state)
 {
-    if (expect_witness_commitment) {
-        if (block.m_checked_witness_commitment) return true;
-    }
-
     if (const auto witness_check{Consensus::CheckBlockWitnessMalleation(block, facts, {.expect_witness_commitment = expect_witness_commitment})}; !witness_check) {
         return ApplyBlockCheckError(state, witness_check.error());
     }
-
-    if (expect_witness_commitment && facts.witness_commitment_index.has_value()) block.m_checked_witness_commitment = true;
 
     return true;
 }
@@ -197,9 +189,6 @@ static bool CheckWitnessMalleation(const CBlock& block, const Consensus::BlockFa
 bool CheckBlock(const CBlock& block, BlockValidationState& state, const Consensus::Params& consensusParams, const Consensus::BlockCheckOptions& options)
 {
     // These are checks that are independent of context.
-
-    if (block.fChecked)
-        return true;
 
     // Check that the header is valid (particularly PoW).  This is mostly
     // redundant with the call in AcceptBlockHeader.
@@ -218,16 +207,10 @@ bool CheckBlock(const CBlock& block, BlockValidationState& state, const Consensu
     // Note that witness malleability is checked in ContextualCheckBlock, so no
     // checks that use witness data may be performed here.
     const Consensus::BlockStructuralConsensusOptions structural_options{
-        .check_merkle_root = options.check_merkle_root && !block.m_checked_merkle_root,
+        .check_merkle_root = options.check_merkle_root,
     };
     if (const auto structural_check{Consensus::ValidateBlockStructuralStage(block, structural_options)}; !structural_check) {
         return ApplyBlockCheckError(state, structural_check.error());
-    }
-
-    if (options.check_merkle_root) block.m_checked_merkle_root = true;
-
-    if (options.check_pow && options.check_merkle_root) {
-        block.fChecked = true;
     }
 
     return true;
@@ -386,10 +369,6 @@ static bool ContextualCheckBlock(const CBlock& block, BlockValidationState& stat
     const auto contextual_check{Consensus::ValidateBlockContextualBodyStage(block, options, __func__)};
     if (!contextual_check) {
         return ApplyBlockCheckError(state, contextual_check.error());
-    }
-
-    if (contextual_check->checked_witness_commitment) {
-        block.m_checked_witness_commitment = true;
     }
 
     return true;
@@ -617,9 +596,6 @@ NewBlockProcessingResult ProcessNewBlock(CoreChainValidationContext& context, Ch
     NewBlockProcessingResult result{};
     {
         BlockValidationState state;
-
-        // CheckBlock() does not support multi-threaded block validation because CBlock::fChecked can cause data race.
-        // Therefore, the following critical section must include the CheckBlock() call as well.
         LOCK(cs_main);
 
         // Skipping AcceptBlock() for CheckBlock() failures means that we will never mark a block as invalid if
@@ -675,9 +651,7 @@ BlockValidationState TestBlockValidity(
     const Consensus::BlockCheckOptions& options,
     BlockValidationTime time)
 {
-    // Lock must be held throughout this function for two reasons:
-    // 1. We don't want the tip to change during several of the validation steps
-    // 2. To prevent a CheckBlock() race condition for fChecked, see ProcessNewBlock()
+    // Keep the tip stable while the block is checked against the current chain.
     AssertLockHeld(chainstate.m_chainman.GetMutex());
 
     BlockValidationState state;
@@ -730,6 +704,7 @@ BlockValidationState TestBlockValidity(
     index_dummy.nHeight = tip->nHeight + 1;
     index_dummy.phashBlock = &block_hash;
     CCoinsViewCache view_dummy(&chainstate.CoinsTip());
+    validation::CoreCoinsBlockConnectionState connection_state{view_dummy};
 
     // Test validation uses the normal connection path with commit disabled. It
     // may update reusable script caches, but staged coin effects stay local to
@@ -752,7 +727,7 @@ BlockValidationState TestBlockValidity(
         index_dummy,
         /*cache_script_results=*/true};
     connection_setup.MaybeLogScriptPolicy(chainstate.LastScriptCheckReasonLogged(), block_hash);
-    const validation::BlockConnectionRequest request{connection_setup.Request(block, view_dummy, connect_options)};
+    const validation::BlockConnectionRequest request{connection_setup.Request(block, connection_state, connect_options)};
     if (!validation::BlockConnectionEngine{}.Connect(request, state).Succeeded()) {
         if (state.IsValid()) NONFATAL_UNREACHABLE();
         return state;
@@ -903,7 +878,8 @@ VerifyDBResult CVerifyDB::VerifyDB(
                 *pindex,
                 /*cache_script_results=*/false};
             connection_setup.MaybeLogScriptPolicy(chainstate.LastScriptCheckReasonLogged(), block.GetHash());
-            const validation::BlockConnectionRequest request{connection_setup.Request(block, coins)};
+            validation::CoreCoinsBlockConnectionState connection_state{coins};
+            const validation::BlockConnectionRequest request{connection_setup.Request(block, connection_state)};
             if (!validation::BlockConnectionEngine{}.Connect(request, state).Succeeded()) {
                 LogError("Verification error: found unconnectable block at %d, hash=%s (%s)", pindex->nHeight, pindex->GetBlockHash().ToString(), state.ToString());
                 return VerifyDBResult::CORRUPTED_BLOCK_DB;
@@ -928,24 +904,13 @@ static bool RollforwardBlock(BlockDataReader& block_reader, const CBlockIndex* p
     EXCLUSIVE_LOCKS_REQUIRED(cs_main)
 {
     AssertLockHeld(cs_main);
-    // Compatibility note: roll-forward replay still mutates the coins cache
-    // directly instead of using block connection effects; see
-    // doc/legacy-compatibility.md.
     CBlock block;
     if (!block_reader.ReadBlock(block, *pindex)) {
         LogError("ReplayBlock(): ReadBlock failed at %d, hash=%s\n", pindex->nHeight, pindex->GetBlockHash().ToString());
         return false;
     }
 
-    for (const CTransactionRef& tx : block.vtx) {
-        if (!tx->IsCoinBase()) {
-            for (const CTxIn& txin : tx->vin) {
-                inputs.SpendCoin(txin.prevout);
-            }
-        }
-        // Pass check = true as every addition may be an overwrite.
-        AddCoins(inputs, *tx, pindex->nHeight, true);
-    }
+    validation::ReplayBlockCoinsForRecovery(block, inputs, pindex->nHeight);
     return true;
 }
 

@@ -8,15 +8,18 @@
 #include <consensus/coin_effects.h>
 
 class CCoinsViewCache;
+class CBlock;
 class CTransaction;
 class CTxUndo;
 
-namespace Consensus {
+namespace validation {
 
-void ApplyTransactionCoinEffectsForBlock(const TransactionCoinEffects& effects, CCoinsViewCache& coins, CTxUndo& undo);
+void ApplyTransactionCoinEffectsForBlock(const Consensus::TransactionCoinEffects& effects, CCoinsViewCache& coins, CTxUndo& undo);
 void StageTransactionCoinsForBlock(const CTransaction& tx, CCoinsViewCache& coins, CTxUndo& undo, int block_height);
+void ReplayTransactionCoinsForRecovery(const CTransaction& tx, CCoinsViewCache& coins, int block_height);
+void ReplayBlockCoinsForRecovery(const CBlock& block, CCoinsViewCache& coins, int block_height);
 void CommitStagedCoinsForBlock(CCoinsViewCache& staged_coins, CCoinsViewCache& coins);
 
-} // namespace Consensus
+} // namespace validation
 
 #endif // BITCOIN_BLOCK_COIN_EFFECTS_H

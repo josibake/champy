@@ -17,7 +17,7 @@
 #include <unordered_map>
 #include <utility>
 
-namespace Consensus {
+namespace validation {
 namespace {
 
 std::optional<int64_t> PreviousMedianTimePastForCoin(const CBlockIndex& block_index, int coin_height)
@@ -72,11 +72,11 @@ CoinsViewSpendState::CoinsViewSpendState(const CCoinsViewCache& coins)
 {
 }
 
-std::optional<CoinSnapshot> CoinsViewSpendState::GetCoin(const COutPoint& outpoint) const
+std::optional<Consensus::CoinSnapshot> CoinsViewSpendState::GetCoin(const COutPoint& outpoint) const
 {
     const auto coin{m_coins.GetCoin(outpoint)};
     if (!coin) return std::nullopt;
-    return CoinSnapshot{
+    return Consensus::CoinSnapshot{
         .output = coin->out,
         .height = static_cast<int>(coin->nHeight),
         .is_coinbase = coin->IsCoinBase(),
@@ -118,7 +118,7 @@ int64_t CoinsViewSequenceLockTimeView::PreviousMedianTimePast(const COutPoint& o
 CoinsViewBlockSpendWorkspace::CoinsViewBlockSpendWorkspace(CCoinsViewCache& parent_coins, int64_t previous_median_time_past)
     : m_staged_coins{std::make_unique<CCoinsViewCache>(&parent_coins)},
       m_spend_view{*m_staged_coins},
-      m_sequence_lock_times{previous_median_time_past}
+      m_sequence_lock_times{std::make_shared<CoinsViewSequenceLockTimeView>(previous_median_time_past)}
 {
 }
 
@@ -128,32 +128,42 @@ CoinsViewBlockSpendWorkspace::CoinsViewBlockSpendWorkspace(
     std::map<COutPoint, int64_t> previous_median_time_past_by_outpoint)
     : m_staged_coins{std::make_unique<CCoinsViewCache>(&parent_coins)},
       m_spend_view{*m_staged_coins},
-      m_sequence_lock_times{
+      m_sequence_lock_times{std::make_shared<CoinsViewSequenceLockTimeView>(
           previous_median_time_past,
-          std::move(previous_median_time_past_by_outpoint)}
+          std::move(previous_median_time_past_by_outpoint))}
 {
+}
+
+CoinsViewBlockSpendWorkspace::CoinsViewBlockSpendWorkspace(
+    CCoinsViewCache& parent_coins,
+    std::shared_ptr<const Consensus::SequenceLockTimeView> sequence_lock_times)
+    : m_staged_coins{std::make_unique<CCoinsViewCache>(&parent_coins)},
+      m_spend_view{*m_staged_coins},
+      m_sequence_lock_times{std::move(sequence_lock_times)}
+{
+    assert(m_sequence_lock_times);
 }
 
 CoinsViewBlockSpendWorkspace::CoinsViewBlockSpendWorkspace(CCoinsViewCache& parent_coins, const CBlockIndex& block_index)
     : m_staged_coins{std::make_unique<CCoinsViewCache>(&parent_coins)},
       m_spend_view{*m_staged_coins},
-      m_sequence_lock_times{block_index}
+      m_sequence_lock_times{std::make_shared<CoinsViewSequenceLockTimeView>(block_index)}
 {
 }
 
 CoinsViewBlockSpendWorkspace::~CoinsViewBlockSpendWorkspace() = default;
 
-const SpendStateView& CoinsViewBlockSpendWorkspace::StagedSpendView() const
+const Consensus::SpendStateView& CoinsViewBlockSpendWorkspace::StagedSpendView() const
 {
     return m_spend_view;
 }
 
-const SequenceLockTimeView& CoinsViewBlockSpendWorkspace::SequenceLockTimes() const
+const Consensus::SequenceLockTimeView& CoinsViewBlockSpendWorkspace::SequenceLockTimes() const
 {
-    return m_sequence_lock_times;
+    return *m_sequence_lock_times;
 }
 
-BlockSpendResult<void> CoinsViewBlockSpendWorkspace::StageTransactionEffectsForIntraBlockView(const TransactionCoinEffects& coin_effects, unsigned int transaction_index)
+Consensus::BlockSpendResult<void> CoinsViewBlockSpendWorkspace::StageTransactionEffectsForIntraBlockView(const Consensus::TransactionCoinEffects& coin_effects, unsigned int transaction_index)
 {
     CTxUndo undo;
     ApplyTransactionCoinEffectsForBlock(coin_effects, *m_staged_coins, undo);
@@ -176,10 +186,10 @@ CoinsViewBlockSpendBackend::CoinsViewBlockSpendBackend(
 {
 }
 
-BlockSpendResult<std::unique_ptr<BlockSpendWorkspace>> CoinsViewBlockSpendBackend::BeginBlockSpend(const BlockSpendContext& context)
+Consensus::BlockSpendResult<std::unique_ptr<Consensus::BlockSpendWorkspace>> CoinsViewBlockSpendBackend::BeginBlockSpend(const Consensus::BlockSpendContext& context)
 {
-    std::unique_ptr<BlockSpendWorkspace> workspace{std::make_unique<CoinsViewBlockSpendWorkspace>(m_parent_coins, context.previous_median_time_past, m_previous_median_time_past_by_outpoint)};
+    std::unique_ptr<Consensus::BlockSpendWorkspace> workspace{std::make_unique<CoinsViewBlockSpendWorkspace>(m_parent_coins, context.previous_median_time_past, m_previous_median_time_past_by_outpoint)};
     return std::move(workspace);
 }
 
-} // namespace Consensus
+} // namespace validation

@@ -112,7 +112,7 @@ void MempoolChainSync::ReorgCompleted(
                                                  const CTransaction& tx = it->GetTx();
 
                                                  // The transaction must be final.
-                                                 if (!CheckFinalTxAtTip(*Assert(chainstate.m_chain.Tip()), tx)) return true;
+                                                 if (!validation::CheckFinalTxAtTip(*Assert(chainstate.m_chain.Tip()), tx)) return true;
 
                                                  const LockPoints& lp = it->GetLockPoints();
                                                  // CheckSequenceLocksAtTip checks if the transaction will be final in the next block to be

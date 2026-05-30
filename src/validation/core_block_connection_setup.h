@@ -15,7 +15,6 @@
 
 class CBlock;
 class CBlockIndex;
-class CCoinsViewCache;
 class BlockUndoWriter;
 class BlockIndexValidityCommitter;
 class ValidationCache;
@@ -24,6 +23,9 @@ class uint256;
 namespace kernel {
 class Notifications;
 } // namespace kernel
+namespace validation {
+class BlockConnectionState;
+} // namespace validation
 
 struct CoreBlockConnectionRuntimeInputs {
     kernel::Notifications& notifications;
@@ -47,7 +49,7 @@ public:
     void MaybeLogScriptPolicy(std::optional<const char*>& last_reason_logged, const uint256& block_hash) const
         EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
 
-    [[nodiscard]] validation::BlockConnectionRequest Request(const CBlock& block, CCoinsViewCache& coins_view, BlockConnectionOptions options = {}) EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
+    [[nodiscard]] validation::BlockConnectionRequest Request(const CBlock& block, validation::BlockConnectionState& connection_state, BlockConnectionOptions options = {}) EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
 
 private:
     kernel::Notifications& m_notifications;

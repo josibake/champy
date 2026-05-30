@@ -21,7 +21,6 @@ class BlockValidationState;
 class Chainstate;
 class CBlock;
 class CBlockIndex;
-class CCoinsViewCache;
 class ChainstateEventSink;
 class CoreChainValidationContext;
 class ValidationSignals;
@@ -29,6 +28,9 @@ class ValidationSignals;
 namespace kernel {
 class Notifications;
 } // namespace kernel
+namespace validation {
+class BlockConnectionState;
+} // namespace validation
 
 struct ConnectedBlock {
     const CBlockIndex* pindex;
@@ -87,7 +89,7 @@ struct CoreConnectTipResources {
     BlockUndoWriter& undo_writer;
     BlockIndexLookup& block_index_lookup;
     BlockIndexValidityCommitter& block_index_committer;
-    CCoinsViewCache& connection_view;
+    validation::BlockConnectionState& connection_state;
     std::optional<const char*>& last_script_check_reason_logged;
     std::vector<ConnectedBlock>& connected_blocks;
     ChainstateEventSink* chain_events{nullptr};

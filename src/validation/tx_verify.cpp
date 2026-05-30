@@ -13,7 +13,9 @@
 #include <script/interpreter.h>
 #include <util/moneystr.h>
 
-unsigned int Consensus::GetP2SHSigOpCount(const CTransaction& tx, const CCoinsViewCache& inputs)
+namespace validation {
+
+unsigned int GetP2SHSigOpCount(const CTransaction& tx, const CCoinsViewCache& inputs)
 {
     if (tx.IsCoinBase())
         return 0;
@@ -29,7 +31,7 @@ unsigned int Consensus::GetP2SHSigOpCount(const CTransaction& tx, const CCoinsVi
     return nSigOps;
 }
 
-int64_t Consensus::GetTransactionSigOpCost(const CTransaction& tx, const CCoinsViewCache& inputs, script_verify_flags flags)
+int64_t GetTransactionSigOpCost(const CTransaction& tx, const CCoinsViewCache& inputs, script_verify_flags flags)
 {
     int64_t nSigOps = Consensus::GetLegacySigOpCount(tx) * WITNESS_SCALE_FACTOR;
 
@@ -37,7 +39,7 @@ int64_t Consensus::GetTransactionSigOpCost(const CTransaction& tx, const CCoinsV
         return nSigOps;
 
     if (flags & SCRIPT_VERIFY_P2SH) {
-        nSigOps += Consensus::GetP2SHSigOpCount(tx, inputs) * WITNESS_SCALE_FACTOR;
+        nSigOps += GetP2SHSigOpCount(tx, inputs) * WITNESS_SCALE_FACTOR;
     }
 
     for (unsigned int i = 0; i < tx.vin.size(); i++) {
@@ -49,7 +51,7 @@ int64_t Consensus::GetTransactionSigOpCost(const CTransaction& tx, const CCoinsV
     return nSigOps;
 }
 
-bool Consensus::CheckTxInputs(const CTransaction& tx, TxValidationState& state, const CCoinsViewCache& inputs, int nSpendHeight, CAmount& txfee)
+bool CheckTxInputs(const CTransaction& tx, TxValidationState& state, const CCoinsViewCache& inputs, int nSpendHeight, CAmount& txfee)
 {
     // are the actual inputs available?
     if (!inputs.HaveInputs(tx)) {
@@ -120,3 +122,5 @@ bool CheckFinalTxAtTip(const CBlockIndex& active_chain_tip, const CTransaction& 
 
     return IsFinalTx(tx, nBlockHeight, nBlockTime);
 }
+
+} // namespace validation

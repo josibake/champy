@@ -9,7 +9,10 @@
 #include <consensus/block_spend.h>
 #include <consensus/params.h>
 #include <validation/block_header_context_adapters.h>
+#include <validation/coins_view_spend_state.h>
 #include <validation/core_chain_validation_context.h>
+
+#include <memory>
 
 CoreBlockConnectionPolicySnapshot SnapshotCoreBlockConnectionPolicy(CoreChainValidationContext& context, const CBlockIndex& block_index)
 {
@@ -41,6 +44,7 @@ CoreBlockConnectionPlan PlanCoreBlockConnection(const CoreBlockConnectionPolicyS
                 policy.header_context,
                 block_index_entry.GetBlockHash(),
                 Consensus::CalculateBlockSubsidy(block_index_entry.nHeight, policy.consensus_params)),
+            .sequence_lock_times = has_spend_stage ? std::make_shared<validation::CoinsViewSequenceLockTimeView>(block_index_entry) : nullptr,
             .spend_options = has_spend_stage ? BuildCoreBlockSpendConsensusOptions(block_index_entry, policy.consensus_params, policy.header_context.Deployments()) : Consensus::BlockSpendConsensusOptions{},
         },
         .script_check_decision = script_check_decision,

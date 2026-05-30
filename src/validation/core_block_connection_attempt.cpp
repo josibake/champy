@@ -9,9 +9,9 @@
 CoreBlockConnectionAttempt::CoreBlockConnectionAttempt(
     const CBlock& block,
     CBlockIndex& block_index,
-    CCoinsViewCache& view,
     BlockUndoWriter& undo_writer,
     BlockIndexValidityCommitter& block_index_committer,
+    validation::BlockConnectionState& connection_state,
     Consensus::BlockSpendWorkspace& spend_workspace,
     Consensus::BlockSpendStateCommitter& spend_state_committer,
     Consensus::BlockConsensusContext consensus_context,
@@ -20,7 +20,7 @@ CoreBlockConnectionAttempt::CoreBlockConnectionAttempt(
       m_commit_context{consensus_context.commit},
       m_pipeline{block, consensus_context},
       m_spend_state_committer{spend_state_committer},
-      m_effects_writer{undo_writer, block_index_committer, view, block_index},
+      m_effects_writer{undo_writer, block_index_committer, connection_state, block_index},
       m_spend_options{spend_options}
 {
 }

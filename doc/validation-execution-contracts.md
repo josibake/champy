@@ -117,13 +117,15 @@ for the step.
 
 Current block connection capabilities are intentionally narrow:
 
+- `BlockConnectionState` owns block-local spend state and best-block mutation.
 - `BlockUndoWriter` writes undo data during commit.
 - `BlockIndexValidityCommitter` records validated block metadata.
 - `BlockScriptChecker` owns script execution and caching.
 - `SpendState` owns UTXO reads for spend validation.
 
 Do not pass `Chainstate`, `ChainstateManager`, `CoreBlockDataStore`,
-`CoreBlockIndexStore`, or another broad store into the block connection engine.
+`CoreBlockIndexStore`, `CCoinsViewCache`, or another broad store into the block
+connection engine.
 
 ## Execution Contract
 

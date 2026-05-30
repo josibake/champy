@@ -11,6 +11,7 @@
 #include <chainstate_cache.h>
 #include <chainstate.h>
 #include <consensus/consensus.h>
+#include <validation/sequence_locks_adapters.h>
 #include <validation/tx_check_adapters.h>
 #include <validation/tx_verify.h>
 #include <kernel/chainparams.h>
@@ -99,7 +100,7 @@ std::optional<LockPoints> CalculateLockPointsAtTip(
     // Thus if we want to know if a transaction can be part of the
     // *next* block, we need to use one more than active_chainstate.m_chain.Height()
     next_tip.nHeight = tip->nHeight + 1;
-    const auto [min_height, min_time] = Consensus::CalculateSequenceLocks(tx, STANDARD_LOCKTIME_VERIFY_FLAGS, prev_heights.value(), next_tip);
+    const auto [min_height, min_time] = validation::CalculateSequenceLocks(tx, STANDARD_LOCKTIME_VERIFY_FLAGS, prev_heights.value(), next_tip);
 
     // Also store the hash of the block with the highest height of
     // all the blocks which have sequence locked prevouts.
@@ -148,7 +149,7 @@ bool CheckSequenceLocksAtTip(CBlockIndex* tip,
     // *next* block, we need to use one more than active_chainstate.m_chain.Height()
     index.nHeight = tip->nHeight + 1;
 
-    return Consensus::EvaluateSequenceLocks(index, {lock_points.height, lock_points.time});
+    return validation::EvaluateSequenceLocks(index, {lock_points.height, lock_points.time});
 }
 
 void LimitMempoolSize(CTxMemPool& pool, CCoinsViewCache& coins_cache)
@@ -610,7 +611,7 @@ bool MemPoolAccept::PreChecks(ATMPArgs& args, Workspace& ws)
     // Only accept nLockTime-using transactions that can be mined in the next
     // block; we don't want our mempool filled up with transactions that can't
     // be mined yet.
-    if (!CheckFinalTxAtTip(*Assert(m_active_chainstate.m_chain.Tip()), tx)) {
+    if (!validation::CheckFinalTxAtTip(*Assert(m_active_chainstate.m_chain.Tip()), tx)) {
         return state.Invalid(MempoolValidationResult::PREMATURE_SPEND, "non-final");
     }
 
@@ -682,7 +683,7 @@ bool MemPoolAccept::PreChecks(ATMPArgs& args, Workspace& ws)
     }
 
     // The mempool holds txs for the next block, so pass height+1 to CheckTxInputs
-    if (TxValidationState tx_state; !Consensus::CheckTxInputs(tx, tx_state, m_view, m_active_chainstate.m_chain.Height() + 1, ws.m_base_fees)) {
+    if (TxValidationState tx_state; !validation::CheckTxInputs(tx, tx_state, m_view, m_active_chainstate.m_chain.Height() + 1, ws.m_base_fees)) {
         state = ToMempoolValidationState(tx_state);
         return false; // state filled in by CheckTxInputs
     }
@@ -700,7 +701,7 @@ bool MemPoolAccept::PreChecks(ATMPArgs& args, Workspace& ws)
         return state.Invalid(MempoolValidationResult::WITNESS_MUTATED, "bad-witness-nonstandard");
     }
 
-    int64_t nSigOpsCost = Consensus::GetTransactionSigOpCost(tx, m_view, STANDARD_SCRIPT_VERIFY_FLAGS);
+    int64_t nSigOpsCost = validation::GetTransactionSigOpCost(tx, m_view, STANDARD_SCRIPT_VERIFY_FLAGS);
 
     // Keep track of transactions that spend a coinbase, which we re-scan
     // during reorgs to ensure COINBASE_MATURITY is still met.

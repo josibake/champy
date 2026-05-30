@@ -103,9 +103,9 @@ public:
     explicit CoreConformanceAdapter(CCoinsViewCache& coins) : m_coins{coins} {}
 
     void LoadSpendState(const ConformanceSpendState& spend_state);
-    [[nodiscard]] Consensus::CoinsViewSpendState SpendView() const;
-    [[nodiscard]] Consensus::CoinsViewSequenceLockTimeView SequenceLockTimes() const;
-    [[nodiscard]] Consensus::CoinsViewBlockSpendBackend BlockSpendBackend();
+    [[nodiscard]] validation::CoinsViewSpendState SpendView() const;
+    [[nodiscard]] validation::CoinsViewSequenceLockTimeView SequenceLockTimes() const;
+    [[nodiscard]] validation::CoinsViewBlockSpendBackend BlockSpendBackend();
 
 private:
     CCoinsViewCache& m_coins;

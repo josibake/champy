@@ -6,6 +6,7 @@
 
 #include <validation/block_data_adapters.h>
 #include <validation/block_coin_effects.h>
+#include <validation/block_connection_state.h>
 #include <validation/block_index_adapters.h>
 #include <chain.h>
 #include <coins.h>
@@ -42,8 +43,8 @@ CBlockUndo BuildBlockUndoFromSpendEffects(const Consensus::BlockSpendEffects& ef
 
 } // namespace
 
-CoreBlockEffectsWriter::CoreBlockEffectsWriter(BlockUndoWriter& undo_writer, BlockIndexValidityCommitter& block_index_committer, CCoinsViewCache& view, CBlockIndex& block_index)
-    : m_undo_writer{undo_writer}, m_block_index_committer{block_index_committer}, m_view{view}, m_block_index{block_index}
+CoreBlockEffectsWriter::CoreBlockEffectsWriter(BlockUndoWriter& undo_writer, BlockIndexValidityCommitter& block_index_committer, validation::BlockConnectionState& connection_state, CBlockIndex& block_index)
+    : m_undo_writer{undo_writer}, m_block_index_committer{block_index_committer}, m_connection_state{connection_state}, m_block_index{block_index}
 {
 }
 
@@ -59,7 +60,7 @@ Consensus::BlockCommitResult<void> CoreBlockEffectsWriter::CommitBlockMetadata(c
         m_block_index_committer.MarkBlockIndexDirty(m_block_index);
     }
 
-    m_view.SetBestBlock(context.new_best_block);
+    m_connection_state.SetBestBlock(context.new_best_block);
     return {};
 }
 
@@ -70,6 +71,6 @@ CoreBlockSpendStateCommitter::CoreBlockSpendStateCommitter(CCoinsViewCache& stag
 
 Consensus::BlockCommitResult<void> CoreBlockSpendStateCommitter::CommitSpendState(const Consensus::BlockCommitContext&, const Consensus::BlockSpendEffects&)
 {
-    Consensus::CommitStagedCoinsForBlock(m_staged_view, m_view);
+    validation::CommitStagedCoinsForBlock(m_staged_view, m_view);
     return {};
 }

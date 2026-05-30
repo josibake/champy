@@ -32,6 +32,7 @@ foreach(relative_path IN ITEMS
     doc/consensus-design.md
     doc/legacy-compatibility.md
     doc/validation-execution-contracts.md
+    src/primitives/block.h
     src/validation/block_data_admission.cpp
     src/validation/block_data_admission.h
     src/validation/block_data_adapters.cpp
@@ -40,8 +41,19 @@ foreach(relative_path IN ITEMS
     src/validation/block_index_adapters.h
     src/validation/block_connection.cpp
     src/validation/block_connection.h
+    src/validation/block_connection_state.h
+    src/validation/core_coins_block_connection_state.cpp
+    src/validation/core_coins_block_connection_state.h
     src/validation/block_connection_trace.cpp
     src/validation/block_connection_trace.h
+    src/validation/block_coin_effects.cpp
+    src/validation/block_coin_effects.h
+    src/validation/coins_view_spend_state.cpp
+    src/validation/coins_view_spend_state.h
+    src/validation/sequence_locks_adapters.cpp
+    src/validation/sequence_locks_adapters.h
+    src/validation/tx_verify.cpp
+    src/validation/tx_verify.h
     src/validation/core_chain_activation.cpp
     src/validation/core_chain_activation.h
     src/validation/core_chain_validation_context.cpp
@@ -57,8 +69,10 @@ foreach(relative_path IN ITEMS
 endforeach()
 
 require_text("src/CMakeLists.txt" "block_data_adapters.cpp")
+require_text("src/CMakeLists.txt" "core_coins_block_connection_state.cpp")
 require_text("src/test/CMakeLists.txt" "core_block_policy_tests.cpp")
 require_text("doc/consensus-design.md" "BlockIndexValidityCommitter")
+require_text("doc/consensus-design.md" "Protocol values should not carry hidden validation cache state.")
 require_text("doc/validation-execution-contracts.md" "Do not pass `Chainstate`, `ChainstateManager`, `CoreBlockDataStore`,")
 require_text("doc/legacy-compatibility.md" "The block connection engine no longer receives broad storage/index stores.")
 require_text("src/CMakeLists.txt" "block_data_admission.cpp")
@@ -99,14 +113,42 @@ require_text("src/validation/block_connection_trace.h" "struct BlockConnectionTr
 require_text("src/validation/block_connection_trace.h" "BlockConnectionTraceCountersFor")
 require_text("src/validation/block_connection_trace.h" "BlockConnectionTraceCounters m_counters")
 require_text("src/validation/block_connection.h" "struct BlockConnectionRequest")
+require_text("src/validation/block_connection.h" "BlockConnectionState& connection_state")
 require_text("src/validation/block_connection.h" "enum class BlockConnectionStatus")
 require_text("src/validation/block_connection.h" "struct BlockConnectionResult")
 require_text("src/validation/block_connection.h" "class BlockConnectionEngine")
 require_text("src/validation/block_connection.h" "BlockConnectionResult Connect")
+require_text("src/validation/block_connection_state.h" "class BlockConnectionState")
+require_text("src/validation/block_connection_state.h" "class BlockConnectionAttemptGuard")
+require_text("src/validation/block_connection_state.h" "class BlockConnectionSpendState")
+require_text("src/validation/block_connection_state.h" "BeginBlockSpend")
+require_text("src/validation/block_connection_state.h" "BeginConnectionAttempt")
+require_text("src/validation/core_coins_block_connection_state.h" "class CoreCoinsBlockConnectionState")
+forbid_text("src/validation/block_connection_state.h" "CCoinsViewCache")
+forbid_text("src/validation/block_connection_state.h" "CBlockIndex")
+require_text("src/validation/block_connection.h" "sequence_lock_times")
+require_text("src/validation/block_coin_effects.h" "namespace validation")
+require_text("src/validation/coins_view_spend_state.h" "namespace validation")
+require_text("src/validation/block_coin_effects.h" "ReplayBlockCoinsForRecovery")
+require_text("src/validation/sequence_locks_adapters.h" "namespace validation")
+require_text("src/validation/tx_verify.h" "namespace validation")
+forbid_text("src/validation/block_coin_effects.h" "namespace Consensus")
+forbid_text("src/validation/block_coin_effects.cpp" "namespace Consensus")
+forbid_text("src/validation/coins_view_spend_state.h" "namespace Consensus")
+forbid_text("src/validation/coins_view_spend_state.cpp" "namespace Consensus")
+forbid_text("src/validation/sequence_locks_adapters.h" "namespace Consensus")
+forbid_text("src/validation/sequence_locks_adapters.cpp" "namespace Consensus")
+forbid_text("src/validation/tx_verify.h" "namespace Consensus")
+forbid_text("src/validation/tx_verify.cpp" "namespace Consensus")
+forbid_text("src/primitives/block.h" "fChecked")
+forbid_text("src/primitives/block.h" "m_checked_merkle_root")
+forbid_text("src/primitives/block.h" "m_checked_witness_commitment")
 forbid_text("src/validation/block_connection.h" "bool Connect(const BlockConnectionRequest&")
 forbid_text("src/validation/block_connection.h" "Chainstate&")
 forbid_text("src/validation/block_connection.h" "ChainstateManager&")
 forbid_text("src/validation/block_connection.h" "BlockManager")
+forbid_text("src/validation/block_connection.h" "CCoinsViewCache")
+forbid_text("src/validation/block_connection.h" "coins_view")
 forbid_text("src/validation/block_connection.h" "CCheckQueue")
 forbid_text("src/validation/block_connection.h" "CScriptCheck")
 forbid_text("src/validation/block_connection.h" "ValidationCache")
@@ -163,6 +205,7 @@ require_text("src/validation/core_block_connection_setup.h" "class CoreBlockConn
 require_text("src/validation/core_block_connection_setup.h" "struct CoreBlockConnectionRuntimeInputs")
 require_text("src/validation/core_block_connection_setup.h" "BlockUndoWriter& m_undo_writer")
 require_text("src/validation/core_block_connection_setup.h" "BlockIndexValidityCommitter& m_block_index_committer")
+require_text("src/validation/core_block_connection_setup.h" "validation::BlockConnectionState& connection_state")
 require_text("src/validation/core_block_connection_setup.h" "CoreBlockScriptChecks m_script_checks")
 require_text("src/validation/core_block_connection_setup.h" "BlockConnectionTrace m_trace")
 forbid_text("src/validation/core_block_connection_setup.h" "Chainstate&")

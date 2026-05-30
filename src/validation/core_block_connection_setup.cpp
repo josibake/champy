@@ -30,7 +30,7 @@ void CoreBlockConnectionSetup::MaybeLogScriptPolicy(std::optional<const char*>& 
     MaybeLogCoreBlockConnectionScriptPolicy(last_reason_logged, m_block_index, block_hash, m_connection_plan);
 }
 
-validation::BlockConnectionRequest CoreBlockConnectionSetup::Request(const CBlock& block, CCoinsViewCache& coins_view, BlockConnectionOptions options)
+validation::BlockConnectionRequest CoreBlockConnectionSetup::Request(const CBlock& block, validation::BlockConnectionState& connection_state, BlockConnectionOptions options)
 {
     return {
         .runtime = {
@@ -43,7 +43,7 @@ validation::BlockConnectionRequest CoreBlockConnectionSetup::Request(const CBloc
         .context = m_connection_plan.context,
         .block = block,
         .block_index = m_block_index,
-        .coins_view = coins_view,
+        .connection_state = connection_state,
         .options = options,
     };
 }

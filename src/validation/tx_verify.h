@@ -8,7 +8,6 @@
 #include <consensus/amount.h>
 #include <consensus/locktime.h>
 #include <consensus/sigops.h>
-#include <validation/sequence_locks_adapters.h>
 #include <script/verify_flags.h>
 
 #include <cstdint>
@@ -20,7 +19,7 @@ class TxValidationState;
 
 /** Transaction validation functions */
 
-namespace Consensus {
+namespace validation {
 /**
  * Check whether all inputs of this transaction are valid (no double spends and amounts)
  * This does not modify the UTXO set. This does not check scripts and sigs.
@@ -48,9 +47,10 @@ unsigned int GetP2SHSigOpCount(const CTransaction& tx, const CCoinsViewCache& ma
  * @return Total signature operation cost of tx
  */
 int64_t GetTransactionSigOpCost(const CTransaction& tx, const CCoinsViewCache& inputs, script_verify_flags flags);
-} // namespace Consensus
 
 /** Check if transaction will be final in the next block to be created. */
 bool CheckFinalTxAtTip(const CBlockIndex& active_chain_tip, const CTransaction& tx);
+
+} // namespace validation
 
 #endif // BITCOIN_TX_VERIFY_H

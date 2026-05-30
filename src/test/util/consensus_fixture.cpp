@@ -420,19 +420,19 @@ void CoreConformanceAdapter::LoadSpendState(const ConformanceSpendState& spend_s
     }
 }
 
-Consensus::CoinsViewSpendState CoreConformanceAdapter::SpendView() const
+validation::CoinsViewSpendState CoreConformanceAdapter::SpendView() const
 {
-    return Consensus::CoinsViewSpendState{m_coins};
+    return validation::CoinsViewSpendState{m_coins};
 }
 
-Consensus::CoinsViewSequenceLockTimeView CoreConformanceAdapter::SequenceLockTimes() const
+validation::CoinsViewSequenceLockTimeView CoreConformanceAdapter::SequenceLockTimes() const
 {
-    return Consensus::CoinsViewSequenceLockTimeView{/*previous_median_time_past=*/0, m_previous_median_time_past_by_outpoint};
+    return validation::CoinsViewSequenceLockTimeView{/*previous_median_time_past=*/0, m_previous_median_time_past_by_outpoint};
 }
 
-Consensus::CoinsViewBlockSpendBackend CoreConformanceAdapter::BlockSpendBackend()
+validation::CoinsViewBlockSpendBackend CoreConformanceAdapter::BlockSpendBackend()
 {
-    return Consensus::CoinsViewBlockSpendBackend{m_coins, m_previous_median_time_past_by_outpoint};
+    return validation::CoinsViewBlockSpendBackend{m_coins, m_previous_median_time_past_by_outpoint};
 }
 
 } // namespace test::consensus

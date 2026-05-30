@@ -15,10 +15,10 @@
 #include <util/trace.h>
 #include <util/translation.h>
 #include <validation/block_connection_trace.h>
+#include <validation/block_connection_state.h>
 #include <validation/block_validation.h>
 #include <validation/block_validation_error.h>
 #include <validation/block_validation_policy.h>
-#include <validation/coins_view_spend_state.h>
 #include <validation/core_block_commit_adapters.h>
 #include <validation/core_block_connection_attempt.h>
 #include <validation_state.h>
@@ -38,7 +38,7 @@ BlockConnectionResult BlockConnectionEngine::Connect(const BlockConnectionReques
     const BlockConnectionContext& context{request.context};
     const CBlock& block{request.block};
     CBlockIndex& block_index{request.block_index};
-    CCoinsViewCache& view{request.coins_view};
+    BlockConnectionState& connection_state{request.connection_state};
     const BlockConnectionOptions& options{request.options};
 
     const uint256 block_hash{block.GetHash()};
@@ -64,7 +64,7 @@ BlockConnectionResult BlockConnectionEngine::Connect(const BlockConnectionReques
 
     // Verify that the view's current state corresponds to the previous block.
     const uint256 hashPrevBlock{block_index.pprev == nullptr ? uint256{} : block_index.pprev->GetBlockHash()};
-    assert(hashPrevBlock == view.GetBestBlock());
+    assert(hashPrevBlock == connection_state.BestBlock());
 
     trace.CountBlock();
 
@@ -72,7 +72,7 @@ BlockConnectionResult BlockConnectionEngine::Connect(const BlockConnectionReques
     // transactions. Its coinbase is unspendable.
     if (block_hash == consensus_params.hashGenesisBlock) {
         if (options.commit) {
-            view.SetBestBlock(block_index.GetBlockHash());
+            connection_state.SetBestBlock(block_index.GetBlockHash());
         }
         return BlockConnectionResult::Connected();
     }
@@ -83,16 +83,22 @@ BlockConnectionResult BlockConnectionEngine::Connect(const BlockConnectionReques
     trace.SanityChecksDone();
     trace.ForkChecksDone();
 
-    Consensus::CoinsViewBlockSpendWorkspace spend_workspace{view, block_index};
-    CoreBlockSpendStateCommitter spend_state_committer{spend_workspace.StagedCoins(), view};
+    assert(context.sequence_lock_times);
+    auto spend_state{connection_state.BeginBlockSpend(context.consensus_context.spend, context.sequence_lock_times)};
+    if (!spend_state) {
+        ApplyBlockSpendError(state, spend_state.error());
+        return BlockConnectionResult::Failed();
+    }
+
+    BlockConnectionSpendState& block_spend{**spend_state};
     CoreBlockConnectionAttempt connection_attempt{
         block,
         block_index,
-        view,
         undo_writer,
         block_index_committer,
-        spend_workspace,
-        spend_state_committer,
+        connection_state,
+        block_spend.Workspace(),
+        block_spend.Committer(),
         context.consensus_context,
         context.spend_options};
     auto spend_effects{connection_attempt.ValidateAndStageSpend(runtime.script_checker)};

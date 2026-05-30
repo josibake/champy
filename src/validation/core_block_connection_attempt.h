@@ -14,17 +14,19 @@
 class BlockUndoWriter;
 class CBlock;
 class CBlockIndex;
-class CCoinsViewCache;
 class BlockIndexValidityCommitter;
+namespace validation {
+class BlockConnectionState;
+} // namespace validation
 
 class CoreBlockConnectionAttempt final {
 public:
     CoreBlockConnectionAttempt(
         const CBlock& block,
         CBlockIndex& block_index,
-        CCoinsViewCache& view,
         BlockUndoWriter& undo_writer,
         BlockIndexValidityCommitter& block_index_committer,
+        validation::BlockConnectionState& connection_state,
         Consensus::BlockSpendWorkspace& spend_workspace,
         Consensus::BlockSpendStateCommitter& spend_state_committer,
         Consensus::BlockConsensusContext consensus_context,

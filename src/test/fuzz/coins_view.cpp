@@ -280,7 +280,7 @@ void TestCoinsView(FuzzedDataProvider& fuzzed_data_provider, CCoinsViewCache& co
                 const CTransaction transaction{random_mutable_transaction};
                 if (ContainsSpentInput(transaction, coins_view_cache)) {
                     // Avoid:
-                    // tx_verify.cpp:171: bool Consensus::CheckTxInputs(const CTransaction &, TxValidationState &, const CCoinsViewCache &, int, CAmount &): Assertion `!coin.IsSpent()' failed.
+                    // tx_verify.cpp:171: bool validation::CheckTxInputs(const CTransaction &, TxValidationState &, const CCoinsViewCache &, int, CAmount &): Assertion `!coin.IsSpent()' failed.
                     return;
                 }
                 TxValidationState dummy;
@@ -288,7 +288,7 @@ void TestCoinsView(FuzzedDataProvider& fuzzed_data_provider, CCoinsViewCache& co
                     // It is not allowed to call CheckTxInputs if CheckTransaction failed
                     return;
                 }
-                if (Consensus::CheckTxInputs(transaction, state, coins_view_cache, fuzzed_data_provider.ConsumeIntegralInRange<int>(0, std::numeric_limits<int>::max()), tx_fee_out)) {
+                if (validation::CheckTxInputs(transaction, state, coins_view_cache, fuzzed_data_provider.ConsumeIntegralInRange<int>(0, std::numeric_limits<int>::max()), tx_fee_out)) {
                     assert(MoneyRange(tx_fee_out));
                 }
             },
@@ -296,16 +296,16 @@ void TestCoinsView(FuzzedDataProvider& fuzzed_data_provider, CCoinsViewCache& co
                 const CTransaction transaction{random_mutable_transaction};
                 if (ContainsSpentInput(transaction, coins_view_cache)) {
                     // Avoid:
-                    // tx_verify.cpp:130: unsigned int Consensus::GetP2SHSigOpCount(const CTransaction &, const CCoinsViewCache &): Assertion `!coin.IsSpent()' failed.
+                    // tx_verify.cpp:130: unsigned int validation::GetP2SHSigOpCount(const CTransaction &, const CCoinsViewCache &): Assertion `!coin.IsSpent()' failed.
                     return;
                 }
-                (void)Consensus::GetP2SHSigOpCount(transaction, coins_view_cache);
+                (void)validation::GetP2SHSigOpCount(transaction, coins_view_cache);
             },
             [&] {
                 const CTransaction transaction{random_mutable_transaction};
                 if (ContainsSpentInput(transaction, coins_view_cache)) {
                     // Avoid:
-                    // tx_verify.cpp:130: unsigned int Consensus::GetP2SHSigOpCount(const CTransaction &, const CCoinsViewCache &): Assertion `!coin.IsSpent()' failed.
+                    // tx_verify.cpp:130: unsigned int validation::GetP2SHSigOpCount(const CTransaction &, const CCoinsViewCache &): Assertion `!coin.IsSpent()' failed.
                     return;
                 }
                 const auto flags = script_verify_flags::from_int(fuzzed_data_provider.ConsumeIntegral<script_verify_flags::value_type>());
@@ -314,7 +314,7 @@ void TestCoinsView(FuzzedDataProvider& fuzzed_data_provider, CCoinsViewCache& co
                     // script/interpreter.cpp:1705: size_t CountWitnessSigOps(const CScript &, const CScript &, const CScriptWitness &, unsigned int): Assertion `(flags & SCRIPT_VERIFY_P2SH) != 0' failed.
                     return;
                 }
-                (void)Consensus::GetTransactionSigOpCost(transaction, coins_view_cache, flags);
+                (void)validation::GetTransactionSigOpCost(transaction, coins_view_cache, flags);
             },
             [&] {
                 (void)IsWitnessStandard(CTransaction{random_mutable_transaction}, coins_view_cache);

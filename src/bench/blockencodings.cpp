@@ -38,7 +38,6 @@ private:
         block.nTime = 1231006505;
         block.nBits = 0x1d00ffff;
         block.nNonce = 2083236893;
-        block.fChecked = false;
         CMutableTransaction tx;
         tx.vin.resize(1);
         tx.vout.resize(1);

@@ -9,8 +9,8 @@ reason still applies.
 ## Core Runtime Capabilities
 
 Some validation requests still carry broad Core objects or runtime capabilities
-such as `CBlockIndex` and `CCoinsViewCache`. `ChainValidationService` still
-wraps `ChainstateManager`, but internal block/header admission now receives a
+such as `CBlockIndex`. `ChainValidationService` still wraps
+`ChainstateManager`, but internal block/header admission now receives a
 `CoreChainValidationContext`.
 
 Current role:
@@ -26,6 +26,8 @@ Target:
 
 The block connection engine no longer receives broad storage/index stores. It
 receives `BlockUndoWriter` and `BlockIndexValidityCommitter` for commit effects.
+It also receives block-local spend state through `BlockConnectionState` instead
+of a raw `CCoinsViewCache`.
 Other validation paths still use broader adapters while admission, replay, and
 verification are being kept behavior-compatible.
 
@@ -109,16 +111,16 @@ Target:
 
 ## Roll-Forward Replay
 
-`RollforwardBlock()` still mutates a coins cache directly when replaying block
-effects during database verification.
+Roll-forward replay still applies block effects without full block connection
+validation so interrupted database flushes can be repaired idempotently.
 
 Current role:
 
 - preserve existing chainstate recovery and verification behavior
+- keep the idempotent replay mutation isolated in the Core coins adapter
 
 Target:
 
-- reuse block-connection effects for replay
 - keep direct UTXO mutation isolated to commit/recovery code
 
 ## Kernel Runtime

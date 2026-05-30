@@ -12,10 +12,13 @@ class BlockUndoWriter;
 class CBlockIndex;
 class CCoinsViewCache;
 class BlockIndexValidityCommitter;
+namespace validation {
+class BlockConnectionState;
+} // namespace validation
 
 class CoreBlockEffectsWriter final : public Consensus::BlockRevertDataWriter, public Consensus::BlockMetadataCommitter {
 public:
-    CoreBlockEffectsWriter(BlockUndoWriter& undo_writer, BlockIndexValidityCommitter& block_index_committer, CCoinsViewCache& view, CBlockIndex& block_index);
+    CoreBlockEffectsWriter(BlockUndoWriter& undo_writer, BlockIndexValidityCommitter& block_index_committer, validation::BlockConnectionState& connection_state, CBlockIndex& block_index);
 
     [[nodiscard]] Consensus::BlockCommitResult<void> WriteBlockRevertData(const Consensus::BlockCommitContext& context, const Consensus::BlockSpendEffects& effects) override EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
     [[nodiscard]] Consensus::BlockCommitResult<void> CommitBlockMetadata(const Consensus::BlockCommitContext& context, const Consensus::BlockSpendEffects& effects) override EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
@@ -23,7 +26,7 @@ public:
 private:
     BlockUndoWriter& m_undo_writer;
     BlockIndexValidityCommitter& m_block_index_committer;
-    CCoinsViewCache& m_view;
+    validation::BlockConnectionState& m_connection_state;
     CBlockIndex& m_block_index;
 };
 

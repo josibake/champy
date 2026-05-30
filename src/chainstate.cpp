@@ -8,6 +8,7 @@
 #include <chainstate.h>
 
 #include <arith_uint256.h>
+#include <validation/core_coins_block_connection_state.h>
 #include <validation/block_data_adapters.h>
 #include <validation/block_index_adapters.h>
 #include <validation/block_validation.h>
@@ -776,6 +777,7 @@ bool Chainstate::ActivateBestChain(
 
                 CoreBlockDataStore block_store{m_blockman};
                 CoreBlockIndexStore block_index_store{m_chainman};
+                validation::CoreCoinsBlockConnectionState connection_state{*m_coins_views->m_block_connection_view};
                 CoreChainActivationState activation_state{*this};
                 CoreChainValidationContext validation_context{m_chainman};
                 CoreConnectTipResources connection_resources{
@@ -784,7 +786,7 @@ bool Chainstate::ActivateBestChain(
                     .undo_writer = block_store,
                     .block_index_lookup = block_index_store,
                     .block_index_committer = block_index_store,
-                    .connection_view = *m_coins_views->m_block_connection_view,
+                    .connection_state = connection_state,
                     .last_script_check_reason_logged = LastScriptCheckReasonLogged(),
                     .connected_blocks = connected_blocks,
                     .chain_events = chain_events,

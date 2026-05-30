@@ -86,7 +86,7 @@ BOOST_AUTO_TEST_CASE(sequence_lock_adapter_does_not_mutate_prev_heights)
     block.nHeight = 10;
 
     std::vector<int> previous_heights{5};
-    const auto lock_pair{Consensus::CalculateSequenceLocks(tx, LOCKTIME_VERIFY_SEQUENCE, previous_heights, block)};
+    const auto lock_pair{validation::CalculateSequenceLocks(tx, LOCKTIME_VERIFY_SEQUENCE, previous_heights, block)};
     BOOST_CHECK_EQUAL(lock_pair.first, -1);
     BOOST_CHECK_EQUAL(lock_pair.second, -1);
     BOOST_CHECK_EQUAL(previous_heights[0], 5);

@@ -115,13 +115,13 @@ void SnapshotSpendBackend(benchmark::Bench& bench)
 void CoinsViewSpendBackend(benchmark::Bench& bench)
 {
     std::unique_ptr<CCoinsViewCache> coins;
-    std::unique_ptr<Consensus::CoinsViewBlockSpendBackend> backend;
+    std::unique_ptr<validation::CoinsViewBlockSpendBackend> backend;
     BenchSpendBackend(bench, "CoinsViewSpendBackend", [&](const SpendBackendBenchFixture& fixture, const Consensus::BlockSpendContext& context) {
         coins = std::make_unique<CCoinsViewCache>(&CoinsViewEmpty::Get());
         for (const auto& [outpoint, coin] : fixture.coins) {
             coins->AddCoin(outpoint, Coin{coin.output, coin.height, coin.is_coinbase}, /*possible_overwrite=*/false);
         }
-        backend = std::make_unique<Consensus::CoinsViewBlockSpendBackend>(*coins);
+        backend = std::make_unique<validation::CoinsViewBlockSpendBackend>(*coins);
         auto workspace{backend->BeginBlockSpend(context)};
         assert(workspace);
         return std::move(*workspace);

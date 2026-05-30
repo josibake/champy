@@ -46,28 +46,28 @@ std::vector<Consensus::SequenceLockInputContext> BuildSequenceLockInputContext(c
 
 } // namespace
 
-std::pair<int, int64_t> Consensus::CalculateSequenceLocksAtBlock(const CTransaction& tx, int flags, std::span<const int> prev_heights, const CBlockIndex& block)
+std::pair<int, int64_t> validation::CalculateSequenceLocksAtBlock(const CTransaction& tx, int flags, std::span<const int> prev_heights, const CBlockIndex& block)
 {
-    const std::vector<SequenceLockInputContext> input_contexts{BuildSequenceLockInputContext(tx, flags, prev_heights, block)};
-    return Consensus::CalculateSequenceLocks(tx, flags, SequenceLockContext{
+    const std::vector<Consensus::SequenceLockInputContext> input_contexts{BuildSequenceLockInputContext(tx, flags, prev_heights, block)};
+    return Consensus::CalculateSequenceLocks(tx, flags, Consensus::SequenceLockContext{
         .block_height = block.nHeight,
         .previous_median_time_past = block.pprev ? block.pprev->GetMedianTimePast() : 0,
         .inputs = input_contexts,
     });
 }
 
-std::pair<int, int64_t> Consensus::CalculateSequenceLocks(const CTransaction& tx, int flags, std::span<const int> prev_heights, const CBlockIndex& block)
+std::pair<int, int64_t> validation::CalculateSequenceLocks(const CTransaction& tx, int flags, std::span<const int> prev_heights, const CBlockIndex& block)
 {
-    return Consensus::CalculateSequenceLocksAtBlock(tx, flags, prev_heights, block);
+    return validation::CalculateSequenceLocksAtBlock(tx, flags, prev_heights, block);
 }
 
-bool Consensus::EvaluateSequenceLocks(const CBlockIndex& block, std::pair<int, int64_t> lock_pair)
+bool validation::EvaluateSequenceLocks(const CBlockIndex& block, std::pair<int, int64_t> lock_pair)
 {
     assert(block.pprev);
     return Consensus::EvaluateSequenceLocksAtBlock(block.nHeight, block.pprev->GetMedianTimePast(), lock_pair);
 }
 
-bool Consensus::SequenceLocks(const CTransaction& tx, int flags, std::span<const int> prev_heights, const CBlockIndex& block)
+bool validation::SequenceLocks(const CTransaction& tx, int flags, std::span<const int> prev_heights, const CBlockIndex& block)
 {
-    return Consensus::EvaluateSequenceLocks(block, Consensus::CalculateSequenceLocks(tx, flags, prev_heights, block));
+    return validation::EvaluateSequenceLocks(block, validation::CalculateSequenceLocks(tx, flags, prev_heights, block));
 }

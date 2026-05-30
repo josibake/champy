@@ -10,9 +10,10 @@
 #include <consensus/block_spend.h>
 #include <kernel/cs_main.h>
 
+#include <memory>
+
 class CBlock;
 class CBlockIndex;
-class CCoinsViewCache;
 class BlockValidationState;
 class BlockUndoWriter;
 class BlockConnectionTrace;
@@ -35,6 +36,8 @@ struct BlockConnectionOptions {
 
 namespace validation {
 
+class BlockConnectionState;
+
 /**
  * Consensus and policy context for a block connection attempt.
  *
@@ -44,6 +47,7 @@ namespace validation {
 struct BlockConnectionContext {
     const Consensus::Params& consensus_params;
     Consensus::BlockConsensusContext consensus_context;
+    std::shared_ptr<const Consensus::SequenceLockTimeView> sequence_lock_times;
     Consensus::BlockSpendConsensusOptions spend_options;
 };
 
@@ -63,19 +67,18 @@ struct BlockConnectionRuntime {
 };
 
 /**
- * Core block-connection request.
+ * Block-connection request.
  *
- * This is still a Core validation request: it carries Core's current block
- * index, coins cache, and runtime capabilities. The request keeps those
- * dependencies local while block connection moves toward a smaller validation
- * engine.
+ * This is still a Core validation request because it carries Core's current
+ * block index. Spend-state reads and commits are behind BlockConnectionState so
+ * alternate state implementations can run through the same engine.
  */
 struct BlockConnectionRequest {
     BlockConnectionRuntime runtime;
     BlockConnectionContext context;
     const CBlock& block;
     CBlockIndex& block_index;
-    CCoinsViewCache& coins_view;
+    BlockConnectionState& connection_state;
     BlockConnectionOptions options{};
 };
 
