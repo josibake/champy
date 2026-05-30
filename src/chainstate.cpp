@@ -11,6 +11,7 @@
 #include <validation/core_coins_block_connection_state.h>
 #include <validation/block_data_adapters.h>
 #include <validation/block_index_adapters.h>
+#include <validation/block_replay.h>
 #include <validation/block_validation.h>
 #include <chain.h>
 #include <validation/chain_validation.h>
@@ -713,7 +714,7 @@ bool ChainstateManager::NotifyHeaderTip()
     return fNotify;
 }
 
-void LimitValidationInterfaceQueue(ValidationSignals& signals) LOCKS_EXCLUDED(cs_main) {
+static void LimitValidationInterfaceQueue(ValidationSignals& signals) LOCKS_EXCLUDED(cs_main) {
     AssertLockNotHeld(cs_main);
 
     if (signals.CallbacksPending() > 10) {

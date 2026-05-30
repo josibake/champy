@@ -131,6 +131,9 @@ int64_t GetMinimumTime(const CBlockIndex* pindexPrev, int64_t difficulty_adjustm
 
 int64_t UpdateTime(CBlockHeader* pblock, const Consensus::Params& consensusParams, const CBlockIndex* pindexPrev);
 
+/** Add or update the witness commitment required by the current chain deployment state. */
+void GenerateCoinbaseCommitment(const ChainstateManager& chainman, CBlock& block, const CBlockIndex* pindexPrev);
+
 /** Update an old GenerateCoinbaseCommitment from CreateNewBlock after the block txs have changed */
 void RegenerateCommitments(CBlock& block, ChainstateManager& chainman);
 

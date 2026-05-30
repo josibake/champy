@@ -12,6 +12,7 @@
 #include <validation/block_index_adapters.h>
 #include <validation/block_coin_effects.h>
 #include <validation/block_connection.h>
+#include <validation/block_replay.h>
 #include <validation/block_validation_adapters.h>
 #include <validation/block_validation_error.h>
 #include <validation/block_validation_policy.h>
@@ -82,86 +83,6 @@ static CoreBlockConnectionRuntimeInputs MakeCoreBlockConnectionRuntimeInputs(
     };
 }
 
-/** Undo the effects of this block (with given index) on the UTXO set represented by coins.
- *  When FAILED is returned, view is left in an indeterminate state. */
-static DisconnectResult DisconnectBlock(BlockUndoReader& undo_reader, const CBlock& block, const CBlockIndex* pindex, CCoinsViewCache& view)
-    EXCLUSIVE_LOCKS_REQUIRED(::cs_main)
-{
-    AssertLockHeld(::cs_main);
-    bool fClean = true;
-
-    CBlockUndo blockUndo;
-    if (!undo_reader.ReadBlockUndo(blockUndo, *pindex)) {
-        LogError("DisconnectBlock(): failure reading undo data\n");
-        return DISCONNECT_FAILED;
-    }
-
-    if (blockUndo.vtxundo.size() + 1 != block.vtx.size()) {
-        LogError("DisconnectBlock(): block and undo data inconsistent\n");
-        return DISCONNECT_FAILED;
-    }
-
-    // Ignore blocks that contain transactions which are 'overwritten' by later transactions,
-    // unless those are already completely spent.
-    // See https://github.com/bitcoin/bitcoin/issues/22596 for additional information.
-    // Note: the blocks specified here are different than the ones used in block connection because DisconnectBlock
-    // unwinds the blocks in reverse. As a result, the inconsistency is not discovered until the earlier
-    // blocks with the duplicate coinbase transactions are disconnected.
-    bool fEnforceBIP30 = !((pindex->nHeight == 91722 && pindex->GetBlockHash() == uint256{"00000000000271a2dc26e7667f8419f2e15416dc6955e5a6c6cdf3f2574dd08e"}) ||
-                           (pindex->nHeight == 91812 && pindex->GetBlockHash() == uint256{"00000000000af0aed4792b1acee3d966af36cf5def14935db8de83d6f9306f2f"}));
-
-    // undo transactions in reverse order
-    for (int i = block.vtx.size() - 1; i >= 0; i--) {
-        const CTransaction& tx = *(block.vtx[i]);
-        Txid hash = tx.GetHash();
-        bool is_coinbase = tx.IsCoinBase();
-        bool is_bip30_exception = (is_coinbase && !fEnforceBIP30);
-
-        // Check that all outputs are available and match the outputs in the block itself
-        // exactly.
-        for (size_t o = 0; o < tx.vout.size(); o++) {
-            if (!tx.vout[o].scriptPubKey.IsUnspendable()) {
-                COutPoint out(hash, o);
-                Coin coin;
-                bool is_spent = view.SpendCoin(out, &coin);
-                if (!is_spent || tx.vout[o] != coin.out || pindex->nHeight != coin.nHeight || is_coinbase != coin.IsCoinBase()) {
-                    if (!is_bip30_exception) {
-                        fClean = false; // transaction output mismatch
-                    }
-                }
-            }
-        }
-
-        // restore inputs
-        if (i > 0) { // not coinbases
-            CTxUndo& txundo = blockUndo.vtxundo[i - 1];
-            if (txundo.vprevout.size() != tx.vin.size()) {
-                LogError("DisconnectBlock(): transaction and undo data inconsistent\n");
-                return DISCONNECT_FAILED;
-            }
-            for (unsigned int j = tx.vin.size(); j > 0;) {
-                --j;
-                const COutPoint& out = tx.vin[j].prevout;
-                int res = ApplyTxInUndo(std::move(txundo.vprevout[j]), view, out);
-                if (res == DISCONNECT_FAILED) return DISCONNECT_FAILED;
-                fClean = fClean && res != DISCONNECT_UNCLEAN;
-            }
-            // At this point, all of txundo.vprevout should have been moved out.
-        }
-    }
-
-    // move best block pointer to prevout block
-    view.SetBestBlock(pindex->pprev->GetBlockHash());
-
-    return fClean ? DISCONNECT_OK : DISCONNECT_UNCLEAN;
-}
-
-DisconnectResult DisconnectBlock(Chainstate& chainstate, const CBlock& block, const CBlockIndex* pindex, CCoinsViewCache& view)
-{
-    CoreBlockDataStore block_store{chainstate.m_blockman};
-    return DisconnectBlock(block_store, block, pindex, view);
-}
-
 static bool CheckMerkleRoot(const CBlock& block, const Consensus::BlockStructuralFacts& facts, BlockValidationState& state)
 {
     if (const auto merkle_check{Consensus::CheckBlockMerkleRoot(block, facts)}; !merkle_check) {
@@ -216,18 +137,6 @@ bool CheckBlock(const CBlock& block, BlockValidationState& state, const Consensu
     return true;
 }
 
-void UpdateUncommittedBlockStructures(const ChainstateManager& chainman, CBlock& block, const CBlockIndex* pindexPrev)
-{
-    int commitpos = GetWitnessCommitmentIndex(block);
-    static const std::vector<unsigned char> nonce(32, 0x00);
-    if (commitpos != NO_WITNESS_COMMITMENT && DeploymentActiveAfter(pindexPrev, chainman, Consensus::DEPLOYMENT_SEGWIT) && !block.vtx[0]->HasWitness()) {
-        CMutableTransaction tx(*block.vtx[0]);
-        tx.vin[0].scriptWitness.stack.resize(1);
-        tx.vin[0].scriptWitness.stack[0] = nonce;
-        block.vtx[0] = MakeTransactionRef(std::move(tx));
-    }
-}
-
 CAmount GetBlockSubsidy(int nHeight, const Consensus::Params& consensusParams)
 {
     return Consensus::CalculateBlockSubsidy(nHeight, consensusParams);
@@ -237,30 +146,6 @@ bool HasValidProofOfWork(std::span<const CBlockHeader> headers, const Consensus:
 {
     return std::ranges::all_of(headers,
                                [&](const auto& header) { return CheckProofOfWork(header.GetHash(), header.nBits, consensusParams); });
-}
-
-void GenerateCoinbaseCommitment(const ChainstateManager& chainman, CBlock& block, const CBlockIndex* pindexPrev)
-{
-    int commitpos = GetWitnessCommitmentIndex(block);
-    std::vector<unsigned char> ret(32, 0x00);
-    if (commitpos == NO_WITNESS_COMMITMENT) {
-        uint256 witnessroot = BlockWitnessMerkleRoot(block);
-        CHash256().Write(witnessroot).Write(ret).Finalize(witnessroot);
-        CTxOut out;
-        out.nValue = 0;
-        out.scriptPubKey.resize(MINIMUM_WITNESS_COMMITMENT);
-        out.scriptPubKey[0] = OP_RETURN;
-        out.scriptPubKey[1] = 0x24;
-        out.scriptPubKey[2] = 0xaa;
-        out.scriptPubKey[3] = 0x21;
-        out.scriptPubKey[4] = 0xa9;
-        out.scriptPubKey[5] = 0xed;
-        memcpy(&out.scriptPubKey[6], witnessroot.begin(), 32);
-        CMutableTransaction tx(*block.vtx[0]);
-        tx.vout.push_back(out);
-        block.vtx[0] = MakeTransactionRef(std::move(tx));
-    }
-    UpdateUncommittedBlockStructures(chainman, block, pindexPrev);
 }
 
 bool IsBlockMutated(const CBlock& block, BlockMutationOptions options)
@@ -897,114 +782,4 @@ VerifyDBResult CVerifyDB::VerifyDB(
         return VerifyDBResult::SKIPPED_MISSING_BLOCKS;
     }
     return VerifyDBResult::SUCCESS;
-}
-
-/** Apply the effects of a block on the utxo cache, ignoring that it may already have been applied. */
-static bool RollforwardBlock(BlockDataReader& block_reader, const CBlockIndex* pindex, CCoinsViewCache& inputs)
-    EXCLUSIVE_LOCKS_REQUIRED(cs_main)
-{
-    AssertLockHeld(cs_main);
-    CBlock block;
-    if (!block_reader.ReadBlock(block, *pindex)) {
-        LogError("ReplayBlock(): ReadBlock failed at %d, hash=%s\n", pindex->nHeight, pindex->GetBlockHash().ToString());
-        return false;
-    }
-
-    validation::ReplayBlockCoinsForRecovery(block, inputs, pindex->nHeight);
-    return true;
-}
-
-bool RollforwardBlock(Chainstate& chainstate, const CBlockIndex* pindex, CCoinsViewCache& inputs)
-{
-    CoreBlockDataStore block_store{chainstate.m_blockman};
-    return RollforwardBlock(block_store, pindex, inputs);
-}
-
-bool ReplayBlocks(Chainstate& chainstate)
-{
-    LOCK(cs_main);
-
-    CCoinsView& db = chainstate.CoinsDB();
-    CCoinsViewCache cache(&db);
-    CoreBlockDataStore block_store{chainstate.m_blockman};
-    CoreBlockIndexStore block_index{chainstate.m_chainman};
-
-    std::vector<uint256> hashHeads = db.GetHeadBlocks();
-    if (hashHeads.empty()) return true; // We're already in a consistent state.
-    if (hashHeads.size() != 2) {
-        LogError("ReplayBlocks(): unknown inconsistent state\n");
-        return false;
-    }
-
-    chainstate.m_chainman.GetNotifications().progress(_("Replaying blocks…"), 0, false);
-    LogInfo("Replaying blocks");
-
-    const CBlockIndex* pindexOld = nullptr;  // Old tip during the interrupted flush.
-    const CBlockIndex* pindexNew;            // New tip during the interrupted flush.
-    const CBlockIndex* pindexFork = nullptr; // Latest block common to both the old and the new tip.
-
-    pindexNew = block_index.LookupBlockIndex(hashHeads[0]);
-    if (!pindexNew) {
-        LogError("ReplayBlocks(): reorganization to unknown block requested\n");
-        return false;
-    }
-
-    if (!hashHeads[1].IsNull()) { // The old tip is allowed to be 0, indicating it's the first flush.
-        pindexOld = block_index.LookupBlockIndex(hashHeads[1]);
-        if (!pindexOld) {
-            LogError("ReplayBlocks(): reorganization from unknown block requested\n");
-            return false;
-        }
-        pindexFork = LastCommonAncestor(pindexOld, pindexNew);
-        assert(pindexFork != nullptr);
-    }
-
-    // Rollback along the old branch.
-    const int nForkHeight{pindexFork ? pindexFork->nHeight : 0};
-    if (pindexOld != pindexFork) {
-        LogInfo("Rolling back from %s (%i to %i)", pindexOld->GetBlockHash().ToString(), pindexOld->nHeight, nForkHeight);
-        while (pindexOld != pindexFork) {
-            if (pindexOld->nHeight > 0) { // Never disconnect the genesis block.
-                CBlock block;
-                if (!block_store.ReadBlock(block, *pindexOld)) {
-                    LogError("RollbackBlock(): ReadBlock() failed at %d, hash=%s\n", pindexOld->nHeight, pindexOld->GetBlockHash().ToString());
-                    return false;
-                }
-                if (pindexOld->nHeight % 10'000 == 0) {
-                    LogInfo("Rolling back %s (%i)", pindexOld->GetBlockHash().ToString(), pindexOld->nHeight);
-                }
-                DisconnectResult res = DisconnectBlock(block_store, block, pindexOld, cache);
-                if (res == DISCONNECT_FAILED) {
-                    LogError("RollbackBlock(): DisconnectBlock failed at %d, hash=%s\n", pindexOld->nHeight, pindexOld->GetBlockHash().ToString());
-                    return false;
-                }
-                // If DISCONNECT_UNCLEAN is returned, it means a non-existing UTXO was deleted, or an existing UTXO was
-                // overwritten. It corresponds to cases where the block-to-be-disconnect never had all its operations
-                // applied to the UTXO set. However, as both writing a UTXO and deleting a UTXO are idempotent operations,
-                // the result is still a version of the UTXO set with the effects of that block undone.
-            }
-            pindexOld = pindexOld->pprev;
-        }
-        LogInfo("Rolled back to %s", pindexFork->GetBlockHash().ToString());
-    }
-
-    // Roll forward from the forking point to the new tip.
-    if (nForkHeight < pindexNew->nHeight) {
-        LogInfo("Rolling forward to %s (%i to %i)", pindexNew->GetBlockHash().ToString(), nForkHeight, pindexNew->nHeight);
-        for (int nHeight = nForkHeight + 1; nHeight <= pindexNew->nHeight; ++nHeight) {
-            const CBlockIndex& pindex{*Assert(pindexNew->GetAncestor(nHeight))};
-
-            if (nHeight % 10'000 == 0) {
-                LogInfo("Rolling forward %s (%i)", pindex.GetBlockHash().ToString(), nHeight);
-            }
-            chainstate.m_chainman.GetNotifications().progress(_("Replaying blocks…"), (int)((nHeight - nForkHeight) * 100.0 / (pindexNew->nHeight - nForkHeight)), false);
-            if (!RollforwardBlock(block_store, &pindex, cache)) return false;
-        }
-        LogInfo("Rolled forward to %s", pindexNew->GetBlockHash().ToString());
-    }
-
-    cache.SetBestBlock(pindexNew->GetBlockHash());
-    cache.Flush(/*reallocate_cache=*/false); // local CCoinsViewCache goes out of scope
-    chainstate.m_chainman.GetNotifications().progress(bilingual_str{}, 100, false);
-    return true;
 }

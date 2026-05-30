@@ -17,6 +17,7 @@
 #include <validation/tx_verify.h>
 #include <validation_state.h>
 #include <deploymentstatus.h>
+#include <hash.h>
 #include <logging.h>
 #include <node/context.h>
 #include <node/kernel_notifications.h>
@@ -30,8 +31,10 @@
 #include <chainstate.h>
 
 #include <algorithm>
-#include <utility>
+#include <cstring>
 #include <numeric>
+#include <utility>
+#include <vector>
 
 namespace node {
 
@@ -64,6 +67,42 @@ int64_t UpdateTime(CBlockHeader* pblock, const Consensus::Params& consensusParam
     }
 
     return nNewTime - nOldTime;
+}
+
+static void UpdateUncommittedBlockStructures(const ChainstateManager& chainman, CBlock& block, const CBlockIndex* pindexPrev)
+{
+    const int commitpos{GetWitnessCommitmentIndex(block)};
+    static const std::vector<unsigned char> nonce(32, 0x00);
+    if (commitpos != NO_WITNESS_COMMITMENT && DeploymentActiveAfter(pindexPrev, chainman, Consensus::DEPLOYMENT_SEGWIT) && !block.vtx[0]->HasWitness()) {
+        CMutableTransaction tx{*block.vtx[0]};
+        tx.vin[0].scriptWitness.stack.resize(1);
+        tx.vin[0].scriptWitness.stack[0] = nonce;
+        block.vtx[0] = MakeTransactionRef(std::move(tx));
+    }
+}
+
+void GenerateCoinbaseCommitment(const ChainstateManager& chainman, CBlock& block, const CBlockIndex* pindexPrev)
+{
+    const int commitpos{GetWitnessCommitmentIndex(block)};
+    std::vector<unsigned char> ret(32, 0x00);
+    if (commitpos == NO_WITNESS_COMMITMENT) {
+        uint256 witnessroot{BlockWitnessMerkleRoot(block)};
+        CHash256().Write(witnessroot).Write(ret).Finalize(witnessroot);
+        CTxOut out;
+        out.nValue = 0;
+        out.scriptPubKey.resize(MINIMUM_WITNESS_COMMITMENT);
+        out.scriptPubKey[0] = OP_RETURN;
+        out.scriptPubKey[1] = 0x24;
+        out.scriptPubKey[2] = 0xaa;
+        out.scriptPubKey[3] = 0x21;
+        out.scriptPubKey[4] = 0xa9;
+        out.scriptPubKey[5] = 0xed;
+        memcpy(&out.scriptPubKey[6], witnessroot.begin(), 32);
+        CMutableTransaction tx{*block.vtx[0]};
+        tx.vout.push_back(out);
+        block.vtx[0] = MakeTransactionRef(std::move(tx));
+    }
+    UpdateUncommittedBlockStructures(chainman, block, pindexPrev);
 }
 
 void RegenerateCommitments(CBlock& block, ChainstateManager& chainman)

@@ -5,11 +5,14 @@
 #ifndef BITCOIN_BLOCK_VALIDATION_INTERNAL_H
 #define BITCOIN_BLOCK_VALIDATION_INTERNAL_H
 
+#include <kernel/cs_main.h>
 #include <validation/block_validation.h>
 
 #include <memory>
 #include <span>
 
+class Chainstate;
+class ChainstateEventSink;
 class CoreChainValidationContext;
 
 [[nodiscard]] NewBlockHeadersResult ProcessNewBlockHeaders(CoreChainValidationContext& context, std::span<const CBlockHeader> headers, BlockHeaderAcceptanceOptions options, BlockValidationTime time, BlockValidationState& state) LOCKS_EXCLUDED(cs_main);

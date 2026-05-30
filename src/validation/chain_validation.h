@@ -5,10 +5,15 @@
 #ifndef BITCOIN_CHAIN_VALIDATION_H
 #define BITCOIN_CHAIN_VALIDATION_H
 
+#include <kernel/cs_main.h>
 #include <validation/block_validation.h>
 
 #include <memory>
 #include <span>
+
+class Chainstate;
+class ChainstateEventSink;
+class ChainstateManager;
 
 class ChainValidationService
 {

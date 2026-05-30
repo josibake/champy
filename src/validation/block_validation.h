@@ -6,12 +6,10 @@
 #define BITCOIN_BLOCK_VALIDATION_H
 
 #include <arith_uint256.h>
-#include <coins.h>
 #include <consensus/amount.h>
 #include <consensus/block_check.h>
 #include <consensus/params.h>
 #include <validation_state.h>
-#include <kernel/cs_main.h>
 #include <primitives/block.h>
 
 #include <cstdint>
@@ -19,10 +17,6 @@
 #include <span>
 
 class CBlockIndex;
-class Chainstate;
-class ChainstateEventSink;
-class ChainstateManager;
-class ValidationSignals;
 
 struct FlatFilePos;
 
@@ -123,12 +117,6 @@ struct BlockMutationOptions {
     bool check_witness_root{false};
 };
 
-DisconnectResult DisconnectBlock(Chainstate& chainstate, const CBlock& block, const CBlockIndex* pindex, CCoinsViewCache& view) EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
-bool RollforwardBlock(Chainstate& chainstate, const CBlockIndex* pindex, CCoinsViewCache& inputs) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
-bool ReplayBlocks(Chainstate& chainstate);
-void UpdateUncommittedBlockStructures(const ChainstateManager& chainman, CBlock& block, const CBlockIndex* pindexPrev);
-void GenerateCoinbaseCommitment(const ChainstateManager& chainman, CBlock& block, const CBlockIndex* pindexPrev);
-
 /** Context-independent validity checks */
 bool CheckBlock(const CBlock& block, BlockValidationState& state, const Consensus::Params& consensusParams, const Consensus::BlockCheckOptions& options = {});
 
@@ -143,7 +131,5 @@ bool IsBlockMutated(const CBlock& block, BlockMutationOptions options);
 
 /** Return the sum of the claimed work on a given set of headers. No verification of PoW is done. */
 arith_uint256 CalculateClaimedHeadersWork(std::span<const CBlockHeader> headers);
-
-void LimitValidationInterfaceQueue(ValidationSignals& signals) LOCKS_EXCLUDED(cs_main);
 
 #endif // BITCOIN_BLOCK_VALIDATION_H

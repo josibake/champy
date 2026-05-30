@@ -310,7 +310,7 @@ FUZZ_TARGET(cmpctblock, .init = initialize_cmpctblock)
         }
 
         CBlockIndex* pindexPrev{WITH_LOCK(::cs_main, return chainman.m_blockman.LookupBlockIndex(prev))};
-        GenerateCoinbaseCommitment(chainman, *block, pindexPrev);
+        node::GenerateCoinbaseCommitment(chainman, *block, pindexPrev);
 
         block->hashMerkleRoot = BlockMerkleRoot(*block);
         FinalizeHeader(*block, chainman);

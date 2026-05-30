@@ -42,6 +42,8 @@ foreach(relative_path IN ITEMS
     src/validation/block_connection.cpp
     src/validation/block_connection.h
     src/validation/block_connection_state.h
+    src/validation/block_replay.cpp
+    src/validation/block_replay.h
     src/validation/core_coins_block_connection_state.cpp
     src/validation/core_coins_block_connection_state.h
     src/validation/block_connection_trace.cpp
@@ -77,6 +79,7 @@ require_text("doc/validation-execution-contracts.md" "Do not pass `Chainstate`, 
 require_text("doc/legacy-compatibility.md" "The block connection engine no longer receives broad storage/index stores.")
 require_text("src/CMakeLists.txt" "block_data_admission.cpp")
 require_text("src/CMakeLists.txt" "block_connection_trace.cpp")
+require_text("src/CMakeLists.txt" "block_replay.cpp")
 require_text("src/CMakeLists.txt" "core_chain_activation.cpp")
 require_text("src/CMakeLists.txt" "core_chain_validation_context.cpp")
 require_text("src/CMakeLists.txt" "core_block_connection_context.cpp")
@@ -87,6 +90,8 @@ require_text("src/CMakeLists.txt" "target_link_libraries(bitcoin_chain_validatio
 require_text("src/CMakeLists.txt" "bitcoin_chain_validation")
 require_text("src/kernel/CMakeLists.txt" "bitcoin_chain_validation")
 require_text("src/validation/block_validation.cpp" "#include <validation/block_validation_internal.h>")
+require_text("src/chainstate.cpp" "#include <validation/block_replay.h>")
+require_text("src/kernel/chainstate_load.cpp" "#include <validation/block_replay.h>")
 require_text("src/validation/block_header_context_adapters.h" "class BlockHeaderContextProvider")
 require_text("src/validation/block_header_context_adapters.h" "class CoreBlockHeaderContextProvider")
 require_text("src/validation/core_chain_validation_context.h" "class CoreChainValidationContext")
@@ -215,6 +220,16 @@ forbid_text("src/validation/core_block_connection_setup.h" "BlockDataStore& m_bl
 forbid_text("src/validation/core_block_connection_setup.h" "BlockIndexStore& m_block_index_store")
 forbid_text("src/validation/block_connection.h" "BlockDataStore& block_store")
 forbid_text("src/validation/block_connection.h" "BlockIndexStore& block_index_store")
+forbid_text("src/validation/block_validation.h" "Chainstate")
+forbid_text("src/validation/block_validation.h" "ChainstateManager")
+forbid_text("src/validation/block_validation.h" "CCoinsViewCache")
+forbid_text("src/validation/block_validation.h" "ValidationSignals")
+forbid_text("src/validation/block_validation.h" "DisconnectBlock")
+forbid_text("src/validation/block_validation.h" "ReplayBlocks")
+forbid_text("src/validation/block_validation.h" "GenerateCoinbaseCommitment")
+require_text("src/validation/block_replay.h" "DisconnectBlock")
+require_text("src/validation/block_replay.h" "ReplayBlocks")
+require_text("src/node/miner.h" "GenerateCoinbaseCommitment")
 forbid_text("src/validation/block_data_adapters.h" "class BlockDataStore")
 forbid_text("src/validation/block_index_adapters.h" "class BlockIndexStore")
 forbid_text("src/validation/block_index_adapters.h" "class BlockIndexAdmissionStore")
