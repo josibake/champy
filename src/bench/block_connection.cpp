@@ -116,7 +116,7 @@ void BenchmarkBlockConnectionEngine(benchmark::Bench& bench, std::vector<CKey>& 
             .block_index_committer = block_index_store,
             .script_check_queue = validation_context.ScriptCheckQueue(),
             .validation_cache = validation_context.ScriptValidationCache(),
-            .trace_counters = validation_context.BlockConnectionTraceCounters(),
+            .trace_counters = validation_context.TraceCounters(),
         };
         CoreBlockConnectionSetup connection_setup{
             runtime_inputs,

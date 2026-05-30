@@ -110,6 +110,7 @@ Consensus entry points receive value-shaped context:
 - `BlockCommitContext`
 
 Core-specific state is converted into these values in validation adapters.
+Protocol values should not carry hidden validation cache state.
 
 ### Spend State
 
@@ -144,6 +145,7 @@ Commit happens through:
 - `BlockRevertDataWriter`
 - `BlockSpendStateCommitter`
 - `BlockMetadataCommitter`
+- `BlockIndexValidityCommitter`
 
 This keeps validation review separate from mutation review.
 

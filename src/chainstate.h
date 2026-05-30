@@ -88,8 +88,6 @@ enum class SynchronizationState {
 /** Documentation for argument 'checklevel'. */
 extern const std::vector<std::string> CHECKLEVEL_DOC;
 
-bool FatalError(kernel::Notifications& notifications, BlockValidationState& state, const bilingual_str& message);
-
 /**
  * Convenience class for initializing and passing the script execution cache
  * and signature cache.

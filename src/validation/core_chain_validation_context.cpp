@@ -82,7 +82,7 @@ ValidationCache& CoreChainValidationContext::ScriptValidationCache() const
     return m_chainman.m_validation_cache;
 }
 
-BlockConnectionTraceCounters CoreChainValidationContext::BlockConnectionTraceCounters() const
+BlockConnectionTraceCounters CoreChainValidationContext::TraceCounters() const
 {
     return BlockConnectionTraceCountersFor(m_chainman);
 }

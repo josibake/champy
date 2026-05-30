@@ -59,7 +59,7 @@ public:
     [[nodiscard]] kernel::Notifications& Notifications() const;
     [[nodiscard]] CCheckQueue<CScriptCheck>& ScriptCheckQueue() const;
     [[nodiscard]] ValidationCache& ScriptValidationCache() const;
-    [[nodiscard]] BlockConnectionTraceCounters BlockConnectionTraceCounters() const EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
+    [[nodiscard]] BlockConnectionTraceCounters TraceCounters() const EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
 
     void CheckBlockIndex() const;
     bool NotifyHeaderTip() const LOCKS_EXCLUDED(::cs_main);

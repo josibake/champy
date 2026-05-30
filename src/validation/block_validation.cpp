@@ -71,7 +71,7 @@ static CoreBlockConnectionRuntimeInputs MakeCoreBlockConnectionRuntimeInputs(
         .block_index_committer = block_index_committer,
         .script_check_queue = context.ScriptCheckQueue(),
         .validation_cache = context.ScriptValidationCache(),
-        .trace_counters = context.BlockConnectionTraceCounters(),
+        .trace_counters = context.TraceCounters(),
     };
 }
 
