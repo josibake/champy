@@ -24,10 +24,40 @@
 #include <utility>
 #include <vector>
 
+CoreScriptValidationCache::CoreScriptValidationCache(ValidationCache& validation_cache)
+    : m_validation_cache{validation_cache}
+{
+}
+
+uint256 CoreScriptValidationCache::ExecutionCacheEntry(const CTransaction& tx, script_verify_flags flags) const
+{
+    uint256 entry;
+    CSHA256 hasher = m_validation_cache.ScriptExecutionCacheHasher();
+    hasher.Write(UCharCast(tx.GetWitnessHash().begin()), 32).Write((unsigned char*)&flags, sizeof(flags)).Finalize(entry.begin());
+    return entry;
+}
+
+bool CoreScriptValidationCache::ContainsScriptExecution(const uint256& entry, bool erase)
+{
+    AssertLockHeld(cs_main);
+    return m_validation_cache.m_script_execution_cache.contains(entry, erase);
+}
+
+void CoreScriptValidationCache::StoreScriptExecution(const uint256& entry)
+{
+    AssertLockHeld(cs_main);
+    m_validation_cache.m_script_execution_cache.insert(entry);
+}
+
+SignatureCache& CoreScriptValidationCache::SignatureCacheStore()
+{
+    return m_validation_cache.m_signature_cache;
+}
+
 namespace {
 
 template <typename PrepareSpentOutputs>
-bool CheckInputScriptsWithPreparedOutputs(const CTransaction& tx, TxValidationState& state, script_verify_flags flags, bool cacheSigStore, bool cacheFullScriptStore, PrecomputedTransactionData& txdata, ValidationCache& validation_cache, std::vector<CScriptCheck>* pvChecks, PrepareSpentOutputs&& prepare_spent_outputs, const CTransactionRef* tx_ref = nullptr) EXCLUSIVE_LOCKS_REQUIRED(cs_main)
+bool CheckInputScriptsWithPreparedOutputs(const CTransaction& tx, TxValidationState& state, script_verify_flags flags, bool cacheSigStore, bool cacheFullScriptStore, PrecomputedTransactionData& txdata, CoreScriptValidationCache& validation_cache, std::vector<CScriptCheck>* pvChecks, PrepareSpentOutputs&& prepare_spent_outputs, const CTransactionRef* tx_ref = nullptr) EXCLUSIVE_LOCKS_REQUIRED(cs_main)
 {
     if (tx.IsCoinBase()) return true;
 
@@ -40,14 +70,11 @@ bool CheckInputScriptsWithPreparedOutputs(const CTransaction& tx, TxValidationSt
     // correct (ie that the transaction hash which is in tx's prevouts
     // properly commits to the scriptPubKey in the inputs view of that
     // transaction).
-    uint256 hashCacheEntry;
-    CSHA256 hasher = validation_cache.ScriptExecutionCacheHasher();
-    hasher.Write(UCharCast(tx.GetWitnessHash().begin()), 32).Write((unsigned char*)&flags, sizeof(flags)).Finalize(hashCacheEntry.begin());
+    const uint256 hashCacheEntry{validation_cache.ExecutionCacheEntry(tx, flags)};
     // Compatibility note: script-cache access still relies on Core's external
     // `cs_main` lock. Track this in doc/legacy-compatibility.md instead of
     // expanding the lock contract into consensus code.
-    AssertLockHeld(cs_main);
-    if (validation_cache.m_script_execution_cache.contains(hashCacheEntry, !cacheFullScriptStore)) {
+    if (validation_cache.ContainsScriptExecution(hashCacheEntry, !cacheFullScriptStore)) {
         return true;
     }
 
@@ -72,12 +99,12 @@ bool CheckInputScriptsWithPreparedOutputs(const CTransaction& tx, TxValidationSt
         // Verify signature
         if (pvChecks) {
             if (tx_ref) {
-                pvChecks->emplace_back(txdata.m_spent_outputs[i], *tx_ref, validation_cache.m_signature_cache, i, flags, cacheSigStore, queued_txdata);
+                pvChecks->emplace_back(txdata.m_spent_outputs[i], *tx_ref, validation_cache.SignatureCacheStore(), i, flags, cacheSigStore, queued_txdata);
             } else {
-                pvChecks->emplace_back(txdata.m_spent_outputs[i], tx, validation_cache.m_signature_cache, i, flags, cacheSigStore, &txdata);
+                pvChecks->emplace_back(txdata.m_spent_outputs[i], tx, validation_cache.SignatureCacheStore(), i, flags, cacheSigStore, &txdata);
             }
         } else {
-            CScriptCheck check{txdata.m_spent_outputs[i], tx, validation_cache.m_signature_cache, i, flags, cacheSigStore, &txdata};
+            CScriptCheck check{txdata.m_spent_outputs[i], tx, validation_cache.SignatureCacheStore(), i, flags, cacheSigStore, &txdata};
             if (auto result = check(); result.has_value()) {
                 // Tx failures never trigger disconnections/bans.
                 // This is so that network splits aren't triggered
@@ -97,13 +124,13 @@ bool CheckInputScriptsWithPreparedOutputs(const CTransaction& tx, TxValidationSt
     if (cacheFullScriptStore && !pvChecks) {
         // We executed all of the provided scripts, and were told to
         // cache the result. Do so now.
-        validation_cache.m_script_execution_cache.insert(hashCacheEntry);
+        validation_cache.StoreScriptExecution(hashCacheEntry);
     }
 
     return true;
 }
 
-bool CheckInputScriptsFromPlan(const Consensus::TransactionScriptCheckPlan& check, TxValidationState& state, bool cacheSigStore, bool cacheFullScriptStore, PrecomputedTransactionData& txdata, ValidationCache& validation_cache, std::vector<CScriptCheck>* pvChecks) EXCLUSIVE_LOCKS_REQUIRED(cs_main)
+bool CheckInputScriptsFromPlan(const Consensus::TransactionScriptCheckPlan& check, TxValidationState& state, bool cacheSigStore, bool cacheFullScriptStore, PrecomputedTransactionData& txdata, CoreScriptValidationCache& validation_cache, std::vector<CScriptCheck>* pvChecks) EXCLUSIVE_LOCKS_REQUIRED(cs_main)
 {
     const CTransactionRef& tx_ref{check.tx};
     const CTransaction& tx{*tx_ref};
@@ -116,7 +143,7 @@ bool CheckInputScriptsFromPlan(const Consensus::TransactionScriptCheckPlan& chec
     return CheckInputScriptsWithPreparedOutputs(tx, state, check.flags, cacheSigStore, cacheFullScriptStore, txdata, validation_cache, pvChecks, prepare_spent_outputs, &tx_ref);
 }
 
-Consensus::BlockSpendResult<void> CheckTransactionScriptsForBlock(const Consensus::TransactionScriptCheckPlan& check, bool cache_results, ValidationCache& validation_cache, std::optional<CCheckQueueControl<CScriptCheck>>& control) EXCLUSIVE_LOCKS_REQUIRED(cs_main)
+Consensus::BlockSpendResult<void> CheckTransactionScriptsForBlock(const Consensus::TransactionScriptCheckPlan& check, bool cache_results, CoreScriptValidationCache& validation_cache, std::optional<CCheckQueueControl<CScriptCheck>>& control) EXCLUSIVE_LOCKS_REQUIRED(cs_main)
 {
     bool tx_ok;
     TxValidationState tx_state;
@@ -145,7 +172,7 @@ Consensus::BlockSpendResult<void> CheckTransactionScriptsForBlock(const Consensu
 
 } // namespace
 
-CoreBlockScriptChecker::CoreBlockScriptChecker(bool run_checks, bool cache_results, ValidationCache& validation_cache, std::optional<CCheckQueueControl<CScriptCheck>>& control)
+CoreBlockScriptChecker::CoreBlockScriptChecker(bool run_checks, bool cache_results, CoreScriptValidationCache& validation_cache, std::optional<CCheckQueueControl<CScriptCheck>>& control)
     : m_run_checks{run_checks}, m_cache_results{cache_results}, m_validation_cache{validation_cache}, m_control{control}
 {
 }
@@ -184,7 +211,7 @@ std::optional<CCheckQueueControl<CScriptCheck>>& CoreBlockScriptCheckQueue::Queu
 }
 
 CoreBlockScriptChecks::CoreBlockScriptChecks(CCheckQueue<CScriptCheck>& queue, bool run_checks, bool cache_results, ValidationCache& validation_cache)
-    : m_queue{queue, run_checks}, m_checker{run_checks, cache_results, validation_cache, m_queue.QueueControl()}
+    : m_queue{queue, run_checks}, m_validation_cache{validation_cache}, m_checker{run_checks, cache_results, m_validation_cache, m_queue.QueueControl()}
 {
 }
 
@@ -199,6 +226,7 @@ bool CheckInputScripts(const CTransaction& tx, TxValidationState& state,
                        ValidationCache& validation_cache,
                        std::vector<CScriptCheck>* pvChecks) EXCLUSIVE_LOCKS_REQUIRED(cs_main)
 {
+    CoreScriptValidationCache script_cache{validation_cache};
     const auto prepare_spent_outputs = [&] {
         std::vector<CTxOut> spent_outputs;
         spent_outputs.reserve(tx.vin.size());
@@ -212,5 +240,5 @@ bool CheckInputScripts(const CTransaction& tx, TxValidationState& state,
         txdata.Init(tx, std::move(spent_outputs));
     };
 
-    return CheckInputScriptsWithPreparedOutputs(tx, state, flags, cacheSigStore, cacheFullScriptStore, txdata, validation_cache, pvChecks, prepare_spent_outputs);
+    return CheckInputScriptsWithPreparedOutputs(tx, state, flags, cacheSigStore, cacheFullScriptStore, txdata, script_cache, pvChecks, prepare_spent_outputs);
 }

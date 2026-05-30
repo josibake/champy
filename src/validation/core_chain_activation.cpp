@@ -152,6 +152,74 @@ void PublishConnectedBlock(
     }
 }
 
+struct CoreChainFork {
+    const CBlockIndex* old_tip{nullptr};
+    const CBlockIndex* fork{nullptr};
+};
+
+CoreChainFork LocateCoreChainFork(CoreChainActivationState& active_chain, CBlockIndex& index_most_work)
+    EXCLUSIVE_LOCKS_REQUIRED(cs_main)
+{
+    AssertLockHeld(cs_main);
+    return {
+        .old_tip = active_chain.Tip(),
+        .fork = active_chain.FindFork(index_most_work),
+    };
+}
+
+enum class DisconnectToForkStatus {
+    Unchanged,
+    Disconnected,
+    Failed,
+};
+
+DisconnectToForkStatus DisconnectCoreChainToFork(
+    CoreChainActivationState& active_chain,
+    const CBlockIndex* fork,
+    ChainstateEventSink* chain_events,
+    BlockValidationState& state) EXCLUSIVE_LOCKS_REQUIRED(cs_main)
+{
+    AssertLockHeld(cs_main);
+
+    bool disconnected{false};
+    while (active_chain.Tip() && active_chain.Tip() != fork) {
+        if (!active_chain.DisconnectTip(state, chain_events)) {
+            // This is likely a fatal error. Notify the event sink without
+            // restoring disconnected transactions, just in case observers run
+            // before shutdown.
+            active_chain.NotifyReorgCompleted(chain_events, /*success=*/false);
+
+            // If we're unable to disconnect a block during normal operation,
+            // then that is a failure of our local system -- we should abort
+            // rather than stay on a less work chain.
+            FatalError(active_chain.Notifications(), state, _("Failed to disconnect block."));
+            return DisconnectToForkStatus::Failed;
+        }
+        disconnected = true;
+    }
+
+    return disconnected ? DisconnectToForkStatus::Disconnected : DisconnectToForkStatus::Unchanged;
+}
+
+std::vector<CBlockIndex*> NextCoreChainConnectBatch(CBlockIndex& index_most_work, int& height)
+    EXCLUSIVE_LOCKS_REQUIRED(cs_main)
+{
+    AssertLockHeld(cs_main);
+
+    const int target_height{std::min(height + 32, index_most_work.nHeight)};
+    std::vector<CBlockIndex*> blocks_to_connect;
+    blocks_to_connect.reserve(target_height - height);
+
+    CBlockIndex* block_index{index_most_work.GetAncestor(target_height)};
+    while (block_index && block_index->nHeight != height) {
+        blocks_to_connect.push_back(block_index);
+        block_index = block_index->pprev;
+    }
+    height = target_height;
+
+    return blocks_to_connect;
+}
+
 } // namespace
 
 const CBlockIndex* CoreChainActivationState::Tip() const
@@ -270,42 +338,20 @@ CoreActivateBestChainStepResult ActivateCoreBestChainStep(CoreActivateBestChainS
     AssertLockHeld(cs_main);
     CoreChainActivationState& active_chain{request.active_chain};
 
-    const CBlockIndex* old_tip{active_chain.Tip()};
-    const CBlockIndex* fork{active_chain.FindFork(request.index_most_work)};
-
-    bool blocks_disconnected{false};
-    while (active_chain.Tip() && active_chain.Tip() != fork) {
-        if (!active_chain.DisconnectTip(state, request.connection.chain_events)) {
-            // This is likely a fatal error. Notify the event sink without
-            // restoring disconnected transactions, just in case observers run
-            // before shutdown.
-            active_chain.NotifyReorgCompleted(request.connection.chain_events, /*success=*/false);
-
-            // If we're unable to disconnect a block during normal operation,
-            // then that is a failure of our local system -- we should abort
-            // rather than stay on a less work chain.
-            FatalError(active_chain.Notifications(), state, _("Failed to disconnect block."));
-            return CoreActivateBestChainStepResult::SystemError();
-        }
-        blocks_disconnected = true;
+    const CoreChainFork activation_fork{LocateCoreChainFork(active_chain, request.index_most_work)};
+    const DisconnectToForkStatus disconnect_status{DisconnectCoreChainToFork(active_chain, activation_fork.fork, request.connection.chain_events, state)};
+    if (disconnect_status == DisconnectToForkStatus::Failed) {
+        return CoreActivateBestChainStepResult::SystemError();
     }
+    const bool blocks_disconnected{disconnect_status == DisconnectToForkStatus::Disconnected};
 
-    std::vector<CBlockIndex*> blocks_to_connect;
     bool continue_step{true};
     auto result{CoreActivateBestChainStepResult::Completed()};
-    int height{fork ? fork->nHeight : -1};
+    int height{activation_fork.fork ? activation_fork.fork->nHeight : -1};
     while (continue_step && height != request.index_most_work.nHeight) {
         // Don't iterate the entire list of potential improvements toward the
         // best tip, as we likely only need a few blocks along the way.
-        const int target_height{std::min(height + 32, request.index_most_work.nHeight)};
-        blocks_to_connect.clear();
-        blocks_to_connect.reserve(target_height - height);
-        CBlockIndex* block_index{request.index_most_work.GetAncestor(target_height)};
-        while (block_index && block_index->nHeight != height) {
-            blocks_to_connect.push_back(block_index);
-            block_index = block_index->pprev;
-        }
-        height = target_height;
+        const std::vector<CBlockIndex*> blocks_to_connect{NextCoreChainConnectBatch(request.index_most_work, height)};
 
         for (CBlockIndex* block_to_connect : blocks_to_connect | std::views::reverse) {
             const CoreConnectTipResult connect_result{ConnectCoreChainTip(
@@ -335,7 +381,7 @@ CoreActivateBestChainStepResult ActivateCoreBestChainStep(CoreActivateBestChainS
             }
 
             active_chain.PruneBlockIndexCandidates();
-            if (!old_tip || active_chain.Tip()->nChainWork > old_tip->nChainWork) {
+            if (!activation_fork.old_tip || active_chain.Tip()->nChainWork > activation_fork.old_tip->nChainWork) {
                 // We're in a better position than we were. Return temporarily
                 // to release the lock.
                 continue_step = false;

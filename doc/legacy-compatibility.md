@@ -103,6 +103,7 @@ externally synchronized.
 Current role:
 
 - preserve script-cache behavior and validation-cache sharing
+- keep cache lookup/store operations behind `CoreScriptValidationCache`
 
 Target:
 

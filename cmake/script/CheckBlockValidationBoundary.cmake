@@ -127,6 +127,7 @@ require_text("src/validation/core_coins_block_connection_state.h" "class CoreCoi
 forbid_text("src/validation/block_connection_state.h" "CCoinsViewCache")
 forbid_text("src/validation/block_connection_state.h" "CBlockIndex")
 require_text("src/validation/block_connection.h" "sequence_lock_times")
+require_text("src/validation/block_script_check_adapters.h" "class CoreScriptValidationCache")
 require_text("src/validation/block_coin_effects.h" "namespace validation")
 require_text("src/validation/coins_view_spend_state.h" "namespace validation")
 require_text("src/validation/block_coin_effects.h" "ReplayBlockCoinsForRecovery")
