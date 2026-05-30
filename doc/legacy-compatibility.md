@@ -9,7 +9,9 @@ reason still applies.
 ## Core Runtime Capabilities
 
 Some validation requests still carry broad Core objects or runtime capabilities
-such as `ChainstateManager`, `CBlockIndex`, and `CCoinsViewCache`.
+such as `CBlockIndex` and `CCoinsViewCache`. `ChainValidationService` still
+wraps `ChainstateManager`, but internal block/header admission now receives a
+`CoreChainValidationContext`.
 
 Current role:
 

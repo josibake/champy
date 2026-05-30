@@ -5,23 +5,23 @@
 #include <validation/core_block_connection_context.h>
 
 #include <chain.h>
-#include <chainstate.h>
 #include <consensus/amount.h>
 #include <consensus/block_spend.h>
 #include <consensus/params.h>
 #include <validation/block_header_context_adapters.h>
+#include <validation/core_chain_validation_context.h>
 
-CoreBlockConnectionPolicySnapshot SnapshotCoreBlockConnectionPolicy(ChainstateManager& chainman, const CBlockIndex& block_index)
+CoreBlockConnectionPolicySnapshot SnapshotCoreBlockConnectionPolicy(CoreChainValidationContext& context, const CBlockIndex& block_index)
 {
-    const Consensus::Params& consensus_params{chainman.GetParams().GetConsensus()};
+    const Consensus::Params& consensus_params{context.ConsensusParams()};
+    const CoreBlockHeaderContextProvider header_context{context.MakeHeaderContextProvider()};
     return {
         .consensus_params = consensus_params,
-        .header_context = BuildCoreBlockHeaderContext(chainman, block_index.pprev),
-        .spend_options = block_index.pprev ? BuildCoreBlockSpendConsensusOptions(block_index, chainman) : Consensus::BlockSpendConsensusOptions{},
+        .header_context = header_context.BuildContext(block_index.pprev),
         .script_check_policy = {
-            .assumed_valid_block = chainman.AssumedValidBlock(),
-            .best_header = chainman.m_best_header,
-            .minimum_chain_work = chainman.MinimumChainWork(),
+            .assumed_valid_block = context.AssumedValidBlock(),
+            .best_header = context.BestHeader(),
+            .minimum_chain_work = context.MinimumChainWork(),
         },
     };
 }
@@ -41,7 +41,7 @@ CoreBlockConnectionPlan PlanCoreBlockConnection(const CoreBlockConnectionPolicyS
                 policy.header_context,
                 block_index_entry.GetBlockHash(),
                 Consensus::CalculateBlockSubsidy(block_index_entry.nHeight, policy.consensus_params)),
-            .spend_options = has_spend_stage ? policy.spend_options : Consensus::BlockSpendConsensusOptions{},
+            .spend_options = has_spend_stage ? BuildCoreBlockSpendConsensusOptions(block_index_entry, policy.consensus_params, policy.header_context.Deployments()) : Consensus::BlockSpendConsensusOptions{},
         },
         .script_check_decision = script_check_decision,
         .has_spend_stage = has_spend_stage,

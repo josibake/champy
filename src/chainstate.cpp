@@ -10,11 +10,11 @@
 #include <arith_uint256.h>
 #include <validation/block_data_adapters.h>
 #include <validation/block_index_adapters.h>
-#include <validation/block_connection.h>
 #include <validation/block_validation.h>
 #include <chain.h>
 #include <validation/chain_validation.h>
-#include <validation/core_block_connection_setup.h>
+#include <validation/core_chain_activation.h>
+#include <validation/core_chain_validation_context.h>
 #include <chainstate_event_sink.h>
 #include <clientversion.h>
 #include <consensus/amount.h>
@@ -60,7 +60,6 @@
 #include <map>
 #include <numeric>
 #include <optional>
-#include <ranges>
 #include <set>
 #include <span>
 #include <string>
@@ -592,140 +591,6 @@ bool Chainstate::DisconnectTip(
     return true;
 }
 
-struct ConnectedBlock {
-    const CBlockIndex* pindex;
-    std::shared_ptr<const CBlock> pblock;
-};
-
-static std::shared_ptr<const CBlock> LoadBlockForConnection(
-    Notifications& notifications,
-    BlockValidationState& state,
-    CBlockIndex& block_index,
-    std::shared_ptr<const CBlock> cached_block,
-    BlockDataReader& block_reader) EXCLUSIVE_LOCKS_REQUIRED(cs_main)
-{
-    AssertLockHeld(cs_main);
-
-    if (cached_block) {
-        LogDebug(BCLog::BENCH, "  - Using cached block\n");
-        return cached_block;
-    }
-
-    std::shared_ptr<CBlock> block{std::make_shared<CBlock>()};
-    if (!block_reader.ReadBlock(*block, block_index)) {
-        FatalError(notifications, state, _("Failed to read block."));
-        return nullptr;
-    }
-    return block;
-}
-
-static CoreBlockConnectionRuntimeInputs MakeCoreBlockConnectionRuntimeInputs(
-    ChainstateManager& chainman,
-    BlockUndoWriter& undo_writer,
-    BlockIndexValidityCommitter& block_index_committer) EXCLUSIVE_LOCKS_REQUIRED(cs_main)
-{
-    AssertLockHeld(cs_main);
-
-    return {
-        .notifications = chainman.GetNotifications(),
-        .undo_writer = undo_writer,
-        .block_index_committer = block_index_committer,
-        .script_check_queue = chainman.GetCheckQueue(),
-        .validation_cache = chainman.m_validation_cache,
-        .trace_counters = BlockConnectionTraceCountersFor(chainman),
-    };
-}
-
-static bool RunBlockConnection(
-    BlockValidationState& state,
-    CBlockIndex& block_index,
-    const std::shared_ptr<const CBlock>& block,
-    CCoinsViewCache& view,
-    CoreBlockConnectionRuntimeInputs runtime_inputs,
-    CoreBlockConnectionPlan connection_plan,
-    std::optional<const char*>& last_reason_logged,
-    ValidationSignals* signals) EXCLUSIVE_LOCKS_REQUIRED(cs_main)
-{
-    AssertLockHeld(cs_main);
-
-    CoreBlockConnectionSetup connection_setup{
-        runtime_inputs,
-        std::move(connection_plan),
-        block_index,
-        /*cache_script_results=*/false};
-    connection_setup.MaybeLogScriptPolicy(last_reason_logged, block->GetHash());
-    const validation::BlockConnectionRequest request{connection_setup.Request(*block, view)};
-    const validation::BlockConnectionResult connection_result{validation::BlockConnectionEngine{}.Connect(request, state)};
-    if (signals) {
-        signals->BlockChecked(block, state);
-    }
-    if (!connection_result.Succeeded()) {
-        LogError("%s: Block connection %s failed, %s\n", "ConnectTip", block_index.GetBlockHash().ToString(), state.ToString());
-    }
-    return connection_result.Succeeded();
-}
-
-static void AccumulateAndLogConnectTipStep(
-    const char* label,
-    SteadyClock::duration elapsed,
-    SteadyClock::duration& total,
-    int64_t blocks_total) EXCLUSIVE_LOCKS_REQUIRED(cs_main)
-{
-    AssertLockHeld(cs_main);
-
-    total += elapsed;
-    assert(blocks_total > 0);
-    LogDebug(BCLog::BENCH, "  - %s: %.2fms [%.2fs (%.2fms/blk)]\n",
-             label,
-             Ticks<MillisecondsDouble>(elapsed),
-             Ticks<SecondsDouble>(total),
-             Ticks<MillisecondsDouble>(total) / blocks_total);
-}
-
-static void AccumulateAndLogConnectTipTotal(
-    SteadyClock::duration elapsed,
-    SteadyClock::duration& total,
-    int64_t blocks_total) EXCLUSIVE_LOCKS_REQUIRED(cs_main)
-{
-    AssertLockHeld(cs_main);
-
-    total += elapsed;
-    assert(blocks_total > 0);
-    LogDebug(BCLog::BENCH, "- Connect block: %.2fms [%.2fs (%.2fms/blk)]\n",
-             Ticks<MillisecondsDouble>(elapsed),
-             Ticks<SecondsDouble>(total),
-             Ticks<MillisecondsDouble>(total) / blocks_total);
-}
-
-static void CommitBlockConnectionView(CCoinsViewCache& view) EXCLUSIVE_LOCKS_REQUIRED(cs_main)
-{
-    AssertLockHeld(cs_main);
-
-    view.Flush(/*reallocate_cache=*/false); // No need to reallocate since it only has capacity for 1 block
-}
-
-static bool PersistConnectedChainstate(
-    Chainstate& chainstate,
-    BlockValidationState& state,
-    ChainstateEventSink* chain_events) EXCLUSIVE_LOCKS_REQUIRED(cs_main)
-{
-    AssertLockHeld(cs_main);
-
-    return chainstate.FlushStateToDisk(state, FlushStateMode::IF_NEEDED, /*nManualPruneHeight=*/0, ExternalCacheUsageForEvents(chain_events));
-}
-
-static void PublishConnectedBlock(
-    ChainstateEventSink* chain_events,
-    const CBlock& block,
-    int height) EXCLUSIVE_LOCKS_REQUIRED(cs_main)
-{
-    AssertLockHeld(cs_main);
-
-    if (chain_events) {
-        chain_events->BlockConnected(block, height);
-    }
-}
-
 void Chainstate::AdvanceActiveChainTip(CBlockIndex& block_index, ChainstateEventSink* chain_events)
 {
     AssertLockHeld(cs_main);
@@ -733,79 +598,6 @@ void Chainstate::AdvanceActiveChainTip(CBlockIndex& block_index, ChainstateEvent
     m_chain.SetTip(block_index);
     m_chainman.UpdateIBDStatus();
     UpdateTip(&block_index, chain_events);
-}
-
-/**
- * Connect a new block to m_chain. block_to_connect is either nullptr or a pointer to a CBlock
- * corresponding to pindexNew, to bypass loading it again from disk.
- *
- * The block is added to connected_blocks if connection succeeds.
- */
-bool Chainstate::ConnectTip(
-    BlockValidationState& state,
-    CBlockIndex* pindexNew,
-    std::shared_ptr<const CBlock> block_to_connect,
-    std::vector<ConnectedBlock>& connected_blocks,
-    ChainstateEventSink* chain_events)
-{
-    AssertLockHeld(cs_main);
-
-    assert(pindexNew->pprev == m_chain.Tip());
-    CoreBlockDataStore block_store{m_blockman};
-    CoreBlockIndexStore block_index_store{m_chainman};
-
-    const auto time_start{SteadyClock::now()};
-    block_to_connect = LoadBlockForConnection(m_chainman.GetNotifications(), state, *pindexNew, std::move(block_to_connect), block_store);
-    if (!block_to_connect) return false;
-
-    const auto time_block_loaded{SteadyClock::now()};
-    LogDebug(BCLog::BENCH, "  - Load block from disk: %.2fms\n",
-             Ticks<MillisecondsDouble>(time_block_loaded - time_start));
-
-    SteadyClock::time_point time_block_connected;
-    {
-        CCoinsViewCache& view{*m_coins_views->m_block_connection_view};
-        const auto reset_guard{view.CreateResetGuard()};
-        if (!RunBlockConnection(
-                state,
-                *pindexNew,
-                block_to_connect,
-                view,
-                MakeCoreBlockConnectionRuntimeInputs(m_chainman, block_store, block_index_store),
-                PlanCoreBlockConnection(SnapshotCoreBlockConnectionPolicy(m_chainman, *pindexNew), block_index_store, *pindexNew),
-                LastScriptCheckReasonLogged(),
-                m_chainman.m_options.signals)) {
-            if (state.IsInvalid()) {
-                InvalidBlockFound(pindexNew, state);
-            }
-            return false;
-        }
-
-        time_block_connected = SteadyClock::now();
-        AccumulateAndLogConnectTipStep("Connect total", time_block_connected - time_block_loaded, m_chainman.time_connect_total, m_chainman.num_blocks_total);
-        CommitBlockConnectionView(view);
-    }
-
-    const auto time_coins_committed{SteadyClock::now()};
-    AccumulateAndLogConnectTipStep("Flush", time_coins_committed - time_block_connected, m_chainman.time_flush, m_chainman.num_blocks_total);
-
-    if (!PersistConnectedChainstate(*this, state, chain_events)) {
-        return false;
-    }
-
-    const auto time_chainstate_persisted{SteadyClock::now()};
-    AccumulateAndLogConnectTipStep("Writing chainstate", time_chainstate_persisted - time_coins_committed, m_chainman.time_chainstate, m_chainman.num_blocks_total);
-
-    PublishConnectedBlock(chain_events, *block_to_connect, pindexNew->nHeight);
-
-    AdvanceActiveChainTip(*pindexNew, chain_events);
-
-    const auto time_tip_advanced{SteadyClock::now()};
-    AccumulateAndLogConnectTipStep("Connect postprocess", time_tip_advanced - time_chainstate_persisted, m_chainman.time_post_connect, m_chainman.num_blocks_total);
-    AccumulateAndLogConnectTipTotal(time_tip_advanced - time_start, m_chainman.time_total, m_chainman.num_blocks_total);
-
-    connected_blocks.emplace_back(pindexNew, std::move(block_to_connect));
-    return true;
 }
 
 /**
@@ -874,100 +666,6 @@ void Chainstate::PruneBlockIndexCandidates() {
     }
     // Either the current tip or a successor of it we're working towards is left in setBlockIndexCandidates.
     assert(!setBlockIndexCandidates.empty());
-}
-
-/**
- * Try to make some progress towards making index_most_work the active block.
- * pblock is either nullptr or a pointer to a CBlock corresponding to index_most_work.
- *
- * @returns true unless a system error occurred
- */
-bool Chainstate::ActivateBestChainStep(
-    BlockValidationState& state,
-    CBlockIndex& index_most_work,
-    const std::shared_ptr<const CBlock>& pblock,
-    bool& fInvalidFound,
-    std::vector<ConnectedBlock>& connected_blocks,
-    ChainstateEventSink* chain_events)
-{
-    AssertLockHeld(cs_main);
-
-    const CBlockIndex* pindexOldTip = m_chain.Tip();
-    const CBlockIndex* pindexFork = m_chain.FindFork(index_most_work);
-
-    // Disconnect active blocks which are no longer in the best chain.
-    bool fBlocksDisconnected = false;
-    while (m_chain.Tip() && m_chain.Tip() != pindexFork) {
-        if (!DisconnectTip(state, chain_events)) {
-            // This is likely a fatal error. Notify the event sink without
-            // restoring disconnected transactions, just in case observers run
-            // before shutdown.
-            if (chain_events) chain_events->ReorgCompleted(*this, false);
-
-            // If we're unable to disconnect a block during normal operation,
-            // then that is a failure of our local system -- we should abort
-            // rather than stay on a less work chain.
-            FatalError(m_chainman.GetNotifications(), state, _("Failed to disconnect block."));
-            return false;
-        }
-        fBlocksDisconnected = true;
-    }
-
-    // Build list of new blocks to connect (in descending height order).
-    std::vector<CBlockIndex*> vpindexToConnect;
-    bool fContinue = true;
-    int nHeight = pindexFork ? pindexFork->nHeight : -1;
-    while (fContinue && nHeight != index_most_work.nHeight) {
-        // Don't iterate the entire list of potential improvements toward the best tip, as we likely only need
-        // a few blocks along the way.
-        int nTargetHeight = std::min(nHeight + 32, index_most_work.nHeight);
-        vpindexToConnect.clear();
-        vpindexToConnect.reserve(nTargetHeight - nHeight);
-        CBlockIndex* pindexIter = index_most_work.GetAncestor(nTargetHeight);
-        while (pindexIter && pindexIter->nHeight != nHeight) {
-            vpindexToConnect.push_back(pindexIter);
-            pindexIter = pindexIter->pprev;
-        }
-        nHeight = nTargetHeight;
-
-        // Connect new blocks.
-        for (CBlockIndex* pindexConnect : vpindexToConnect | std::views::reverse) {
-            if (!ConnectTip(state, pindexConnect, pindexConnect == &index_most_work ? pblock : std::shared_ptr<const CBlock>(), connected_blocks, chain_events)) {
-                if (state.IsInvalid()) {
-                    // The block violates a consensus rule.
-                    if (state.GetResult() != BlockValidationResult::BLOCK_MUTATED) {
-                        InvalidChainFound(vpindexToConnect.front());
-                    }
-                    state = BlockValidationState();
-                    fInvalidFound = true;
-                    fContinue = false;
-                    break;
-                } else {
-                    // A system error occurred (disk space, database error, ...).
-                    // Notify the event sink so observers see state consistent
-                    // with the current tip before shutdown.
-                    if (chain_events) chain_events->ReorgCompleted(*this, false);
-                    return false;
-                }
-            } else {
-                PruneBlockIndexCandidates();
-                if (!pindexOldTip || m_chain.Tip()->nChainWork > pindexOldTip->nChainWork) {
-                    // We're in a better position than we were. Return temporarily to release the lock.
-                    fContinue = false;
-                    break;
-                }
-            }
-        }
-    }
-
-    if (fBlocksDisconnected) {
-        if (chain_events) chain_events->ReorgCompleted(*this, true);
-    }
-    if (chain_events) chain_events->CheckPostReorgState(this->CoinsTip(), this->m_chain.Height() + 1);
-
-    CheckForkWarningConditions();
-
-    return true;
 }
 
 static SynchronizationState GetSynchronizationState(bool init, bool blockfiles_indexed)
@@ -1076,15 +774,45 @@ bool Chainstate::ActivateBestChain(
                     break;
                 }
 
-                bool fInvalidFound = false;
-                std::shared_ptr<const CBlock> nullBlockPtr;
-                if (!ActivateBestChainStep(state, *pindexMostWork, pblock && pblock->GetHash() == pindexMostWork->GetBlockHash() ? pblock : nullBlockPtr, fInvalidFound, connected_blocks, chain_events)) {
+                CoreBlockDataStore block_store{m_blockman};
+                CoreBlockIndexStore block_index_store{m_chainman};
+                CoreChainActivationState activation_state{*this};
+                CoreChainValidationContext validation_context{m_chainman};
+                CoreConnectTipResources connection_resources{
+                    .context = validation_context,
+                    .block_reader = block_store,
+                    .undo_writer = block_store,
+                    .block_index_lookup = block_index_store,
+                    .block_index_committer = block_index_store,
+                    .connection_view = *m_coins_views->m_block_connection_view,
+                    .last_script_check_reason_logged = LastScriptCheckReasonLogged(),
+                    .connected_blocks = connected_blocks,
+                    .chain_events = chain_events,
+                    .signals = m_chainman.m_options.signals,
+                    .timing = {
+                        .time_connect_total = m_chainman.time_connect_total,
+                        .time_flush = m_chainman.time_flush,
+                        .time_chainstate = m_chainman.time_chainstate,
+                        .time_post_connect = m_chainman.time_post_connect,
+                        .time_total = m_chainman.time_total,
+                        .blocks_total = m_chainman.num_blocks_total,
+                    },
+                };
+                const auto step_result{ActivateCoreBestChainStep(
+                    {
+                        .active_chain = activation_state,
+                        .connection = connection_resources,
+                        .index_most_work = *pindexMostWork,
+                        .cached_best_block = pblock && pblock->GetHash() == pindexMostWork->GetBlockHash() ? pblock : std::shared_ptr<const CBlock>{},
+                    },
+                    state)};
+                if (step_result.HasSystemError()) {
                     // A system error occurred
                     return false;
                 }
                 blocks_connected = true;
 
-                if (fInvalidFound) {
+                if (step_result.FoundInvalidChain()) {
                     // Wipe cache, we may need another branch now.
                     pindexMostWork = nullptr;
                 }
@@ -1144,7 +872,7 @@ bool Chainstate::ActivateBestChain(
             }
         }
 
-        // We check interrupt only after giving ActivateBestChainStep a chance to run once so that we
+        // We check interrupt only after giving the activation step a chance to run once so that we
         // never interrupt before connecting the genesis block during LoadChainTip(). Previously this
         // caused an assert() failure during interrupt in such cases as the UTXO DB flushing checks
         // that the best block hash is non-null.

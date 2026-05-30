@@ -36,6 +36,14 @@ Validation may:
 - map consensus results into Core validation-state objects
 - use Core's script-check execution capability
 
+`ChainValidationService` is the Core-facing adapter. Internal block/header
+admission receives `CoreChainValidationContext`, which names the Core runtime
+operations validation currently needs instead of passing `ChainstateManager`
+through the validation path.
+
+Script and spend policy receive the block's contextual deployment state as an
+input. They should not query deployment state through `ChainstateManager`.
+
 Validation should not:
 
 - own mempool policy or mempool state
@@ -95,6 +103,17 @@ gather Core state under required locks
 
 Only the commit section should mutate active chainstate. Consensus-facing
 validation stages should not rely on hidden global state.
+
+Connecting a block to the active chain tip is represented by
+`CoreConnectTipRequest` plus shared `CoreConnectTipResources`. These name block
+loading, block index lookup, undo writing, connection view, script-policy
+logging state, event sink, signal sink, and timing counters explicitly.
+
+One bounded active-chain activation step is represented by
+`CoreActivateBestChainStepRequest`. The request carries a
+`CoreChainActivationState` capability for active-chain mutation. `Chainstate`
+owns the concrete state; validation owns the disconnect/connect/prune sequence
+for the step.
 
 Current block connection capabilities are intentionally narrow:
 

@@ -13,6 +13,7 @@
 #include <validation/block_data_adapters.h>
 #include <validation/block_index_adapters.h>
 #include <validation/block_connection.h>
+#include <validation/core_chain_validation_context.h>
 #include <validation/core_block_connection_setup.h>
 #include <validation_state.h>
 #include <chainstate.h>
@@ -107,17 +108,18 @@ void BenchmarkBlockConnectionEngine(benchmark::Bench& bench, std::vector<CKey>& 
         CCoinsViewCache viewNew{&chainstate.CoinsTip()};
         CoreBlockDataStore block_store{chainstate.m_blockman};
         CoreBlockIndexStore block_index_store{chainstate.m_chainman};
+        CoreChainValidationContext validation_context{chainstate.m_chainman};
         const CoreBlockConnectionRuntimeInputs runtime_inputs{
-            .notifications = chainstate.m_chainman.GetNotifications(),
+            .notifications = validation_context.Notifications(),
             .undo_writer = block_store,
             .block_index_committer = block_index_store,
-            .script_check_queue = chainstate.m_chainman.GetCheckQueue(),
-            .validation_cache = chainstate.m_chainman.m_validation_cache,
-            .trace_counters = BlockConnectionTraceCountersFor(chainstate.m_chainman),
+            .script_check_queue = validation_context.ScriptCheckQueue(),
+            .validation_cache = validation_context.ScriptValidationCache(),
+            .trace_counters = validation_context.BlockConnectionTraceCounters(),
         };
         CoreBlockConnectionSetup connection_setup{
             runtime_inputs,
-            PlanCoreBlockConnection(SnapshotCoreBlockConnectionPolicy(chainstate.m_chainman, *pindex), block_index_store, *pindex),
+            PlanCoreBlockConnection(SnapshotCoreBlockConnectionPolicy(validation_context, *pindex), block_index_store, *pindex),
             *pindex,
             /*cache_script_results=*/false};
         connection_setup.MaybeLogScriptPolicy(chainstate.LastScriptCheckReasonLogged(), test_block.GetHash());

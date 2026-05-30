@@ -7,7 +7,7 @@
 #include <chain.h>
 #include <chainstate.h>
 
-Consensus::BlockHeaderContext BuildCoreBlockHeaderContext(const ChainstateManager& chainman, const CBlockIndex* previous_index)
+Consensus::BlockHeaderContext CoreBlockHeaderContextProvider::BuildContext(const CBlockIndex* previous_index) const
 {
     if (previous_index == nullptr) {
         return {};
@@ -18,11 +18,16 @@ Consensus::BlockHeaderContext BuildCoreBlockHeaderContext(const ChainstateManage
         previous_index->GetMedianTimePast(),
         previous_index->GetBlockTime(),
         Consensus::BlockDeploymentContext{
-            .height_in_coinbase_active = ::DeploymentActiveAfter(previous_index, chainman, Consensus::DEPLOYMENT_HEIGHTINCB),
-            .der_signature_active = ::DeploymentActiveAfter(previous_index, chainman, Consensus::DEPLOYMENT_DERSIG),
-            .cltv_active = ::DeploymentActiveAfter(previous_index, chainman, Consensus::DEPLOYMENT_CLTV),
-            .csv_active = ::DeploymentActiveAfter(previous_index, chainman, Consensus::DEPLOYMENT_CSV),
-            .segwit_active = ::DeploymentActiveAfter(previous_index, chainman, Consensus::DEPLOYMENT_SEGWIT),
+            .height_in_coinbase_active = ::DeploymentActiveAfter(previous_index, m_chainman, Consensus::DEPLOYMENT_HEIGHTINCB),
+            .der_signature_active = ::DeploymentActiveAfter(previous_index, m_chainman, Consensus::DEPLOYMENT_DERSIG),
+            .cltv_active = ::DeploymentActiveAfter(previous_index, m_chainman, Consensus::DEPLOYMENT_CLTV),
+            .csv_active = ::DeploymentActiveAfter(previous_index, m_chainman, Consensus::DEPLOYMENT_CSV),
+            .segwit_active = ::DeploymentActiveAfter(previous_index, m_chainman, Consensus::DEPLOYMENT_SEGWIT),
         },
     };
+}
+
+Consensus::BlockHeaderContext BuildCoreBlockHeaderContext(const ChainstateManager& chainman, const CBlockIndex* previous_index)
+{
+    return CoreBlockHeaderContextProvider{chainman}.BuildContext(previous_index);
 }

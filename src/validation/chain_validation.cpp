@@ -5,6 +5,7 @@
 #include <validation/chain_validation.h>
 
 #include <validation/block_validation_internal.h>
+#include <validation/core_chain_validation_context.h>
 
 NewBlockHeadersResult ChainValidationService::ProcessNewBlockHeaders(
     std::span<const CBlockHeader> headers,
@@ -12,7 +13,8 @@ NewBlockHeadersResult ChainValidationService::ProcessNewBlockHeaders(
     BlockValidationTime time,
     BlockValidationState& state)
 {
-    return ::ProcessNewBlockHeaders(m_chainman, headers, options, time, state);
+    CoreChainValidationContext context{m_chainman};
+    return ::ProcessNewBlockHeaders(context, headers, options, time, state);
 }
 
 BlockAcceptanceResult ChainValidationService::AcceptBlock(
@@ -21,7 +23,8 @@ BlockAcceptanceResult ChainValidationService::AcceptBlock(
     BlockAcceptanceOptions options,
     BlockValidationTime time)
 {
-    return ::AcceptBlock(m_chainman, block, state, options, time);
+    CoreChainValidationContext context{m_chainman};
+    return ::AcceptBlock(context, block, state, options, time);
 }
 
 NewBlockProcessingResult ChainValidationService::ProcessNewBlock(
@@ -30,7 +33,8 @@ NewBlockProcessingResult ChainValidationService::ProcessNewBlock(
     NewBlockProcessingOptions options,
     BlockValidationTime time)
 {
-    return ::ProcessNewBlock(m_chainman, chain_events, block, options, time);
+    CoreChainValidationContext context{m_chainman};
+    return ::ProcessNewBlock(context, chain_events, block, options, time);
 }
 
 NewBlockProcessingResult ChainValidationService::ProcessNewBlock(
@@ -38,7 +42,8 @@ NewBlockProcessingResult ChainValidationService::ProcessNewBlock(
     NewBlockProcessingOptions options,
     BlockValidationTime time)
 {
-    return ::ProcessNewBlock(m_chainman, block, options, time);
+    CoreChainValidationContext context{m_chainman};
+    return ::ProcessNewBlock(context, block, options, time);
 }
 
 BlockValidationState ChainValidationService::TestBlockValidity(

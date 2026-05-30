@@ -12,14 +12,13 @@
 #include <optional>
 
 class CBlockIndex;
-class ChainstateManager;
+class CoreChainValidationContext;
 class BlockIndexLookup;
 class uint256;
 
 struct CoreBlockConnectionPolicySnapshot {
     const Consensus::Params& consensus_params;
     Consensus::BlockHeaderContext header_context;
-    Consensus::BlockSpendConsensusOptions spend_options;
     CoreBlockScriptCheckPolicy script_check_policy;
 };
 
@@ -29,7 +28,7 @@ struct CoreBlockConnectionPlan {
     bool has_spend_stage{false};
 };
 
-[[nodiscard]] CoreBlockConnectionPolicySnapshot SnapshotCoreBlockConnectionPolicy(ChainstateManager& chainman, const CBlockIndex& block_index)
+[[nodiscard]] CoreBlockConnectionPolicySnapshot SnapshotCoreBlockConnectionPolicy(CoreChainValidationContext& context, const CBlockIndex& block_index)
     EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
 
 [[nodiscard]] CoreBlockConnectionPlan PlanCoreBlockConnection(const CoreBlockConnectionPolicySnapshot& policy, BlockIndexLookup& block_index, const CBlockIndex& block_index_entry)

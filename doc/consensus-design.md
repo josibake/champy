@@ -111,6 +111,15 @@ The important interfaces are:
 
 Validation and kernel adapters use smaller runtime capabilities:
 
+- `CoreChainValidationContext`: Core-backed block/header admission context.
+- `CoreChainActivationState`: Core-backed active-chain mutation capability for
+  bounded activation steps.
+- `CoreConnectTipResources`: shared resources used while connecting active
+  chain tips.
+- `CoreConnectTipRequest`: explicit inputs for connecting one block to the
+  active chain tip.
+- `CoreActivateBestChainStepRequest`: explicit inputs for one bounded active
+  chain activation step.
 - `BlockDataReader`: reads block bytes.
 - `BlockUndoReader` and `BlockUndoWriter`: read or write undo data.
 - `BlockDataWriter`: writes block bytes.

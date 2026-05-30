@@ -5,6 +5,7 @@
 
 #include <node/mempool_validation.h>
 
+#include <validation/block_header_context_adapters.h>
 #include <validation/block_validation_policy.h>
 #include <chain.h>
 #include <chainstate_cache.h>
@@ -974,7 +975,9 @@ bool MemPoolAccept::ConsensusScriptChecks(const ATMPArgs& args, Workspace& ws)
     // There is a similar check in CreateNewBlock() to prevent creating
     // invalid blocks (using TestBlockValidity), however allowing such
     // transactions into the mempool can be exploited as a DoS attack.
-    script_verify_flags currentBlockScriptVerifyFlags{GetBlockScriptFlags(*m_active_chainstate.m_chain.Tip(), m_active_chainstate.m_chainman)};
+    const CBlockIndex& active_tip{*Assert(m_active_chainstate.m_chain.Tip())};
+    const Consensus::BlockHeaderContext active_tip_context{BuildCoreBlockHeaderContext(m_active_chainstate.m_chainman, active_tip.pprev)};
+    script_verify_flags currentBlockScriptVerifyFlags{GetBlockScriptFlags(active_tip, m_active_chainstate.m_chainman.GetConsensus(), active_tip_context.Deployments())};
     TxValidationState tx_state;
     if (!CheckInputsFromMempoolAndCache(tx, tx_state, m_view, m_pool, currentBlockScriptVerifyFlags,
                                         ws.m_precomputed_txdata, m_active_chainstate.CoinsTip(), GetValidationCache())) {

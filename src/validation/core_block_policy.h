@@ -6,6 +6,7 @@
 #define BITCOIN_CORE_BLOCK_POLICY_H
 
 #include <arith_uint256.h>
+#include <consensus/block_check.h>
 #include <consensus/block_spend.h>
 #include <kernel/cs_main.h>
 #include <uint256.h>
@@ -13,7 +14,6 @@
 #include <optional>
 
 class CBlockIndex;
-class ChainstateManager;
 class BlockIndexLookup;
 class uint256;
 
@@ -34,7 +34,6 @@ struct CoreBlockScriptCheckPolicy {
 void MaybeLogCoreBlockScriptCheckDecision(std::optional<const char*>& last_reason_logged, const CBlockIndex& block_index, const uint256& block_hash, const CoreBlockScriptCheckDecision& decision)
     EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
 
-[[nodiscard]] Consensus::BlockSpendConsensusOptions BuildCoreBlockSpendConsensusOptions(const CBlockIndex& block_index, const ChainstateManager& chainman)
-    EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
+[[nodiscard]] Consensus::BlockSpendConsensusOptions BuildCoreBlockSpendConsensusOptions(const CBlockIndex& block_index, const Consensus::Params& consensus_params, Consensus::BlockDeploymentContext deployments);
 
 #endif // BITCOIN_CORE_BLOCK_POLICY_H

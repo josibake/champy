@@ -8,6 +8,11 @@
 #include <validation/block_validation_result.h>
 
 class BlockValidationState;
+struct bilingual_str;
+
+namespace kernel {
+class Notifications;
+} // namespace kernel
 
 namespace Consensus {
 enum class BlockConsensusIssue;
@@ -22,5 +27,6 @@ bool ApplyBlockCheckError(BlockValidationState& state, const Consensus::BlockChe
 bool ApplyBlockSpendError(BlockValidationState& state, const Consensus::BlockSpendError& error);
 bool ApplyBlockCommitError(BlockValidationState& state, const Consensus::BlockCommitError& error);
 bool ApplyBlockConsensusStageError(BlockValidationState& state, const Consensus::BlockConsensusStageError& error);
+bool FatalError(kernel::Notifications& notifications, BlockValidationState& state, const bilingual_str& message);
 
 #endif // BITCOIN_BLOCK_VALIDATION_ERROR_H

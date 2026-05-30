@@ -7,8 +7,8 @@
 #include <validation/block_index_adapters.h>
 #include <validation/block_validation_policy.h>
 #include <chain.h>
-#include <chainstate.h>
 #include <consensus/consensus.h>
+#include <consensus/params.h>
 #include <pow.h>
 #include <util/check.h>
 #include <util/log.h>
@@ -90,16 +90,16 @@ bool ShouldCheckBlockNoUnspentOutputOverwrite(const CBlockIndex& block_index, co
 
 } // namespace
 
-Consensus::BlockSpendConsensusOptions BuildCoreBlockSpendConsensusOptions(const CBlockIndex& block_index, const ChainstateManager& chainman)
+Consensus::BlockSpendConsensusOptions BuildCoreBlockSpendConsensusOptions(const CBlockIndex& block_index, const Consensus::Params& consensus_params, Consensus::BlockDeploymentContext deployments)
 {
     int locktime_flags{0};
-    if (DeploymentActiveAt(block_index, chainman, Consensus::DEPLOYMENT_CSV)) {
+    if (deployments.csv_active) {
         locktime_flags |= LOCKTIME_VERIFY_SEQUENCE;
     }
 
     return Consensus::BlockSpendConsensusOptions{
         .locktime_flags = locktime_flags,
-        .script_flags = GetBlockScriptFlags(block_index, chainman),
-        .check_no_unspent_output_overwrite = ShouldCheckBlockNoUnspentOutputOverwrite(block_index, chainman.GetConsensus()),
+        .script_flags = GetBlockScriptFlags(block_index, consensus_params, deployments),
+        .check_no_unspent_output_overwrite = ShouldCheckBlockNoUnspentOutputOverwrite(block_index, consensus_params),
     };
 }

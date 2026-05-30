@@ -11,6 +11,25 @@
 class CBlockIndex;
 class ChainstateManager;
 
+class BlockHeaderContextProvider
+{
+public:
+    virtual ~BlockHeaderContextProvider() = default;
+
+    [[nodiscard]] virtual Consensus::BlockHeaderContext BuildContext(const CBlockIndex* previous_index) const = 0;
+};
+
+class CoreBlockHeaderContextProvider final : public BlockHeaderContextProvider
+{
+public:
+    explicit CoreBlockHeaderContextProvider(const ChainstateManager& chainman) : m_chainman{chainman} {}
+
+    [[nodiscard]] Consensus::BlockHeaderContext BuildContext(const CBlockIndex* previous_index) const override;
+
+private:
+    const ChainstateManager& m_chainman;
+};
+
 [[nodiscard]] Consensus::BlockHeaderContext BuildCoreBlockHeaderContext(const ChainstateManager& chainman, const CBlockIndex* previous_index);
 
 #endif // BITCOIN_BLOCK_HEADER_CONTEXT_ADAPTERS_H

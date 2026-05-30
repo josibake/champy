@@ -49,6 +49,8 @@
 
 class Chainstate;
 class ChainstateManager;
+class CoreChainActivationState;
+class CoreChainValidationContext;
 struct ChainTxData;
 class ChainstateEventSink;
 struct LockPoints;
@@ -136,8 +138,6 @@ public:
         int nCheckDepth) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
 };
 
-struct ConnectedBlock;
-
 /** @see Chainstate::FlushStateToDisk */
 inline constexpr std::array FlushStateModeNames{"NONE", "IF_NEEDED", "PERIODIC", "FORCE_FLUSH", "FORCE_SYNC"};
 enum class FlushStateMode: uint8_t {
@@ -220,6 +220,9 @@ constexpr int64_t LargeCoinsCacheThreshold(int64_t total_space) noexcept
  */
 class Chainstate
 {
+    friend class CoreChainActivationState;
+    friend class CoreChainValidationContext;
+
 protected:
     /**
      * The ChainState Mutex
@@ -357,9 +360,9 @@ public:
      * nullptr or a pointer to a block that is already loaded (to avoid loading
      * it again from disk).
      *
-     * ActivateBestChain is split into steps (see ActivateBestChainStep) so that
-     * we avoid holding cs_main for an extended period of time; the length of this
-     * call may be quite long during reindexing or a substantial reorg.
+     * ActivateBestChain is split into validation-owned steps so that we avoid
+     * holding cs_main for an extended period of time; the length of this call
+     * may be quite long during reindexing or a substantial reorg.
      *
      * May not be called with cs_main held. May not be called in a
      * validationinterface callback.
@@ -439,19 +442,6 @@ public:
     std::pair<int, int> GetPruneRange(int last_height_can_prune) const EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
 
 protected:
-    bool ActivateBestChainStep(
-        BlockValidationState& state,
-        CBlockIndex& index_most_work,
-        const std::shared_ptr<const CBlock>& pblock,
-        bool& fInvalidFound,
-        std::vector<ConnectedBlock>& connected_blocks,
-        ChainstateEventSink* chain_events) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
-    bool ConnectTip(
-        BlockValidationState& state,
-        CBlockIndex* pindexNew,
-        std::shared_ptr<const CBlock> block_to_connect,
-        std::vector<ConnectedBlock>& connected_blocks,
-        ChainstateEventSink* chain_events) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
     void AdvanceActiveChainTip(CBlockIndex& block_index, ChainstateEventSink* chain_events)
         EXCLUSIVE_LOCKS_REQUIRED(cs_main);
 
