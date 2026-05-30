@@ -111,6 +111,17 @@ foreach(property IN LISTS required_consensus_target_properties)
   endif()
 endforeach()
 
+file(READ "${SOURCE_DIR}/src/CMakeLists.txt" src_cmake_contents)
+foreach(needle IN ITEMS
+    "install(TARGETS bitcoin_consensus"
+    "foreach(header IN LISTS BITCOIN_CONSENSUS_INSTALL_HEADERS)"
+    "install(FILES \"\${CMAKE_CURRENT_SOURCE_DIR}/\${header}\"")
+  string(FIND "${src_cmake_contents}" "${needle}" install_rule_index)
+  if(install_rule_index EQUAL -1)
+    message(FATAL_ERROR "bitcoin_consensus install rule is missing expected text: ${needle}")
+  endif()
+endforeach()
+
 extract_cmake_call(consensus_target_links_block "target_link_libraries" "bitcoin_consensus")
 string(REGEX MATCHALL "[A-Za-z0-9_:.-]+" consensus_target_link_tokens "${consensus_target_links_block}")
 foreach(token IN LISTS consensus_target_link_tokens)

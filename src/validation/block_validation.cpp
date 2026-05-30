@@ -10,7 +10,6 @@
 #include <validation/block_data_adapters.h>
 #include <validation/block_header_context_adapters.h>
 #include <validation/block_index_adapters.h>
-#include <validation/block_coin_effects.h>
 #include <validation/block_connection.h>
 #include <validation/block_replay.h>
 #include <validation/block_validation_adapters.h>
@@ -23,19 +22,14 @@
 #include <consensus/block_consensus_pipeline.h>
 #include <consensus/block_spend.h>
 #include <consensus/consensus.h>
-#include <consensus/merkle.h>
 #include <flatfile.h>
-#include <hash.h>
 #include <kernel/chainparams.h>
 #include <kernel/notifications_interface.h>
-#include <kernel/blockstorage.h>
 #include <pow.h>
 #include <primitives/block.h>
 #include <primitives/transaction.h>
-#include <script/script.h>
 #include <signet.h>
 #include <tinyformat.h>
-#include <txdb.h>
 #include <uint256.h>
 #include <undo.h>
 #include <util/check.h>
@@ -63,8 +57,6 @@
 #include <utility>
 
 using kernel::Notifications;
-
-using fsbridge::FopenFn;
 
 static CoreBlockConnectionRuntimeInputs MakeCoreBlockConnectionRuntimeInputs(
     CoreChainValidationContext& context,

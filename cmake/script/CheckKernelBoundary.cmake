@@ -25,6 +25,8 @@ endfunction()
 require_text("src/kernel/bitcoinkernel.h" "typedef struct btck_ChainstateManager")
 require_text("src/kernel/bitcoinkernel.h" "btck_chainstate_manager_options_create")
 require_text("src/kernel/bitcoinkernel.cpp" "#include <validation/chain_validation.h>")
+require_text("src/test/kernel/CMakeLists.txt" "add_executable(test_kernel_api_consumer")
+require_text("src/test/kernel/kernel_api_consumer.cpp" "#include <bitcoinkernel.h>")
 
 file(GLOB_RECURSE kernel_sources
   "${SOURCE_DIR}/src/kernel/*.cpp"
@@ -53,4 +55,12 @@ foreach(needle IN ITEMS
     "ChainstateMempoolSync"
     "ChainstateEventSink")
   forbid_text("src/kernel/bitcoinkernel.h" "${needle}")
+endforeach()
+
+foreach(needle IN ITEMS
+    "#include <node/"
+    "#include <chainstate.h>"
+    "#include <validation/"
+    "#include <kernel/bitcoinkernel_wrapper.h>")
+  forbid_text("src/test/kernel/kernel_api_consumer.cpp" "${needle}")
 endforeach()

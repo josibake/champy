@@ -3,6 +3,7 @@
 # file COPYING or https://opensource.org/license/mit/.
 
 include(AddWindowsResources)
+include(GNUInstallDirs)
 
 configure_file(${PROJECT_SOURCE_DIR}/cmake/bitcoin-build-config.h.in bitcoin-build-config.h USE_SOURCE_PERMISSIONS @ONLY)
 add_library(bitcoin_source_interface INTERFACE)
@@ -130,6 +131,20 @@ set_target_properties(bitcoin_consensus PROPERTIES
   BITCOIN_CONSENSUS_INTERNAL_PROTOCOL_HEADERS "${BITCOIN_CONSENSUS_INTERNAL_PROTOCOL_HEADERS}"
   BITCOIN_CONSENSUS_INSTALL_HEADERS "${BITCOIN_CONSENSUS_INSTALL_HEADERS}"
 )
+install(TARGETS bitcoin_consensus
+  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR} COMPONENT bitcoin_consensus
+  LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR} COMPONENT bitcoin_consensus
+  ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR} COMPONENT bitcoin_consensus
+)
+foreach(header IN LISTS BITCOIN_CONSENSUS_INSTALL_HEADERS)
+  get_filename_component(header_directory "${header}" DIRECTORY)
+  if(header_directory STREQUAL "")
+    set(header_destination "${CMAKE_INSTALL_INCLUDEDIR}")
+  else()
+    set(header_destination "${CMAKE_INSTALL_INCLUDEDIR}/${header_directory}")
+  endif()
+  install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/${header}" DESTINATION "${header_destination}" COMPONENT bitcoin_consensus)
+endforeach()
 
 # Home for common functionality shared by different executables and libraries.
 # Similar to `bitcoin_util` library, but higher-level.
@@ -196,30 +211,47 @@ target_link_libraries(bitcoin_common
 include(InstallBinaryComponent)
 
 
+# Core's default storage and spend-state adapters. These are implementation
+# choices for the Core runtime, not consensus requirements.
+set(BITCOIN_CORE_STORAGE_ADAPTER_SOURCES
+  ${CMAKE_CURRENT_SOURCE_DIR}/validation/block_data_adapters.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/validation/block_index_adapters.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/validation/block_coin_effects.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/validation/block_replay.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/validation/coins_view_spend_state.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/validation/core_block_commit_adapters.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/validation/core_coins_block_connection_state.cpp
+)
+
+add_library(bitcoin_core_storage_adapters STATIC EXCLUDE_FROM_ALL
+  ${BITCOIN_CORE_STORAGE_ADAPTER_SOURCES}
+)
+target_link_libraries(bitcoin_core_storage_adapters
+  PRIVATE
+    core_interface
+    bitcoin_consensus
+    Boost::headers
+    $<TARGET_NAME_IF_EXISTS:USDT::headers>
+)
+target_include_directories(bitcoin_core_storage_adapters PRIVATE $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/src/leveldb/include>)
+
 # Core chain-validation sources shared by bitcoin_node and bitcoinkernel while
 # the consensus boundary is being extracted.
 set(BITCOIN_CHAIN_VALIDATION_SOURCES
   ${CMAKE_CURRENT_SOURCE_DIR}/validation/block_data_admission.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/validation/block_data_adapters.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/validation/block_index_adapters.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/validation/block_coin_effects.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/validation/block_header_context_adapters.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/validation/block_connection.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/validation/block_replay.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/validation/block_script_check_adapters.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/validation/block_validation.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/validation/block_validation_error.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/validation/block_validation_policy.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/validation/chain_validation.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/validation/coins_view_spend_state.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/validation/block_connection_trace.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/validation/core_chain_activation.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/validation/core_chain_validation_context.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/validation/core_block_commit_adapters.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/validation/core_block_connection_context.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/validation/core_block_connection_setup.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/validation/core_block_connection_attempt.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/validation/core_coins_block_connection_state.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/validation/core_block_policy.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/validation/sequence_locks_adapters.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/validation/tx_check_adapters.cpp
@@ -233,10 +265,10 @@ target_link_libraries(bitcoin_chain_validation
   PRIVATE
     core_interface
     bitcoin_consensus
+    bitcoin_core_storage_adapters
     Boost::headers
     $<TARGET_NAME_IF_EXISTS:USDT::headers>
 )
-target_include_directories(bitcoin_chain_validation PRIVATE $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/src/leveldb/include>)
 
 # Local transaction admission, mempool state, and mempool-specific policy.
 add_library(bitcoin_mempool_policy OBJECT EXCLUDE_FROM_ALL
