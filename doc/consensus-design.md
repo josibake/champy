@@ -1,255 +1,180 @@
 # Consensus Design
 
-This branch separates consensus rule evaluation from Core's node runtime.
+This document describes the current code shape.
 
-The goal is not to rewrite Bitcoin Core. The goal is to make the consensus
-path easier to test, easier to reason about, and easier to extract later.
-
-For validation locking, scheduling, and callback rules, see
-[validation-execution-contracts.md](validation-execution-contracts.md).
-For compatibility surfaces that should not become permanent architecture, see
-[legacy-compatibility.md](legacy-compatibility.md).
+For remaining compatibility surfaces, see
+[legacy-compatibility.md](legacy-compatibility.md). For lock and execution
+contracts, see [validation-execution-contracts.md](validation-execution-contracts.md).
 
 ## Layers
 
 ### Consensus
 
-Consensus code answers protocol questions.
+`src/consensus` builds as `bitcoin_consensus`.
 
-It may use protocol value types such as `CBlock`, `CTransaction`, `CTxOut`,
-`Coin`, `uint256`, and consensus parameters.
+Consensus code answers protocol-rule questions. It may use protocol value
+types such as `CBlock`, `CTransaction`, `CTxOut`, `Coin`, `uint256`, and
+`Consensus::Params`.
 
-It must not depend on node runtime state:
+Consensus must not depend on:
 
-- no `Chainstate` or `ChainstateManager`
-- no `CBlockIndex` mutation
-- no mempool
-- no P2P, RPC, logging, clocks, files, or databases
-- no `cs_main`
-- no Core validation-state objects
+- `Chainstate`, `ChainstateManager`, or `CBlockIndex`
+- `CCoinsViewCache`
+- mempool, P2P, RPC, wallet, or node runtime code
+- logging, clocks, files, databases, or `cs_main`
+- `BlockValidationState` or `TxValidationState`
 
-Consensus helpers should take explicit inputs and return explicit results.
-Protocol values should not carry hidden validation cache state.
+Public consensus consumers include `consensus/api.h`. The installed consensus
+library is experimental.
 
 ### Validation
 
-Validation is Core's chain-acceptance integration layer.
+`src/validation` builds mostly as `bitcoin_chain_validation`.
 
-It owns:
+Validation integrates consensus rules with Core state. It owns:
 
 - active-chain ordering
-- block index integration
-- undo and coins cache integration
-- script cache integration
-- lock requirements
-- logging
+- block-index integration
 - validation-state mapping
+- lock requirements
+- script-cache integration
+- calls into Core storage adapters
 
-Validation calls consensus helpers and applies their results to Core's current
-runtime.
+Validation should pass explicit facts or narrow capabilities into consensus. It
+should not make consensus code pull from Core runtime state.
 
-Validation-layer adapters and services live under `src/validation`.
+### Core Storage Adapters
 
-Mempool admission is separate from chain validation. It may call consensus
-transaction helpers, but relay policy, package policy, fee policy, and mempool
-state are node concerns.
+Core's default storage adapters build as `bitcoin_core_storage_adapters`.
+
+This target adapts the current Core runtime to validation interfaces:
+
+- `CoreBlockDataStore`: block and undo reads/writes
+- `CoreBlockIndexStore`: block-index lookup, header admission, dirty marking
+- `CoinsViewBlockSpendBackend`: `CCoinsViewCache` spend backend
+- `CoreBlockSpendStateCommitter`: commits staged coin changes
+- `block_replay`: interrupted-flush recovery and roll-forward replay
+
+LevelDB, block files, the block index, and `CCoinsViewCache` are default Core
+implementations. They are not consensus abstractions.
 
 ### Kernel
 
-Kernel is Core's embeddable runtime layer.
+`src/kernel` builds as `bitcoinkernel`.
 
-It wires chain validation to Core's default storage and chainstate
-implementation. Kernel may use LevelDB, block files, and the current block
-index internally.
+Kernel is Core's embeddable runtime. It may construct Core's default storage,
+chainstate, params, notifications, and validation services.
 
-Kernel must not depend on node code. In particular, it must not expose or own
-mempool, P2P, RPC, or relay-policy concepts.
+Kernel must not depend on node code. Public kernel headers must not expose
+mempool, P2P, RPC, relay-policy, or process-lifecycle concepts.
 
 ### Node
 
-Node owns process-level orchestration:
+`src/node` and `bitcoin_node` own process-level behavior:
 
-- P2P
-- RPC
-- mempool state and policy
-- relay
-- indexes and optional services
-- application lifecycle
+- P2P and IBD orchestration
+- RPC-facing behavior
+- mempool state and relay policy
+- package policy and local transaction admission
+- process args and lifecycle
 
-Node talks to validation through service interfaces.
+Mempool code builds separately as `bitcoin_mempool_policy`. Chain validation
+does not own mempool behavior.
 
-## Validation Flow
+## Validation Pattern
 
-Block validation is split into stages:
+Block validation is organized as:
 
 ```text
 structural -> contextual -> spend -> commit
 ```
 
-The stages mean:
+- `structural`: checks that only need the block bytes.
+- `contextual`: checks that need chain facts such as height, time, difficulty,
+  deployment state, or previous headers.
+- `spend`: checks UTXO-dependent validity, fees, subsidy, and scripts.
+- `commit`: writes undo data, commits spend state, and updates block metadata.
 
-- `structural`: checks that only need the block itself.
-- `contextual`: checks that need chain context, deployment state, difficulty,
-  or height.
-- `spend`: checks UTXO-dependent transaction validity and plans coin effects.
-- `commit`: applies validated effects to Core's mutable state.
+The rule is: gather Core facts before calling consensus; commit Core mutations
+only after validation succeeds.
 
-The important rule is that validation gathers Core-specific context before
-calling consensus code. Consensus code should not go looking for state.
+## Common Code Patterns
 
-## API Shape
+### Value Contexts
 
-The extraction-facing consensus include is `consensus/api.h`.
+Consensus entry points receive value-shaped context:
 
-The important interfaces are:
+- `BlockConsensusContext`
+- `BlockContextualConsensusOptions`
+- `BlockSpendConsensusOptions`
+- `BlockCommitContext`
 
-- `SpendState`: reads UTXO state needed by spend validation.
-- `BlockScriptChecker`: executes or schedules script-check work.
-- `CoinEffects`: records validated coin spends and creates.
-- `BlockCommitter`: applies validated effects.
-- `ChainValidationService`: Core-facing service for block/header admission.
-- `ChainstateEventSink`: validation-to-node hook for chain events.
+Core-specific state is converted into these values in validation adapters.
 
-Validation and kernel adapters use smaller runtime capabilities:
+### Spend State
 
-- `BlockConnectionState`: validation-facing state capability for block
-  connection. Core implements this with `CCoinsViewCache`; tests can implement
-  it with snapshot state.
-- `CoreChainValidationContext`: Core-backed block/header admission context.
-- `CoreChainActivationState`: Core-backed active-chain mutation capability for
-  bounded activation steps.
-- `CoreConnectTipResources`: shared resources used while connecting active
-  chain tips.
-- `CoreConnectTipRequest`: explicit inputs for connecting one block to the
-  active chain tip.
-- `CoreActivateBestChainStepRequest`: explicit inputs for one bounded active
-  chain activation step.
-- `BlockDataReader`: reads block bytes.
-- `BlockUndoReader` and `BlockUndoWriter`: read or write undo data.
-- `BlockDataWriter`: writes block bytes.
-- `BlockIndexLookup`: finds known headers.
-- `BlockIndexHeaderStore`: admits headers.
-- `BlockIndexDataReceiver`: records that block data exists.
-- `BlockIndexValidityCommitter`: marks validated block-index state dirty.
+Consensus reads coins through:
 
-These names are intentional:
+- `SpendStateView`
+- `SequenceLockTimeView`
+- `BlockSpendWorkspace`
+- `BlockSpendBackend`
 
-- Consensus decides rules.
-- Validation integrates consensus with Core state.
-- Kernel exposes Core's embeddable runtime.
-- Node owns networking, mempool, policy, and process orchestration.
+Production code reaches this through `BlockConnectionState`. Tests and
+experiments can provide alternate backends without changing consensus rules.
 
-## Boundary Rules
+### Script Checks
 
-Consensus should be written as explicit rule code:
+Spend validation creates `TransactionScriptCheckPlan` values.
 
-- explicit inputs
-- explicit outputs
-- no hidden reads
-- no hidden writes
-- no logging as control flow
-- no global mutable state
+Script execution is handled by `BlockScriptChecker`:
 
-Kernel should be usable without node:
+- `DirectBlockScriptChecker` is useful for tests and fixtures.
+- `CoreBlockScriptChecker` adapts Core's cache and check queue.
 
-- no `node::*` references from `src/kernel`
-- no `<node/...>` includes from `src/kernel`
-- no mempool ownership in kernel
+Script execution is separate from spend accounting.
 
-Mempool state is node state. Chain validation may notify a
-`ChainstateEventSink` when blocks connect, disconnect, or a reorg completes,
-but the concrete mempool repair logic belongs to node.
+### Effects Then Commit
 
-Storage is not consensus. Core's block storage and chainstate loading live in
-kernel as default runtime capabilities. Alternate implementations should
-provide equivalent capabilities without changing consensus or block-connection
-engine code.
+Spend validation records `BlockSpendEffects`. It does not directly mutate
+Core's final coin state.
 
-## Example: Spend Validation
+Commit happens through:
 
-The historical block-connection path mixed several jobs:
+- `BlockRevertDataWriter`
+- `BlockSpendStateCommitter`
+- `BlockMetadataCommitter`
 
-- read UTXOs
-- validate spends
-- run or schedule scripts
-- calculate fees and subsidy
-- mutate coins
-- update block index state
-- map errors into Core validation state
+This keeps validation review separate from mutation review.
 
-This branch separates that path.
+### Chain Events
 
-Validation builds a `BlockConsensusContext` and a `SpendState`. Consensus spend
-code validates the block and records `CoinEffects`. Script checks are requested
-through `BlockScriptChecker`, so script execution is separate from spend
-accounting. Commit code then applies the validated effects through an explicit
-commit interface.
+Validation reports chain events through `ChainstateEventSink`.
 
-The practical result is that spend rules can be tested without Core chainstate,
-and commit code can be reviewed as mutation rather than validation.
+`node::MempoolChainSync` implements mempool repair in node. Validation does not
+own mempool policy or mempool state.
 
-`BlockConnectionEngine` now reads and commits UTXO state through
-`BlockConnectionState`. That is the boundary for experiments such as SwiftSync
-or Utreexo: an experiment can provide a different state backend while reusing
-the same validation stages.
+## Placement Rules
 
-## Example: Mempool Reorg Effects
+- Protocol rule decision: `src/consensus`
+- Core chain acceptance, locks, and state mapping: `src/validation`
+- Core storage implementation: `bitcoin_core_storage_adapters`
+- Embeddable Core runtime: `src/kernel`
+- P2P, RPC, mempool, relay, process behavior: `src/node`
 
-Mempool reorg handling used to leak through validation and kernel-adjacent code.
+If a function needs broad Core objects, first ask whether it really needs live
+state or only a value snapshot.
 
-Now validation reports chain events through `ChainstateEventSink`:
-
-- a block connected
-- a block disconnected
-- a reorg finished
-
-`node::MempoolChainSync` owns the concrete mempool behavior, including
-disconnected-transaction staging.
-
-This keeps mempool policy out of kernel and keeps validation from owning node
-state.
-
-## Quick Regression Check
-
-Use `bench_bitcoin -filter=BlockConnectionEngine` to measure the deterministic
-block-connection path without running a full node.
-
-## Adding Code
-
-Use this placement rule:
-
-- Put protocol rule decisions in consensus.
-- Put Core state integration in validation.
-- Put embeddable Core runtime services in kernel.
-- Put mempool, P2P, RPC, relay, and process orchestration in node.
-
-When adding a consensus helper:
-
-- pass all required context as values or narrow interfaces
-- return a result type, not a mutated Core validation state
-- keep script execution behind `BlockScriptChecker`
-- keep UTXO access behind `SpendState`
-- keep mutation behind commit/effects interfaces
-
-When adding runtime behavior:
-
-- do not make consensus depend on it
-- do not make kernel depend on node
-- prefer a small capability interface over a concrete Core type
+If a function mutates state, keep that mutation at an explicit commit or
+recovery boundary.
 
 ## Current Limits
 
-This is not yet a standalone external library release.
+`bitcoin_consensus` installs an experimental static library and public header
+closure, but it is not a supported external package yet. It still needs package
+export metadata, versioning, and dependency export rules.
 
-The consensus target is much closer to extraction, but Core still supplies many
-protocol value types and default runtime adapters. The remaining extraction step
-is mostly build/package boundary work plus replacing Core-only validation result
-mapping at the exported API edge.
-
-Kernel is still Core's default runtime, not pure consensus. It intentionally
-contains Core's block storage, chainstate loading, and block-index-backed
-implementation.
-
-Validation is still partly organized around existing Core source layout. The
-important boundary is the dependency direction: consensus does not know about
-validation, kernel, or node; kernel does not know about node.
+Kernel still uses Core's default LevelDB/block-file/block-index runtime
+internally. That is acceptable as a default implementation, but alternate
+storage or state models should be added behind validation/kernel capabilities,
+not by changing consensus rules.

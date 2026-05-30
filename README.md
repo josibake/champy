@@ -1,4 +1,6 @@
 # champy
 
-a lil node for championing ideas. start with the design and rational docs. not meant for use; this
-is playground for exploring ideas.
+a lil node for championing ideas. start with
+[consensus-design.md](doc/consensus-design.md) and
+[consensus-refactor-rationale.md](doc/consensus-refactor-rationale.md). not
+meant for use; this is playground for exploring ideas.

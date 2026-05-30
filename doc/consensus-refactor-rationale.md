@@ -1,79 +1,107 @@
 # Consensus Refactor Rationale
 
-This document explains why the branch is structured this way.
+The refactor separates protocol rules from Core runtime behavior.
 
-The short version: consensus-critical code should be small, explicit, and
-testable without a running node.
+The intended result is code that is easier to audit, easier to test, and easier
+to optimize without changing consensus semantics.
 
 ## Problem
 
-Bitcoin Core's historical validation path mixes several concerns:
+The historical validation path mixed:
 
-- consensus rule checks
-- chainstate mutation
-- block storage
-- mempool repair
+- consensus checks
+- UTXO reads and writes
+- block and undo storage
+- block-index mutation
 - script scheduling
-- validation-state mapping
-- logging and process-level behavior
+- mempool repair
+- logging and validation-state mapping
 
-That makes local reasoning hard. A function can appear to validate a block while
-also reading global state, mutating indexes, scheduling scripts, updating
-caches, or repairing the mempool.
+That makes review non-local. A caller may look like it is only checking a
+block, while the implementation also reads global state, mutates caches,
+schedules work, writes files, or repairs the mempool.
 
-The refactor separates those jobs without changing consensus behavior.
+## Why This Is Safer
 
-## Design Choice
+Consensus functions receive explicit inputs and return explicit results.
 
-Consensus helpers receive explicit inputs and return explicit results.
+Validation converts Core state into value contexts and narrow capabilities.
+Mutation is delayed to commit interfaces. Side effects are named at the call
+site.
 
-Validation adapts Core's existing state into those inputs, calls consensus, and
-then commits the result.
+This reduces hidden dependencies:
 
-Node-owned behavior stays in node. Kernel-owned behavior is limited to Core's
-embeddable runtime. Consensus does not depend on either.
+- no consensus dependency on `Chainstate`, `CBlockIndex`, mempool, or storage
+- no hidden clock, logging, database, or lock access in consensus
+- script execution is requested through `BlockScriptChecker`
+- UTXO access is behind spend-state interfaces
+- final mutation happens through commit interfaces
 
-## Example: Spend Then Commit
+The boundary scripts and API-consumer tests make these rules executable.
 
-The clearest example is block spend validation.
+## Why This Is Cleaner
 
-Spend validation now reads UTXOs through `SpendState`, requests script work
-through `BlockScriptChecker`, and records spend/create operations as
-`CoinEffects`.
+The layers now have distinct jobs:
 
-Only after validation succeeds does commit code apply those effects.
+- consensus decides protocol validity
+- validation adapts Core state and commits accepted effects
+- kernel exposes Core's embeddable runtime
+- node owns P2P, RPC, mempool, relay, and process behavior
 
-This gives reviewers a useful split:
+The code follows a small set of repeated patterns:
 
-- spend validation decides whether the block is valid
-- commit code mutates Core state
+- value contexts for rule inputs
+- stage functions for validation order
+- workspace interfaces for spend state
+- script-check plans for execution
+- effects objects for validated mutations
+- commit interfaces for writes
 
-Tests can exercise spend validation with an in-memory spend backend instead of
-building a full node.
+These patterns make it easier to know where new code belongs.
 
-## Example: Mempool Outside Kernel
+## Why This Enables Better Performance
 
-Mempool state is not consensus and is not kernel runtime state.
+The refactor does not depend on fine-grained virtual calls in the hot path.
+Abstractions sit at block, attempt, script-check, or commit boundaries.
 
-Validation reports chain events through `ChainstateEventSink`. The node
-implementation, `node::MempoolChainSync`, owns mempool repair and
-disconnected-transaction staging.
+That keeps the current path measurable while opening better implementation
+options:
 
-This keeps kernel usable without node and prevents mempool policy from becoming
-part of the embeddable runtime API.
+- alternate spend-state layouts such as SwiftSync or Utreexo
+- alternate script scheduling models
+- pipelined block validation stages
+- isolated benchmarks for block connection and spend backends
 
-## Review Standard
+Performance work can now change orchestration or storage layout without
+changing consensus rule code.
 
-When reviewing new code in this area, ask:
+## Two Concrete Examples
 
-- Is this a protocol rule, Core integration, kernel runtime behavior, or node
-  behavior?
-- Are all inputs explicit?
-- Is mutation delayed until the commit step?
-- Is script execution separate from spend accounting?
-- Is storage access behind a validation or kernel capability?
-- Does consensus avoid Core runtime types?
-- Does kernel avoid node dependencies?
+### Spend Validation
 
-If the answer is unclear, the code probably belongs behind a smaller interface
-or in a different layer.
+Spend validation reads from `SpendStateView`, plans script checks, and records
+`BlockSpendEffects`.
+
+Commit code writes undo data, applies coin changes, and updates block metadata.
+
+Reviewers can inspect validity decisions separately from mutation.
+
+### Mempool Reorg Handling
+
+Validation emits chain events through `ChainstateEventSink`.
+
+`node::MempoolChainSync` owns disconnected-transaction staging and mempool
+repair. Kernel remains usable without node, and mempool policy does not become
+part of consensus or the kernel API.
+
+## Review Rule
+
+When adding code, classify it first:
+
+- protocol rule
+- Core validation integration
+- Core runtime/storage adapter
+- node behavior
+- compatibility shim
+
+If the classification is unclear, the interface is probably too broad.

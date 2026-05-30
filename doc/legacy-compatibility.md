@@ -66,6 +66,14 @@ Target:
 - publish node events from a narrower post-commit boundary
 - keep mempool-specific replay and repair entirely in node orchestration
 
+## Legacy Script Reject Reasons
+
+`block_script_check_adapters.cpp` still preserves Core's existing
+`mempool-script-verify-flag-failed` reject reason when standard script flags
+fail. The name is a relay artifact, but changing it would alter observable
+validation strings. Remove it only with an explicit compatibility decision at
+the adapter boundary.
+
 ## Block Data Admission
 
 `AcceptBlock` still carries block-download policy through

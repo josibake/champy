@@ -63,7 +63,7 @@ public:
     uint16_t GetDefaultPort() const { return nDefaultPort; }
 
     const CBlock& GenesisBlock() const { return genesis; }
-    /** Default value for -checkmempool and -checkblockindex argument */
+    /** Default value for expensive internal consistency checks. */
     bool DefaultConsistencyChecks() const { return fDefaultConsistencyChecks; }
     /** If this chain is exclusively used for testing */
     bool IsTestChain() const { return m_chain_type != ChainType::MAIN; }
