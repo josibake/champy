@@ -28,10 +28,10 @@ void MempoolChainSync::TransactionsUpdated()
     m_mempool.AddTransactionsUpdated(1);
 }
 
-void MempoolChainSync::CheckPostReorgState(const CCoinsViewCache& coins, int64_t spend_height) const
+void MempoolChainSync::CheckPostReorgState(int64_t spend_height) const
 {
     AssertLockHeld(cs_main);
-    m_mempool.check(coins, spend_height);
+    m_mempool.check(m_chainstate.CoinsTip(), spend_height);
 }
 
 void MempoolChainSync::BlockDisconnected(
@@ -59,7 +59,6 @@ void MempoolChainSync::BlockConnected(
 }
 
 void MempoolChainSync::ReorgCompleted(
-    Chainstate& chainstate,
     bool restore_disconnected_transactions) NO_THREAD_SAFETY_ANALYSIS
 {
     AssertLockHeld(cs_main);
@@ -77,7 +76,7 @@ void MempoolChainSync::ReorgCompleted(
         while (it != queuedTx.rend()) {
             // ignore validation errors in resurrected transactions
             if (!restore_disconnected_transactions || (*it)->IsCoinBase() ||
-                AcceptToMemoryPool(chainstate, m_mempool, *it, GetTime(),
+                AcceptToMemoryPool(m_chainstate, m_mempool, *it, GetTime(),
                                    /*bypass_limits=*/true, /*test_accept=*/false)
                         .m_result_type !=
                     MempoolAcceptResult::ResultType::VALID) {
@@ -112,19 +111,19 @@ void MempoolChainSync::ReorgCompleted(
                                                  const CTransaction& tx = it->GetTx();
 
                                                  // The transaction must be final.
-                                                 if (!validation::CheckFinalTxAtTip(*Assert(chainstate.m_chain.Tip()), tx)) return true;
+                                                 if (!validation::CheckFinalTxAtTip(*Assert(m_chainstate.m_chain.Tip()), tx)) return true;
 
                                                  const LockPoints& lp = it->GetLockPoints();
                                                  // CheckSequenceLocksAtTip checks if the transaction will be final in the next block to be
                                                  // created on top of the new chain.
-                                                 if (TestLockPointValidity(chainstate.m_chain, lp)) {
-                                                     if (!CheckSequenceLocksAtTip(chainstate.m_chain.Tip(), lp)) {
+                                                 if (TestLockPointValidity(m_chainstate.m_chain, lp)) {
+                                                     if (!CheckSequenceLocksAtTip(m_chainstate.m_chain.Tip(), lp)) {
                                                          return true;
                                                      }
                                                  } else {
-                                                     const CCoinsViewMemPool view_mempool{&chainstate.CoinsTip(), m_mempool};
-                                                     const std::optional<LockPoints> new_lock_points{CalculateLockPointsAtTip(chainstate.m_chain.Tip(), view_mempool, tx)};
-                                                     if (new_lock_points.has_value() && CheckSequenceLocksAtTip(chainstate.m_chain.Tip(), *new_lock_points)) {
+                                                     const CCoinsViewMemPool view_mempool{&m_chainstate.CoinsTip(), m_mempool};
+                                                     const std::optional<LockPoints> new_lock_points{CalculateLockPointsAtTip(m_chainstate.m_chain.Tip(), view_mempool, tx)};
+                                                     if (new_lock_points.has_value() && CheckSequenceLocksAtTip(m_chainstate.m_chain.Tip(), *new_lock_points)) {
                                                          // Now update the mempool entry lockpoints as well.
                                                          it->UpdateLockPoints(*new_lock_points);
                                                      } else {
@@ -136,9 +135,9 @@ void MempoolChainSync::ReorgCompleted(
                                                  if (it->GetSpendsCoinbase()) {
                                                      for (const CTxIn& txin : tx.vin) {
                                                          if (m_mempool.exists(txin.prevout.hash)) continue;
-                                                         const Coin& coin{chainstate.CoinsTip().AccessCoin(txin.prevout)};
+                                                         const Coin& coin{m_chainstate.CoinsTip().AccessCoin(txin.prevout)};
                                                          assert(!coin.IsSpent());
-                                                         const auto mempool_spend_height{chainstate.m_chain.Tip()->nHeight + 1};
+                                                         const auto mempool_spend_height{m_chainstate.m_chain.Tip()->nHeight + 1};
                                                          if (coin.IsCoinBase() && mempool_spend_height - coin.nHeight < COINBASE_MATURITY) {
                                                              return true;
                                                          }
@@ -149,9 +148,9 @@ void MempoolChainSync::ReorgCompleted(
                                              };
 
     // We also need to remove any now-immature transactions
-    m_mempool.removeForReorg(chainstate.m_chain, filter_final_and_mature);
+    m_mempool.removeForReorg(m_chainstate.m_chain, filter_final_and_mature);
     // Re-limit mempool size, in case we added any transactions
-    LimitMempoolSize(m_mempool, chainstate.CoinsTip());
+    LimitMempoolSize(m_mempool, m_chainstate.CoinsTip());
 }
 
 } // namespace node

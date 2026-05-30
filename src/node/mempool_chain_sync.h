@@ -14,14 +14,13 @@
 
 class Chainstate;
 class CBlock;
-class CCoinsViewCache;
 
 namespace node {
 
 class MempoolChainSync final : public ChainstateEventSink
 {
 public:
-    explicit MempoolChainSync(CTxMemPool& mempool) : m_mempool{mempool} {}
+    MempoolChainSync(Chainstate& chainstate, CTxMemPool& mempool) : m_chainstate{chainstate}, m_mempool{mempool} {}
 
     RecursiveMutex* Mutex() const override LOCK_RETURNED(m_mempool.cs) { return &m_mempool.cs; }
     ExternalCacheUsage CacheUsage() const override
@@ -33,7 +32,7 @@ public:
     }
 
     void TransactionsUpdated() override EXCLUSIVE_LOCKS_REQUIRED(cs_main);
-    void CheckPostReorgState(const CCoinsViewCache& coins, int64_t spend_height) const override EXCLUSIVE_LOCKS_REQUIRED(cs_main);
+    void CheckPostReorgState(int64_t spend_height) const override EXCLUSIVE_LOCKS_REQUIRED(cs_main);
 
     /**
      * Apply mempool bookkeeping for a block disconnected from the active chain.
@@ -58,10 +57,10 @@ public:
      * longer final, mature, or within mempool size limits.
      */
     void ReorgCompleted(
-        Chainstate& chainstate,
         bool restore_disconnected_transactions) override EXCLUSIVE_LOCKS_REQUIRED(cs_main);
 
 private:
+    Chainstate& m_chainstate;
     CTxMemPool& m_mempool;
     DisconnectedBlockTransactions m_disconnectpool{MAX_DISCONNECTED_TX_POOL_BYTES};
 };

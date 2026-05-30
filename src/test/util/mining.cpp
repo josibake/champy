@@ -113,7 +113,7 @@ COutPoint ProcessBlock(const NodeContext& node, const std::shared_ptr<CBlock>& b
     BlockValidationStateCatcher bvsc{block->GetHash()};
     node.validation_signals->RegisterValidationInterface(&bvsc);
     std::optional<node::MempoolChainSync> chain_events;
-    if (node.mempool) chain_events.emplace(*node.mempool);
+    if (node.mempool) chain_events.emplace(chainman.ActiveChainstate(), *node.mempool);
     const NewBlockProcessingResult result{ChainValidationService{chainman}.ProcessNewBlock(
         chain_events ? &*chain_events : nullptr,
         block,

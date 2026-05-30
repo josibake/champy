@@ -974,7 +974,7 @@ bool Chainstate::InvalidateBlock(BlockValidationState& state, CBlockIndex* const
         bool ret = DisconnectTip(state, chain_events);
         // Let the event sink repair node state for the new tip. Deep
         // invalidations skip restoration of disconnected transactions.
-        if (chain_events) chain_events->ReorgCompleted(*this, /*restore_disconnected_transactions=*/(++disconnected <= 10) && ret);
+        if (chain_events) chain_events->ReorgCompleted(/*restore_disconnected_transactions=*/(++disconnected <= 10) && ret);
         if (!ret) return false;
         CBlockIndex* new_tip{m_chain.Tip()};
         assert(disconnected_tip->pprev == new_tip);

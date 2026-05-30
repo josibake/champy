@@ -12,8 +12,6 @@
 #include <cstdint>
 
 class CBlock;
-class CCoinsViewCache;
-class Chainstate;
 
 /**
  * Optional side-effect boundary for node-owned state that tracks chainstate
@@ -33,10 +31,10 @@ public:
     virtual ExternalCacheUsage CacheUsage() const = 0;
 
     virtual void TransactionsUpdated() EXCLUSIVE_LOCKS_REQUIRED(cs_main) = 0;
-    virtual void CheckPostReorgState(const CCoinsViewCache& coins, int64_t spend_height) const EXCLUSIVE_LOCKS_REQUIRED(cs_main) = 0;
+    virtual void CheckPostReorgState(int64_t spend_height) const EXCLUSIVE_LOCKS_REQUIRED(cs_main) = 0;
     virtual void BlockDisconnected(const CBlock& block) EXCLUSIVE_LOCKS_REQUIRED(cs_main) = 0;
     virtual void BlockConnected(const CBlock& block, unsigned int block_height) EXCLUSIVE_LOCKS_REQUIRED(cs_main) = 0;
-    virtual void ReorgCompleted(Chainstate& chainstate, bool restore_disconnected_transactions) EXCLUSIVE_LOCKS_REQUIRED(cs_main) = 0;
+    virtual void ReorgCompleted(bool restore_disconnected_transactions) EXCLUSIVE_LOCKS_REQUIRED(cs_main) = 0;
 };
 
 #endif // BITCOIN_CHAINSTATE_EVENT_SINK_H

@@ -2248,8 +2248,9 @@ void PeerManagerImpl::ProcessGetBlockData(CNode& pfrom, Peer& peer, const CInv& 
     } // release cs_main before calling ActivateBestChain
     if (need_activate_chain) {
         BlockValidationState state;
-        node::MempoolChainSync chain_events{m_mempool};
-        if (!m_chainman.ActiveChainstate().ActivateBestChain(state, a_recent_block, &chain_events)) {
+        Chainstate& active_chainstate{m_chainman.ActiveChainstate()};
+        node::MempoolChainSync chain_events{active_chainstate, m_mempool};
+        if (!active_chainstate.ActivateBestChain(state, a_recent_block, &chain_events)) {
             LogDebug(BCLog::NET, "failed to activate chain (%s)\n", state.ToString());
         }
     }
@@ -3165,7 +3166,7 @@ bool PeerManagerImpl::ProcessOrphanTx(Peer& peer)
 
 void PeerManagerImpl::ProcessBlock(CNode& node, const std::shared_ptr<const CBlock>& block, bool force_processing, bool min_pow_checked)
 {
-    node::MempoolChainSync chain_events{m_mempool};
+    node::MempoolChainSync chain_events{m_chainman.ActiveChainstate(), m_mempool};
     const NewBlockProcessingResult result{ChainValidationService{m_chainman}.ProcessNewBlock(
         &chain_events,
         block,
@@ -3947,8 +3948,9 @@ void PeerManagerImpl::ProcessMessage(Peer& peer, CNode& pfrom, const std::string
                 a_recent_block = m_most_recent_block;
             }
             BlockValidationState state;
-            node::MempoolChainSync chain_events{m_mempool};
-            if (!m_chainman.ActiveChainstate().ActivateBestChain(state, a_recent_block, &chain_events)) {
+            Chainstate& active_chainstate{m_chainman.ActiveChainstate()};
+            node::MempoolChainSync chain_events{active_chainstate, m_mempool};
+            if (!active_chainstate.ActivateBestChain(state, a_recent_block, &chain_events)) {
                 LogDebug(BCLog::NET, "failed to activate chain (%s)\n", state.ToString());
             }
         }

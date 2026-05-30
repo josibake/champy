@@ -154,6 +154,12 @@ foreach(relative_path IN ITEMS
   forbid_text("${relative_path}" "UpdateMempoolForReorg")
 endforeach()
 
+forbid_text("src/chainstate_event_sink.h" "class CCoinsViewCache")
+forbid_text("src/chainstate_event_sink.h" "class Chainstate;")
+forbid_text("src/chainstate_event_sink.h" "CCoinsViewCache&")
+forbid_text("src/chainstate_event_sink.h" "Chainstate&")
+require_text("src/chainstate_event_sink.h" "ReorgCompleted(bool restore_disconnected_transactions)")
+
 foreach(relative_path IN ITEMS
     src/kernel/CMakeLists.txt)
   forbid_text("${relative_path}" "node/mempool_chain_sync.cpp")

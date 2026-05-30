@@ -254,14 +254,14 @@ void CoreChainActivationState::MarkInvalidChainFound(CBlockIndex& block_index) c
 
 void CoreChainActivationState::NotifyReorgCompleted(ChainstateEventSink* chain_events, bool success) const
 {
-    if (chain_events) chain_events->ReorgCompleted(m_chainstate, success);
+    if (chain_events) chain_events->ReorgCompleted(success);
 }
 
 void CoreChainActivationState::CheckPostReorgState(ChainstateEventSink* chain_events) const
 {
     if (!chain_events) return;
 
-    chain_events->CheckPostReorgState(m_chainstate.CoinsTip(), m_chainstate.m_chain.Height() + 1);
+    chain_events->CheckPostReorgState(m_chainstate.m_chain.Height() + 1);
 }
 
 void CoreChainActivationState::CheckForkWarningConditions() const

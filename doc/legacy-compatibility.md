@@ -50,7 +50,9 @@ Target:
 ## `ChainstateEventSink`
 
 `ChainstateEventSink` is a generic validation-to-node event boundary, but its
-current lock shape still reflects Core's mempool repair path.
+current lock shape still reflects Core's mempool repair path. The interface no
+longer passes `Chainstate` or `CCoinsViewCache`; node-owned implementations
+bind any Core state they need at construction.
 
 Current role:
 

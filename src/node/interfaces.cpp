@@ -791,7 +791,7 @@ public:
     {
         AddMerkleRootAndCoinbase(m_block_template->block, std::move(coinbase), version, timestamp, nonce);
         std::optional<MempoolChainSync> chain_events;
-        if (m_node.mempool) chain_events.emplace(*m_node.mempool);
+        if (m_node.mempool) chain_events.emplace(chainman().ActiveChainstate(), *m_node.mempool);
         return ChainValidationService{chainman()}.ProcessNewBlock(
             chain_events ? &*chain_events : nullptr,
             std::make_shared<const CBlock>(m_block_template->block),
