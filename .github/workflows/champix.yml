@@ -22,7 +22,7 @@ env:
 
 jobs:
   champy:
-    name: Champy (${{ matrix.nix_system }})
+    name: Current Champy via Champix (${{ matrix.nix_system }})
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -56,6 +56,9 @@ jobs:
           name: ${{ env.CACHIX_CACHE_NAME }}
           authToken: "${{ env.CACHIX_AUTH_TOKEN }}"
 
+      # Champy CI is the authoritative per-branch/per-PR integration check.
+      # It uses Champix packaging, but overrides the Champy flake input with
+      # this checkout instead of Champix's pinned flake.lock input.
       - name: Evaluate Champix against this Champy checkout
         working-directory: champix
         run: nix flake check --no-build --all-systems --override-input champy path:${{ github.workspace }}/champy --print-build-logs
