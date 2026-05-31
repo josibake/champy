@@ -4,13 +4,13 @@
 
 #include <kernel/chainstate_load.h>
 
-#include <validation/block_replay.h>
 #include <arith_uint256.h>
 #include <chain.h>
+#include <chainstate.h>
 #include <coins.h>
 #include <consensus/params.h>
-#include <kernel/caches.h>
 #include <kernel/blockstorage.h>
+#include <kernel/caches.h>
 #include <sync.h>
 #include <tinyformat.h>
 #include <txdb.h>
@@ -21,7 +21,6 @@
 #include <util/signalinterrupt.h>
 #include <util/time.h>
 #include <util/translation.h>
-#include <chainstate.h>
 
 #include <algorithm>
 #include <cassert>
@@ -46,7 +45,7 @@ static ChainstateLoadResult CompleteChainstateInitialization(
     }
 
     if (!chainman.BlockIndex().empty() &&
-            !chainman.m_blockman.LookupBlockIndex(chainman.GetConsensus().hashGenesisBlock)) {
+        !chainman.m_blockman.LookupBlockIndex(chainman.GetConsensus().hashGenesisBlock)) {
         // If the loaded chain has a wrong genesis, bail out immediately
         // (we're likely using a testnet datadir, or the other way around).
         return {ChainstateLoadStatus::FAILURE_INCOMPATIBLE_DB, _("Incorrect or no genesis block found. Wrong datadir for network?")};
@@ -102,7 +101,7 @@ static ChainstateLoadResult CompleteChainstateInitialization(
     }
 
     // ReplayBlocks is a no-op if we cleared the coinsviewdb with -reindex or -reindex-chainstate
-    if (!ReplayBlocks(chainstate)) {
+    if (!chainstate.ReplayBlocks()) {
         return {ChainstateLoadStatus::FAILURE, _("Unable to replay blocks. You will need to rebuild the database using -reindex-chainstate.")};
     }
 
@@ -181,10 +180,7 @@ ChainstateLoadResult VerifyLoadedChainstate(ChainstateManager& chainman, const C
                                                          "Only rebuild the block database if you are sure that your computer's date and time are correct")};
             }
 
-            VerifyDBResult result = CVerifyDB(chainman.GetNotifications()).VerifyDB(
-                chainstate, chainman.GetConsensus(), chainstate.CoinsDB(),
-                options.check_level,
-                options.check_blocks);
+            VerifyDBResult result = CVerifyDB(chainman.GetNotifications()).VerifyDB(chainstate, chainman.GetConsensus(), chainstate.CoinsDB(), options.check_level, options.check_blocks);
             switch (result) {
             case VerifyDBResult::SUCCESS:
             case VerifyDBResult::SKIPPED_MISSING_BLOCKS:

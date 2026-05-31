@@ -33,12 +33,15 @@ foreach(relative_path IN ITEMS
     doc/legacy-compatibility.md
     doc/validation-execution-contracts.md
     src/primitives/block.h
+    src/validation/active_chain.h
     src/validation/block_data_admission.cpp
     src/validation/block_data_admission.h
     src/validation/block_data_adapters.cpp
     src/validation/block_data_adapters.h
+    src/validation/block_storage.h
     src/validation/block_index_adapters.cpp
     src/validation/block_index_adapters.h
+    src/validation/block_index.h
     src/validation/block_connection.cpp
     src/validation/block_connection.h
     src/validation/block_connection_state.h
@@ -58,6 +61,7 @@ foreach(relative_path IN ITEMS
     src/validation/tx_verify.h
     src/validation/core_chain_activation.cpp
     src/validation/core_chain_activation.h
+    src/validation/validation_commit_executor.h
     src/validation/core_chain_validation_context.cpp
     src/validation/core_chain_validation_context.h
     src/validation/core_block_connection_context.cpp
@@ -76,6 +80,7 @@ require_text("src/test/CMakeLists.txt" "core_block_policy_tests.cpp")
 require_text("doc/consensus-design.md" "BlockIndexValidityCommitter")
 require_text("doc/consensus-design.md" "Protocol values should not carry hidden validation cache state.")
 require_text("doc/validation-execution-contracts.md" "Do not pass `Chainstate`, `ChainstateManager`, `CoreBlockDataStore`,")
+require_text("doc/validation-execution-contracts.md" "CoreValidationCommitExecutor")
 require_text("doc/legacy-compatibility.md" "The block connection engine no longer receives broad storage/index stores.")
 require_text("src/CMakeLists.txt" "block_data_admission.cpp")
 require_text("src/CMakeLists.txt" "block_connection_trace.cpp")
@@ -95,10 +100,12 @@ require_text("src/kernel/CMakeLists.txt" "bitcoin_chain_validation")
 forbid_text("src/CMakeLists.txt" "target_include_directories(bitcoin_chain_validation")
 require_text("src/validation/block_validation.cpp" "#include <validation/block_validation_internal.h>")
 require_text("src/chainstate.cpp" "#include <validation/block_replay.h>")
-require_text("src/kernel/chainstate_load.cpp" "#include <validation/block_replay.h>")
+forbid_text("src/kernel/chainstate_load.cpp" "#include <validation/block_replay.h>")
+require_text("src/chainstate.cpp" "BlockReplayRequest request")
 require_text("src/validation/block_header_context_adapters.h" "class BlockHeaderContextProvider")
 require_text("src/validation/block_header_context_adapters.h" "class CoreBlockHeaderContextProvider")
 require_text("src/validation/core_chain_validation_context.h" "class CoreChainValidationContext")
+require_text("src/validation/core_chain_validation_context.h" "class CoreChainValidationRuntime")
 require_text("src/validation/core_chain_activation.h" "class CoreChainActivationState")
 require_text("src/validation/core_chain_activation.h" "struct CoreConnectTipResources")
 require_text("src/validation/core_chain_activation.h" "struct CoreConnectTipRequest")
@@ -107,6 +114,11 @@ require_text("src/validation/core_chain_activation.h" "ConnectCoreChainTip")
 require_text("src/validation/core_chain_activation.h" "struct CoreActivateBestChainStepRequest")
 require_text("src/validation/core_chain_activation.h" "enum class CoreActivateBestChainStepStatus")
 require_text("src/validation/core_chain_activation.h" "ActivateCoreBestChainStep")
+require_text("src/validation/validation_commit_executor.h" "class CoreValidationCommitExecutor")
+require_text("src/validation/validation_commit_executor.h" "RunSerialized")
+require_text("src/validation/validation_commit_executor.h" "RunBlockIndexLocked")
+require_text("src/validation/validation_commit_executor.h" "RunChainstateCommitLocked")
+require_text("src/validation/validation_commit_executor.h" "RunStorageCoordinationLocked")
 require_text("src/validation/block_validation.cpp" "const BlockHeaderContextProvider& header_context_provider")
 require_text("src/validation/block_validation.cpp" "validation::BlockConnectionEngine")
 require_text("src/validation/block_connection.h" "struct BlockConnectionContext")
@@ -168,22 +180,25 @@ require_text("src/validation/chain_validation.h" "class ChainValidationService")
 require_text("src/validation/block_validation_internal.h" "ProcessNewBlockHeaders(")
 require_text("src/validation/block_validation_internal.h" "AcceptBlock(")
 require_text("src/validation/block_validation_internal.h" "ProcessNewBlock(")
+require_text("src/validation/block_validation_internal.h" "struct TestBlockValidityRequest")
 require_text("src/validation/block_validation_internal.h" "TestBlockValidity(")
 require_text("src/validation/block_validation_internal.h" "CoreChainValidationContext& context")
+require_text("src/validation/active_chain.h" "class ActiveChainView")
 forbid_text("src/validation/block_validation_internal.h" "ChainstateManager&")
 require_text("src/validation/block_data_admission.h" "struct BlockDataAdmissionContext")
 require_text("src/CMakeLists.txt" "block_index_adapters.cpp")
-require_text("src/validation/block_data_adapters.h" "class BlockDataReader")
-require_text("src/validation/block_data_adapters.h" "class BlockUndoReader")
-require_text("src/validation/block_data_adapters.h" "class BlockUndoWriter")
-require_text("src/validation/block_data_adapters.h" "class BlockDataWriter")
+require_text("src/validation/block_storage.h" "class BlockDataReader")
+require_text("src/validation/block_storage.h" "class BlockUndoReader")
+require_text("src/validation/block_storage.h" "class BlockUndoWriter")
+require_text("src/validation/block_storage.h" "class BlockDataWriter")
+require_text("src/validation/block_storage.h" "class BlockDataAvailability")
 require_text("src/validation/block_data_adapters.h" "class CoreBlockDataStore")
-require_text("src/validation/block_index_adapters.h" "class BlockIndexView")
+require_text("src/validation/block_index.h" "class BlockIndexView")
 require_text("src/validation/block_index_adapters.h" "class CoreBlockIndexView")
-require_text("src/validation/block_index_adapters.h" "class BlockIndexLookup")
-require_text("src/validation/block_index_adapters.h" "class BlockIndexHeaderStore")
-require_text("src/validation/block_index_adapters.h" "class BlockIndexDataReceiver")
-require_text("src/validation/block_index_adapters.h" "class BlockIndexValidityCommitter")
+require_text("src/validation/block_index.h" "class BlockIndexLookup")
+require_text("src/validation/block_index.h" "class BlockIndexHeaderStore")
+require_text("src/validation/block_index.h" "class BlockIndexDataReceiver")
+require_text("src/validation/block_index.h" "class BlockIndexValidityCommitter")
 require_text("src/validation/block_index_adapters.h" "class CoreBlockIndexStore")
 require_text("src/validation/block_index_adapters.h" "MarkBlockIndexDirty")
 require_text("src/validation/block_validation.cpp" "CoreBlockDataStore")
@@ -233,9 +248,13 @@ forbid_text("src/validation/block_validation.h" "ReplayBlocks")
 forbid_text("src/validation/block_validation.h" "GenerateCoinbaseCommitment")
 require_text("src/validation/block_replay.h" "DisconnectBlock")
 require_text("src/validation/block_replay.h" "ReplayBlocks")
+require_text("src/chainstate.h" "struct VerifyDBRequest")
+require_text("src/validation/block_validation.cpp" "CVerifyDB::VerifyDB(\n    VerifyDBRequest request")
 require_text("src/node/miner.h" "GenerateCoinbaseCommitment")
 forbid_text("src/validation/block_data_adapters.h" "class BlockDataStore")
 forbid_text("src/validation/block_index_adapters.h" "class BlockIndexStore")
+forbid_text("src/validation/block_storage.h" "CoreBlockDataStore")
+forbid_text("src/validation/block_index.h" "CoreBlockIndexStore")
 forbid_text("src/validation/block_index_adapters.h" "class BlockIndexAdmissionStore")
 forbid_text("src/validation/block_data_adapters.h" "class BlockStorageInfo")
 forbid_text("src/validation/block_index_adapters.h" "class BlockIndexSnapshot")
@@ -246,6 +265,8 @@ forbid_text("src/validation/block_validation.cpp" "ContextualCheckBlock(const CB
 require_text("src/kernel/bitcoinkernel.cpp" "CoreBlockDataStore")
 require_text("src/kernel/bitcoinkernel.cpp" "CoreBlockIndexStore")
 require_text("src/chainstate.cpp" "ActivateCoreBestChainStep")
+require_text("src/chainstate.cpp" "class ChainstateActivationOrchestrator")
+require_text("src/chainstate.cpp" "ChainstateActivationOrchestrator{*this")
 forbid_text("src/chainstate.cpp" "ConnectCoreChainTip")
 forbid_text("src/chainstate.cpp" "ActivateBestChainStep(")
 forbid_text("src/chainstate.cpp" "CoreBlockConnectionSetup")

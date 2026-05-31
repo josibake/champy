@@ -9,6 +9,13 @@
 
 #include <optional>
 
+enum class BlockDataStorageMode {
+    ApplyAdmissionChecks,
+    // Caller has already selected this block for storage, for example because
+    // node block download requested it.
+    ForceStore,
+};
+
 enum class BlockDataAdmissionResult {
     STORE_BLOCK_DATA,
     ALREADY_HAVE_DATA,
@@ -20,7 +27,7 @@ enum class BlockDataAdmissionResult {
 
 struct BlockDataAdmissionContext {
     bool already_have_data{false};
-    bool block_data_requested{false};
+    BlockDataStorageMode storage_mode{BlockDataStorageMode::ApplyAdmissionChecks};
     bool block_data_previously_processed{false};
     int block_height{0};
     int max_unrequested_height{0};

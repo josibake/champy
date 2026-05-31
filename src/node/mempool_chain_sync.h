@@ -22,7 +22,6 @@ class MempoolChainSync final : public ChainstateEventSink
 public:
     MempoolChainSync(Chainstate& chainstate, CTxMemPool& mempool) : m_chainstate{chainstate}, m_mempool{mempool} {}
 
-    RecursiveMutex* Mutex() const override LOCK_RETURNED(m_mempool.cs) { return &m_mempool.cs; }
     ExternalCacheUsage CacheUsage() const override
     {
         return {
@@ -31,35 +30,15 @@ public:
         };
     }
 
-    void TransactionsUpdated() override EXCLUSIVE_LOCKS_REQUIRED(cs_main);
-    void CheckPostReorgState(int64_t spend_height) const override EXCLUSIVE_LOCKS_REQUIRED(cs_main);
-
-    /**
-     * Apply mempool bookkeeping for a block disconnected from the active chain.
-     *
-     * Current lock contract: callers hold `cs_main` and `mempool.cs` across
-     * block disconnect and the later reorg repair step, so observers never see
-     * a half-repaired mempool after the locks are released.
-     */
-    void BlockDisconnected(
-        const CBlock& block) override EXCLUSIVE_LOCKS_REQUIRED(cs_main);
-
-    /**
-     * Remove transactions confirmed by a connected block from mempool state.
-     */
-    void BlockConnected(
-        const CBlock& block,
-        unsigned int block_height) override EXCLUSIVE_LOCKS_REQUIRED(cs_main);
-
-    /**
-     * Make mempool consistent after a reorg by re-adding or recursively erasing
-     * transactions from disconnected blocks, then dropping entries that are no
-     * longer final, mature, or within mempool size limits.
-     */
-    void ReorgCompleted(
-        bool restore_disconnected_transactions) override EXCLUSIVE_LOCKS_REQUIRED(cs_main);
+    void ProcessEvents(const ChainstateEventBatch& events) override EXCLUSIVE_LOCKS_REQUIRED(cs_main);
 
 private:
+    void TransactionsUpdated() EXCLUSIVE_LOCKS_REQUIRED(cs_main, m_mempool.cs);
+    void CheckPostReorgState(int64_t spend_height) const EXCLUSIVE_LOCKS_REQUIRED(cs_main, m_mempool.cs);
+    void BlockDisconnected(const CBlock& block) EXCLUSIVE_LOCKS_REQUIRED(cs_main, m_mempool.cs);
+    void BlockConnected(const CBlock& block, unsigned int block_height) EXCLUSIVE_LOCKS_REQUIRED(cs_main, m_mempool.cs);
+    void ReorgCompleted(bool restore_disconnected_transactions) EXCLUSIVE_LOCKS_REQUIRED(cs_main, m_mempool.cs);
+
     Chainstate& m_chainstate;
     CTxMemPool& m_mempool;
     DisconnectedBlockTransactions m_disconnectpool{MAX_DISCONNECTED_TX_POOL_BYTES};

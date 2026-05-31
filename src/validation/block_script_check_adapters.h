@@ -5,14 +5,15 @@
 #ifndef BITCOIN_BLOCK_SCRIPT_CHECK_ADAPTERS_H
 #define BITCOIN_BLOCK_SCRIPT_CHECK_ADAPTERS_H
 
-#include <checkqueue.h>
 #include <consensus/block_spend.h>
-#include <kernel/cs_main.h>
 #include <script/script_check.h>
+#include <validation/script_check_scheduler.h>
 
+#include <memory>
 #include <optional>
 
 class CTransaction;
+class CoreChainLock;
 class SignatureCache;
 class uint256;
 class ValidationCache;
@@ -23,8 +24,8 @@ public:
     explicit CoreScriptValidationCache(ValidationCache& validation_cache);
 
     [[nodiscard]] uint256 ExecutionCacheEntry(const CTransaction& tx, script_verify_flags flags) const;
-    [[nodiscard]] bool ContainsScriptExecution(const uint256& entry, bool erase) EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
-    void StoreScriptExecution(const uint256& entry) EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
+    [[nodiscard]] bool ContainsScriptExecution(const uint256& entry, bool erase);
+    void StoreScriptExecution(const uint256& entry);
     [[nodiscard]] SignatureCache& SignatureCacheStore();
 
 private:
@@ -34,39 +35,29 @@ private:
 class CoreBlockScriptChecker final : public Consensus::BlockScriptChecker
 {
 public:
-    CoreBlockScriptChecker(bool run_checks, bool cache_results, CoreScriptValidationCache& validation_cache, std::optional<CCheckQueueControl<CScriptCheck>>& control);
+    CoreBlockScriptChecker(bool run_checks, bool cache_results, CoreScriptValidationCache& validation_cache, std::unique_ptr<validation::ScriptCheckBatch>& batch, CoreChainLock* chain_lock);
 
     [[nodiscard]] bool WantsChecks() const override { return m_run_checks; }
-    [[nodiscard]] Consensus::BlockSpendResult<void> Check(const Consensus::TransactionScriptCheckPlan& check) override EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
+    [[nodiscard]] Consensus::BlockSpendResult<void> Check(const Consensus::TransactionScriptCheckPlan& check) override;
     [[nodiscard]] Consensus::BlockSpendResult<void> Complete() override;
 
 private:
     bool m_run_checks;
     bool m_cache_results;
     CoreScriptValidationCache& m_validation_cache;
-    std::optional<CCheckQueueControl<CScriptCheck>>& m_control;
-};
-
-class CoreBlockScriptCheckQueue final
-{
-public:
-    CoreBlockScriptCheckQueue(CCheckQueue<CScriptCheck>& queue, bool run_script_checks);
-
-    [[nodiscard]] std::optional<CCheckQueueControl<CScriptCheck>>& QueueControl();
-
-private:
-    std::optional<CCheckQueueControl<CScriptCheck>> m_control;
+    std::unique_ptr<validation::ScriptCheckBatch>& m_batch;
+    CoreChainLock* m_chain_lock{nullptr};
 };
 
 class CoreBlockScriptChecks final
 {
 public:
-    CoreBlockScriptChecks(CCheckQueue<CScriptCheck>& queue, bool run_checks, bool cache_results, ValidationCache& validation_cache);
+    CoreBlockScriptChecks(validation::ScriptCheckScheduler& scheduler, bool run_checks, bool cache_results, ValidationCache& validation_cache, CoreChainLock* chain_lock = nullptr);
 
     [[nodiscard]] CoreBlockScriptChecker& Checker();
 
 private:
-    CoreBlockScriptCheckQueue m_queue;
+    std::unique_ptr<validation::ScriptCheckBatch> m_batch;
     CoreScriptValidationCache m_validation_cache;
     CoreBlockScriptChecker m_checker;
 };

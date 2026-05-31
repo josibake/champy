@@ -30,7 +30,9 @@ BOOST_AUTO_TEST_CASE(service_accepts_headers)
     BOOST_CHECK(state.IsValid());
     BOOST_REQUIRE(result.accepted);
     BOOST_REQUIRE(result.last_accepted);
-    BOOST_CHECK(result.last_accepted->GetBlockHash() == block->GetHash());
+    BOOST_CHECK(result.last_accepted->block.hash == block->GetHash());
+    BOOST_CHECK_EQUAL(result.last_accepted->block.height, 1);
+    BOOST_CHECK_EQUAL(result.last_accepted->block_time, block->GetBlockTime());
 }
 
 BOOST_AUTO_TEST_CASE(service_accepts_requested_block_data)
@@ -44,14 +46,15 @@ BOOST_AUTO_TEST_CASE(service_accepts_requested_block_data)
     const BlockAcceptanceResult result{validation.AcceptBlock(
         block,
         state,
-        {.block_data_requested = true, .header = {.min_pow_checked = true}},
+        {.block_data_storage = BlockDataStorageMode::ForceStore, .header = {.min_pow_checked = true}},
         CurrentBlockValidationTime())};
 
     BOOST_CHECK(state.IsValid());
     BOOST_REQUIRE(result.accepted_for_processing());
     BOOST_REQUIRE(result.stored_block_data());
-    BOOST_REQUIRE(result.block_index);
-    BOOST_CHECK(result.block_index->GetBlockHash() == block->GetHash());
+    BOOST_REQUIRE(result.block);
+    BOOST_CHECK(result.block->hash == block->GetHash());
+    BOOST_CHECK_EQUAL(result.block->height, 1);
 }
 
 BOOST_AUTO_TEST_CASE(service_processes_new_block)
@@ -62,7 +65,7 @@ BOOST_AUTO_TEST_CASE(service_processes_new_block)
 
     const NewBlockProcessingResult result{validation.ProcessNewBlock(
         block,
-        {.force_processing = true, .header = {.min_pow_checked = true}},
+        {.block_data_storage = BlockDataStorageMode::ForceStore, .header = {.min_pow_checked = true}},
         CurrentBlockValidationTime())};
 
     BOOST_REQUIRE(result.processed());

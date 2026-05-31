@@ -12,6 +12,12 @@
 #include <validation/block_connection_trace.h>
 #include <validation_state.h>
 
+CoreChainValidationRuntime::CoreChainValidationRuntime(ChainstateManager& chainman)
+    : m_script_check_scheduler{chainman.GetCheckQueue()},
+      m_validation_events{chainman.m_options.signals}
+{
+}
+
 const Consensus::Params& CoreChainValidationContext::ConsensusParams() const
 {
     return m_chainman.GetConsensus();
@@ -47,9 +53,14 @@ bool CoreChainValidationContext::IsInitialBlockDownload() const
     return m_chainman.IsInitialBlockDownload();
 }
 
-ValidationSignals* CoreChainValidationContext::Signals() const
+validation::ValidationEventQueue& CoreChainValidationContext::ValidationEvents() const
 {
-    return m_chainman.m_options.signals;
+    return m_runtime.ValidationEvents();
+}
+
+validation::ScriptCheckScheduler& CoreChainValidationContext::ScriptCheckScheduler() const
+{
+    return m_runtime.ScriptCheckScheduler();
 }
 
 CoreBlockDataStore CoreChainValidationContext::MakeBlockDataStore() const
@@ -70,11 +81,6 @@ CoreBlockIndexStore CoreChainValidationContext::MakeBlockIndexStore() const
 kernel::Notifications& CoreChainValidationContext::Notifications() const
 {
     return m_chainman.GetNotifications();
-}
-
-CCheckQueue<CScriptCheck>& CoreChainValidationContext::ScriptCheckQueue() const
-{
-    return m_chainman.GetCheckQueue();
 }
 
 ValidationCache& CoreChainValidationContext::ScriptValidationCache() const

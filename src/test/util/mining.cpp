@@ -117,7 +117,7 @@ COutPoint ProcessBlock(const NodeContext& node, const std::shared_ptr<CBlock>& b
     const NewBlockProcessingResult result{ChainValidationService{chainman}.ProcessNewBlock(
         chain_events ? &*chain_events : nullptr,
         block,
-        {.force_processing = true, .header = {.min_pow_checked = true}},
+        {.block_data_storage = BlockDataStorageMode::ForceStore, .header = {.min_pow_checked = true}},
         CurrentBlockValidationTime())};
     const bool duplicate{!result.new_block() && result.processed()};
     assert(!duplicate);

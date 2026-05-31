@@ -1343,7 +1343,7 @@ int btck_chainstate_manager_process_block(
 {
     const NewBlockProcessingResult result{ChainValidationService{*btck_ChainstateManager::get(chainman).m_chainman}.ProcessNewBlock(
         btck_Block::get(block),
-        {.force_processing = true, .header = {.min_pow_checked = true}},
+        {.block_data_storage = BlockDataStorageMode::ForceStore, .header = {.min_pow_checked = true}},
         CurrentBlockValidationTime())};
     if (_new_block) {
         *_new_block = result.new_block() ? 1 : 0;

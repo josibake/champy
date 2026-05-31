@@ -14,6 +14,7 @@
 #include <script/interpreter.h>
 #include <script/script_check.h>
 #include <script/script_error.h>
+#include <validation/core_chain_lock.h>
 #include <validation/script_validation.h>
 #include <span.h>
 #include <tinyformat.h>
@@ -39,14 +40,12 @@ uint256 CoreScriptValidationCache::ExecutionCacheEntry(const CTransaction& tx, s
 
 bool CoreScriptValidationCache::ContainsScriptExecution(const uint256& entry, bool erase)
 {
-    AssertLockHeld(cs_main);
-    return m_validation_cache.m_script_execution_cache.contains(entry, erase);
+    return m_validation_cache.ContainsScriptExecution(entry, erase);
 }
 
 void CoreScriptValidationCache::StoreScriptExecution(const uint256& entry)
 {
-    AssertLockHeld(cs_main);
-    m_validation_cache.m_script_execution_cache.insert(entry);
+    m_validation_cache.StoreScriptExecution(entry);
 }
 
 SignatureCache& CoreScriptValidationCache::SignatureCacheStore()
@@ -57,7 +56,7 @@ SignatureCache& CoreScriptValidationCache::SignatureCacheStore()
 namespace {
 
 template <typename PrepareSpentOutputs>
-bool CheckInputScriptsWithPreparedOutputs(const CTransaction& tx, TxValidationState& state, script_verify_flags flags, bool cacheSigStore, bool cacheFullScriptStore, PrecomputedTransactionData& txdata, CoreScriptValidationCache& validation_cache, std::vector<CScriptCheck>* pvChecks, PrepareSpentOutputs&& prepare_spent_outputs, const CTransactionRef* tx_ref = nullptr) EXCLUSIVE_LOCKS_REQUIRED(cs_main)
+bool CheckInputScriptsWithPreparedOutputs(const CTransaction& tx, TxValidationState& state, script_verify_flags flags, bool cacheSigStore, bool cacheFullScriptStore, PrecomputedTransactionData& txdata, CoreScriptValidationCache& validation_cache, std::vector<CScriptCheck>* pvChecks, PrepareSpentOutputs&& prepare_spent_outputs, const CTransactionRef* tx_ref = nullptr)
 {
     if (tx.IsCoinBase()) return true;
 
@@ -71,9 +70,6 @@ bool CheckInputScriptsWithPreparedOutputs(const CTransaction& tx, TxValidationSt
     // properly commits to the scriptPubKey in the inputs view of that
     // transaction).
     const uint256 hashCacheEntry{validation_cache.ExecutionCacheEntry(tx, flags)};
-    // Compatibility note: script-cache access still relies on Core's external
-    // `cs_main` lock. Track this in doc/legacy-compatibility.md instead of
-    // expanding the lock contract into consensus code.
     if (validation_cache.ContainsScriptExecution(hashCacheEntry, !cacheFullScriptStore)) {
         return true;
     }
@@ -130,7 +126,7 @@ bool CheckInputScriptsWithPreparedOutputs(const CTransaction& tx, TxValidationSt
     return true;
 }
 
-bool CheckInputScriptsFromPlan(const Consensus::TransactionScriptCheckPlan& check, TxValidationState& state, bool cacheSigStore, bool cacheFullScriptStore, PrecomputedTransactionData& txdata, CoreScriptValidationCache& validation_cache, std::vector<CScriptCheck>* pvChecks) EXCLUSIVE_LOCKS_REQUIRED(cs_main)
+bool CheckInputScriptsFromPlan(const Consensus::TransactionScriptCheckPlan& check, TxValidationState& state, bool cacheSigStore, bool cacheFullScriptStore, PrecomputedTransactionData& txdata, CoreScriptValidationCache& validation_cache, std::vector<CScriptCheck>* pvChecks)
 {
     const CTransactionRef& tx_ref{check.tx};
     const CTransaction& tx{*tx_ref};
@@ -143,7 +139,7 @@ bool CheckInputScriptsFromPlan(const Consensus::TransactionScriptCheckPlan& chec
     return CheckInputScriptsWithPreparedOutputs(tx, state, check.flags, cacheSigStore, cacheFullScriptStore, txdata, validation_cache, pvChecks, prepare_spent_outputs, &tx_ref);
 }
 
-Consensus::BlockSpendResult<void> CheckTransactionScriptsForBlock(const Consensus::TransactionScriptCheckPlan& check, bool cache_results, CoreScriptValidationCache& validation_cache, std::optional<CCheckQueueControl<CScriptCheck>>& control) EXCLUSIVE_LOCKS_REQUIRED(cs_main)
+Consensus::BlockSpendResult<void> CheckTransactionScriptsForBlock(const Consensus::TransactionScriptCheckPlan& check, bool cache_results, CoreScriptValidationCache& validation_cache, validation::ScriptCheckBatch* batch)
 {
     bool tx_ok;
     TxValidationState tx_state;
@@ -151,10 +147,10 @@ Consensus::BlockSpendResult<void> CheckTransactionScriptsForBlock(const Consensu
 
     // If CheckInputScripts is called with a checks vector, the checks are
     // appended and must be added to the control for asynchronous execution.
-    if (control) {
+    if (batch) {
         std::vector<CScriptCheck> checks;
         tx_ok = CheckInputScriptsFromPlan(check, tx_state, cache_results, cache_results, txdata, validation_cache, &checks);
-        if (tx_ok) control->Add(std::move(checks));
+        if (tx_ok) batch->Add(std::move(checks));
     } else {
         tx_ok = CheckInputScriptsFromPlan(check, tx_state, cache_results, cache_results, txdata, validation_cache, nullptr);
     }
@@ -172,23 +168,30 @@ Consensus::BlockSpendResult<void> CheckTransactionScriptsForBlock(const Consensu
 
 } // namespace
 
-CoreBlockScriptChecker::CoreBlockScriptChecker(bool run_checks, bool cache_results, CoreScriptValidationCache& validation_cache, std::optional<CCheckQueueControl<CScriptCheck>>& control)
-    : m_run_checks{run_checks}, m_cache_results{cache_results}, m_validation_cache{validation_cache}, m_control{control}
+CoreBlockScriptChecker::CoreBlockScriptChecker(bool run_checks, bool cache_results, CoreScriptValidationCache& validation_cache, std::unique_ptr<validation::ScriptCheckBatch>& batch, CoreChainLock* chain_lock)
+    : m_run_checks{run_checks}, m_cache_results{cache_results}, m_validation_cache{validation_cache}, m_batch{batch}, m_chain_lock{chain_lock}
 {
 }
 
 Consensus::BlockSpendResult<void> CoreBlockScriptChecker::Check(const Consensus::TransactionScriptCheckPlan& check)
 {
     if (!m_run_checks) return {};
-    return CheckTransactionScriptsForBlock(check, m_cache_results, m_validation_cache, m_control);
+    return CheckTransactionScriptsForBlock(check, m_cache_results, m_validation_cache, m_batch.get());
 }
 
 Consensus::BlockSpendResult<void> CoreBlockScriptChecker::Complete()
 {
     if (!m_run_checks) return {};
-    if (!m_control) return {};
+    if (!m_batch) return {};
 
-    const auto parallel_result{m_control->Complete()};
+    const auto complete_checks = [&]() {
+        return m_batch->Complete();
+    };
+    const auto parallel_result = [&] {
+        if (!m_chain_lock) return complete_checks();
+
+        return m_chain_lock->RunUnlocked(complete_checks);
+    }();
     if (!parallel_result) return {};
 
     return Consensus::Unexpected<Consensus::BlockSpendError>{Consensus::BlockSpendError{
@@ -198,20 +201,8 @@ Consensus::BlockSpendResult<void> CoreBlockScriptChecker::Complete()
     }};
 }
 
-CoreBlockScriptCheckQueue::CoreBlockScriptCheckQueue(CCheckQueue<CScriptCheck>& queue, bool run_script_checks)
-{
-    if (queue.HasThreads() && run_script_checks) {
-        m_control.emplace(queue);
-    }
-}
-
-std::optional<CCheckQueueControl<CScriptCheck>>& CoreBlockScriptCheckQueue::QueueControl()
-{
-    return m_control;
-}
-
-CoreBlockScriptChecks::CoreBlockScriptChecks(CCheckQueue<CScriptCheck>& queue, bool run_checks, bool cache_results, ValidationCache& validation_cache)
-    : m_queue{queue, run_checks}, m_validation_cache{validation_cache}, m_checker{run_checks, cache_results, m_validation_cache, m_queue.QueueControl()}
+CoreBlockScriptChecks::CoreBlockScriptChecks(validation::ScriptCheckScheduler& scheduler, bool run_checks, bool cache_results, ValidationCache& validation_cache, CoreChainLock* chain_lock)
+    : m_batch{scheduler.StartBatch(run_checks)}, m_validation_cache{validation_cache}, m_checker{run_checks, cache_results, m_validation_cache, m_batch, chain_lock}
 {
 }
 

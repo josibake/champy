@@ -4,13 +4,13 @@
 
 #include <validation/core_block_commit_adapters.h>
 
-#include <validation/block_data_adapters.h>
-#include <validation/block_coin_effects.h>
-#include <validation/block_connection_state.h>
-#include <validation/block_index_adapters.h>
 #include <chain.h>
 #include <coins.h>
 #include <undo.h>
+#include <validation/block_coin_effects.h>
+#include <validation/block_connection_state.h>
+#include <validation/block_index.h>
+#include <validation/block_storage.h>
 
 #include <cstddef>
 #include <utility>

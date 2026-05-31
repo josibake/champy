@@ -128,6 +128,14 @@ public:
     /** Return the amount of work in the chain received during the PRESYNC phase. */
     arith_uint256 GetPresyncWork() const { return m_current_chain_work; }
 
+    struct Start {
+        CBlockHeader header{};
+        int height{-1};
+        arith_uint256 chain_work{};
+        int64_t median_time_past{0};
+        CBlockLocator locator{};
+    };
+
     /** Construct a HeadersSyncState object representing a headers sync via this
      *  download-twice mechanism).
      *
@@ -137,7 +145,7 @@ public:
      * minimum_required_work: amount of chain work required to accept the chain
      */
     HeadersSyncState(NodeId id, const Consensus::Params& consensus_params,
-                     const HeadersSyncParams& params, const CBlockIndex& chain_start,
+                     const HeadersSyncParams& params, Start chain_start,
                      const arith_uint256& minimum_required_work);
 
     /** Result data structure for ProcessNextHeaders. */
@@ -219,8 +227,8 @@ private:
     /** Parameters that impact memory usage for a given chain, especially when attacked. */
     const HeadersSyncParams m_params;
 
-    /** Store the last block in our block index that the peer's chain builds from */
-    const CBlockIndex& m_chain_start;
+    /** Store the last known block that the peer's chain builds from. */
+    const Start m_chain_start;
 
     /** Minimum work that we're looking for on this chain. */
     const arith_uint256 m_minimum_required_work;

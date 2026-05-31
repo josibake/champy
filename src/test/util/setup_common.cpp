@@ -435,7 +435,7 @@ CBlock TestChain100Setup::CreateAndProcessBlock(
     (void)ChainValidationService{*Assert(m_node.chainman)}.ProcessNewBlock(
         chain_events ? &*chain_events : nullptr,
         shared_pblock,
-        {.force_processing = true, .header = {.min_pow_checked = true}},
+        {.block_data_storage = BlockDataStorageMode::ForceStore, .header = {.min_pow_checked = true}},
         CurrentBlockValidationTime());
 
     return block;

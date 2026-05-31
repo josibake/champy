@@ -443,13 +443,10 @@ std::unique_ptr<CBlockTemplate> WaitAndCreateNewBlock(ChainstateManager& chainma
         // At this point the tip changed, a full tick went by or we reached
         // the deadline.
 
-        // Must release m_tip_block_mutex before locking cs_main, to avoid deadlocks.
-        LOCK(::cs_main);
-
         // On test networks return a minimum difficulty block after 20 minutes
         if (!tip_changed && allow_min_difficulty) {
-            const NodeClock::time_point tip_time{std::chrono::seconds{chainman.ActiveChain().Tip()->GetBlockTime()}};
-            if (now > tip_time + 20min) {
+            const auto tip{chainman.ActiveTipSnapshot()};
+            if (tip && now > NodeClock::time_point{std::chrono::seconds{tip->time}} + 20min) {
                 tip_changed = true;
             }
         }
@@ -491,10 +488,9 @@ std::unique_ptr<CBlockTemplate> WaitAndCreateNewBlock(ChainstateManager& chainma
 
 std::optional<BlockRef> GetTip(ChainstateManager& chainman)
 {
-    LOCK(::cs_main);
-    CBlockIndex* tip{chainman.ActiveChain().Tip()};
+    const auto tip{chainman.ActiveTipSnapshot()};
     if (!tip) return {};
-    return BlockRef{tip->GetBlockHash(), tip->nHeight};
+    return BlockRef{tip->hash, tip->height};
 }
 
 bool CooldownIfHeadersAhead(ChainstateManager& chainman, KernelNotifications& kernel_notifications, const BlockRef& last_tip, bool& interrupt_mining)

@@ -7,10 +7,10 @@
 
 #include <arith_uint256.h>
 #include <chainstate_cache.h>
-#include <checkqueue.h>
 #include <kernel/cs_main.h>
-#include <script/script_check.h>
 #include <uint256.h>
+#include <validation/script_check_scheduler.h>
+#include <validation/validation_event_queue.h>
 
 #include <cstdint>
 #include <memory>
@@ -21,7 +21,6 @@ class ChainstateManager;
 class CBlock;
 class CBlockIndex;
 class ValidationCache;
-class ValidationSignals;
 enum class FlushStateMode : uint8_t;
 
 namespace Consensus {
@@ -38,10 +37,26 @@ class CoreBlockHeaderContextProvider;
 class CoreBlockIndexStore;
 struct BlockConnectionTraceCounters;
 
+class CoreChainValidationRuntime final
+{
+public:
+    explicit CoreChainValidationRuntime(ChainstateManager& chainman);
+
+    [[nodiscard]] validation::ScriptCheckScheduler& ScriptCheckScheduler() noexcept { return m_script_check_scheduler; }
+    [[nodiscard]] validation::ValidationEventQueue& ValidationEvents() noexcept { return m_validation_events; }
+
+private:
+    validation::CCheckQueueScriptCheckScheduler m_script_check_scheduler;
+    validation::CoreValidationEventQueue m_validation_events;
+};
+
 class CoreChainValidationContext final
 {
 public:
-    explicit CoreChainValidationContext(ChainstateManager& chainman) : m_chainman{chainman} {}
+    CoreChainValidationContext(ChainstateManager& chainman, CoreChainValidationRuntime& runtime)
+        : m_chainman{chainman}, m_runtime{runtime}
+    {
+    }
 
     [[nodiscard]] const Consensus::Params& ConsensusParams() const;
     [[nodiscard]] const arith_uint256& MinimumChainWork() const;
@@ -50,14 +65,14 @@ public:
     [[nodiscard]] CBlockIndex* ActiveTip() const EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
     [[nodiscard]] int ActiveHeight() const EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
     [[nodiscard]] bool IsInitialBlockDownload() const;
-    [[nodiscard]] ValidationSignals* Signals() const;
+    [[nodiscard]] validation::ValidationEventQueue& ValidationEvents() const;
+    [[nodiscard]] validation::ScriptCheckScheduler& ScriptCheckScheduler() const;
 
     [[nodiscard]] CoreBlockDataStore MakeBlockDataStore() const;
     [[nodiscard]] CoreBlockHeaderContextProvider MakeHeaderContextProvider() const;
     [[nodiscard]] CoreBlockIndexStore MakeBlockIndexStore() const;
 
     [[nodiscard]] kernel::Notifications& Notifications() const;
-    [[nodiscard]] CCheckQueue<CScriptCheck>& ScriptCheckQueue() const;
     [[nodiscard]] ValidationCache& ScriptValidationCache() const;
     [[nodiscard]] BlockConnectionTraceCounters TraceCounters() const EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
 
@@ -71,6 +86,7 @@ public:
 
 private:
     ChainstateManager& m_chainman;
+    CoreChainValidationRuntime& m_runtime;
 };
 
 #endif // BITCOIN_VALIDATION_CORE_CHAIN_VALIDATION_CONTEXT_H

@@ -204,7 +204,7 @@ BOOST_AUTO_TEST_CASE(processnewblock_signals_ordering)
     // Connect the genesis block and drain any outstanding events
     BOOST_CHECK(ChainValidationService{*Assert(m_node.chainman)}.ProcessNewBlock(
         std::make_shared<CBlock>(Params().GenesisBlock()),
-        {.force_processing = true, .header = {.min_pow_checked = true}},
+        {.block_data_storage = BlockDataStorageMode::ForceStore, .header = {.min_pow_checked = true}},
         CurrentBlockValidationTime())
         .processed());
     m_node.validation_signals->SyncWithValidationInterfaceQueue();
@@ -230,7 +230,7 @@ BOOST_AUTO_TEST_CASE(processnewblock_signals_ordering)
                 const auto& block = blocks[insecure.randrange(blocks.size() - 1)];
                 (void)ChainValidationService{*Assert(m_node.chainman)}.ProcessNewBlock(
                     block,
-                    {.force_processing = true, .header = {.min_pow_checked = true}},
+                    {.block_data_storage = BlockDataStorageMode::ForceStore, .header = {.min_pow_checked = true}},
                     CurrentBlockValidationTime());
             }
 
@@ -239,7 +239,7 @@ BOOST_AUTO_TEST_CASE(processnewblock_signals_ordering)
                 if (block->vtx.size() == 1) {
                     const NewBlockProcessingResult result{ChainValidationService{*Assert(m_node.chainman)}.ProcessNewBlock(
                         block,
-                        {.force_processing = true, .header = {.min_pow_checked = true}},
+                        {.block_data_storage = BlockDataStorageMode::ForceStore, .header = {.min_pow_checked = true}},
                         CurrentBlockValidationTime())};
                     assert(result.processed());
                 }
@@ -282,7 +282,7 @@ BOOST_AUTO_TEST_CASE(mempool_locks_reorg)
         return ChainValidationService{*Assert(m_node.chainman)}.ProcessNewBlock(
             &chain_events,
             block,
-            {.force_processing = true, .header = {.min_pow_checked = true}},
+            {.block_data_storage = BlockDataStorageMode::ForceStore, .header = {.min_pow_checked = true}},
             CurrentBlockValidationTime())
             .processed();
     };

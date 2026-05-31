@@ -47,5 +47,7 @@ void CoreBlockIndexStore::MarkBlockDataReceived(const CBlock& block, CBlockIndex
 CBlockIndex* CoreBlockIndexStore::AddToBlockIndex(const CBlockHeader& block)
     EXCLUSIVE_LOCKS_REQUIRED(::cs_main)
 {
-    return m_chainman.m_blockman.AddToBlockIndex(block, m_chainman.m_best_header);
+    CBlockIndex* index{m_chainman.m_blockman.AddToBlockIndex(block, m_chainman.m_best_header)};
+    m_chainman.UpdateBestHeaderSnapshot(m_chainman.m_best_header);
+    return index;
 }

@@ -4,14 +4,14 @@
 
 #include <validation/core_block_policy.h>
 
-#include <validation/block_index_adapters.h>
-#include <validation/block_validation_policy.h>
 #include <chain.h>
 #include <consensus/consensus.h>
 #include <consensus/params.h>
 #include <pow.h>
 #include <util/check.h>
 #include <util/log.h>
+#include <validation/block_index.h>
+#include <validation/block_validation_policy.h>
 
 #include <cassert>
 #include <cstdint>

@@ -49,6 +49,11 @@ public:
         const Consensus::BlockCheckOptions& options,
         BlockValidationTime time) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
 
+    [[nodiscard]] BlockValidationState TestActiveBlockValidity(
+        const CBlock& block,
+        const Consensus::BlockCheckOptions& options,
+        BlockValidationTime time) LOCKS_EXCLUDED(cs_main);
+
 private:
     ChainstateManager& m_chainman;
 };

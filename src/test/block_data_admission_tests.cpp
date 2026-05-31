@@ -31,13 +31,13 @@ BOOST_AUTO_TEST_CASE(block_data_admission_result)
 
     context = baseline;
     context.already_have_data = true;
-    context.block_data_requested = true;
+    context.storage_mode = BlockDataStorageMode::ForceStore;
     BOOST_CHECK(GetBlockDataAdmissionResult(context) == BlockDataAdmissionResult::ALREADY_HAVE_DATA);
     BOOST_CHECK(!ShouldStoreBlockData(BlockDataAdmissionResult::ALREADY_HAVE_DATA));
 
     context = baseline;
     context.block_chain_work = arith_uint256{1};
-    context.block_data_requested = true;
+    context.storage_mode = BlockDataStorageMode::ForceStore;
     BOOST_CHECK(GetBlockDataAdmissionResult(context) == BlockDataAdmissionResult::STORE_BLOCK_DATA);
 
     context = baseline;

@@ -245,11 +245,10 @@ public:
     size_t getMempoolMaxUsage() override { return m_context->mempool ? m_context->mempool->m_opts.max_size_bytes : 0; }
     bool getHeaderTip(int& height, int64_t& block_time) override
     {
-        LOCK(::cs_main);
-        auto best_header = chainman().m_best_header;
+        const auto best_header{chainman().BestHeaderSnapshot()};
         if (best_header) {
-            height = best_header->nHeight;
-            block_time = best_header->GetBlockTime();
+            height = best_header->height;
+            block_time = best_header->time;
             return true;
         }
         return false;
@@ -263,32 +262,29 @@ public:
     }
     int getNumBlocks() override
     {
-        LOCK(::cs_main);
-        return chainman().ActiveChain().Height();
+        const auto tip{chainman().ActiveTipSnapshot()};
+        return tip ? tip->height : -1;
     }
     uint256 getBestBlockHash() override
     {
-        const CBlockIndex* tip = WITH_LOCK(::cs_main, return chainman().ActiveChain().Tip());
-        return tip ? tip->GetBlockHash() : chainman().GetParams().GenesisBlock().GetHash();
+        const auto tip{chainman().ActiveTipSnapshot()};
+        return tip ? tip->hash : chainman().GetParams().GenesisBlock().GetHash();
     }
     int64_t getLastBlockTime() override
     {
-        LOCK(::cs_main);
-        if (chainman().ActiveChain().Tip()) {
-            return chainman().ActiveChain().Tip()->GetBlockTime();
-        }
+        const auto tip{chainman().ActiveTipSnapshot()};
+        if (tip) return tip->time;
         return chainman().GetParams().GenesisBlock().GetBlockTime(); // Genesis block's time of current network
     }
     double getVerificationProgress() override
     {
-        LOCK(chainman().GetMutex());
-        return chainman().GuessVerificationProgress(chainman().ActiveTip());
+        return chainman().GuessVerificationProgressForActiveTip();
     }
     bool isInitialBlockDownload() override
     {
         return chainman().IsInitialBlockDownload();
     }
-    bool isLoadingBlocks() override { return chainman().m_blockman.LoadingBlocks(); }
+    bool isLoadingBlocks() override { return chainman().LoadingBlocks(); }
     void setNetworkActive(bool active) override
     {
         if (m_context->connman) {
@@ -303,8 +299,7 @@ public:
     }
     std::optional<Coin> getUnspentOutput(const COutPoint& output) override
     {
-        LOCK(::cs_main);
-        return chainman().ActiveChainstate().CoinsTip().GetCoin(output);
+        return chainman().GetUnspentOutput(output);
     }
     TransactionError broadcastTransaction(CTransactionRef tx, CAmount max_tx_fee, std::string& err_string) override
     {
@@ -371,21 +366,41 @@ public:
 };
 
 // NOLINTNEXTLINE(misc-no-recursion)
-bool FillBlock(const CBlockIndex* index, const FoundBlock& block, UniqueLock<RecursiveMutex>& lock, const CChain& active, const kernel::BlockManager& blockman) EXCLUSIVE_LOCKS_REQUIRED(cs_main)
+ChainBlockQuery MakeChainBlockQuery(const FoundBlock& block)
 {
-    if (!index) return false;
-    if (block.m_hash) *block.m_hash = index->GetBlockHash();
-    if (block.m_height) *block.m_height = index->nHeight;
-    if (block.m_time) *block.m_time = index->GetBlockTime();
-    if (block.m_max_time) *block.m_max_time = index->GetBlockTimeMax();
-    if (block.m_mtp_time) *block.m_mtp_time = index->GetMedianTimePast();
-    if (block.m_in_active_chain) *block.m_in_active_chain = active[index->nHeight] == index;
-    if (block.m_locator) { *block.m_locator = GetLocator(index); }
-    if (block.m_next_block) FillBlock(active[index->nHeight] == index ? active[index->nHeight + 1] : nullptr, *block.m_next_block, lock, active, blockman);
-    if (block.m_data) {
-        REVERSE_LOCK(lock, cs_main);
-        if (!blockman.ReadBlock(*block.m_data, *index)) block.m_data->SetNull();
+    ChainBlockQuery query{
+        .hash = block.m_hash != nullptr,
+        .height = block.m_height != nullptr,
+        .time = block.m_time != nullptr,
+        .max_time = block.m_max_time != nullptr,
+        .median_time_past = block.m_mtp_time != nullptr,
+        .in_active_chain = block.m_in_active_chain != nullptr,
+        .locator = block.m_locator != nullptr,
+        .data = block.m_data != nullptr,
+    };
+    if (block.m_next_block) {
+        query.next_block = std::make_unique<ChainBlockQuery>(MakeChainBlockQuery(*block.m_next_block));
     }
+    return query;
+}
+
+// NOLINTNEXTLINE(misc-no-recursion)
+bool ApplyFoundBlockResult(ChainBlockQueryResult&& result, const FoundBlock& block)
+{
+    if (!result.found) return false;
+
+    if (block.m_hash) *block.m_hash = *Assert(result.hash);
+    if (block.m_height) *block.m_height = *Assert(result.height);
+    if (block.m_time) *block.m_time = *Assert(result.time);
+    if (block.m_max_time) *block.m_max_time = *Assert(result.max_time);
+    if (block.m_mtp_time) *block.m_mtp_time = *Assert(result.median_time_past);
+    if (block.m_in_active_chain) *block.m_in_active_chain = *Assert(result.in_active_chain);
+    if (block.m_locator) *block.m_locator = *Assert(result.locator);
+    if (block.m_next_block && result.next_block) {
+        ApplyFoundBlockResult(std::move(*result.next_block), *block.m_next_block);
+    }
+    if (block.m_data) *block.m_data = std::move(*Assert(result.data));
+
     block.found = true;
     return true;
 }
@@ -449,77 +464,57 @@ public:
     explicit ChainImpl(NodeContext& node) : m_node(node) {}
     std::optional<int> getHeight() override
     {
-        const int height{WITH_LOCK(::cs_main, return chainman().ActiveChain().Height())};
-        return height >= 0 ? std::optional{height} : std::nullopt;
+        const auto tip{chainman().ActiveTipSnapshot()};
+        return tip ? std::optional{tip->height} : std::nullopt;
     }
     uint256 getBlockHash(int height) override
     {
-        LOCK(::cs_main);
-        return Assert(chainman().ActiveChain()[height])->GetBlockHash();
+        const auto block{Assert(chainman().ActiveChainBlockSnapshot(height))};
+        return block->hash;
     }
     bool haveBlockOnDisk(int height) override
     {
-        LOCK(::cs_main);
-        const CBlockIndex* block{chainman().ActiveChain()[height]};
-        return block && ((block->nStatus & BLOCK_HAVE_DATA) != 0) && block->nTx > 0;
+        return chainman().HaveActiveChainBlockData(height);
     }
     std::optional<int> findLocatorFork(const CBlockLocator& locator) override
     {
-        LOCK(::cs_main);
-        if (const CBlockIndex* fork = chainman().ActiveChainstate().FindForkInGlobalIndex(locator)) {
-            return fork->nHeight;
-        }
-        return std::nullopt;
+        return chainman().FindLocatorForkHeight(locator);
     }
     bool findBlock(const uint256& hash, const FoundBlock& block) override
     {
-        WAIT_LOCK(cs_main, lock);
-        return FillBlock(chainman().m_blockman.LookupBlockIndex(hash), block, lock, chainman().ActiveChain(), chainman().m_blockman);
+        return ApplyFoundBlockResult(chainman().FindBlock(hash, MakeChainBlockQuery(block)), block);
     }
     bool findFirstBlockWithTimeAndHeight(int64_t min_time, int min_height, const FoundBlock& block) override
     {
-        WAIT_LOCK(cs_main, lock);
-        const CChain& active = chainman().ActiveChain();
-        return FillBlock(active.FindEarliestAtLeast(min_time, min_height), block, lock, active, chainman().m_blockman);
+        return ApplyFoundBlockResult(chainman().FindFirstBlockWithTimeAndHeight(min_time, min_height, MakeChainBlockQuery(block)), block);
     }
     bool findAncestorByHeight(const uint256& block_hash, int ancestor_height, const FoundBlock& ancestor_out) override
     {
-        WAIT_LOCK(cs_main, lock);
-        const CChain& active = chainman().ActiveChain();
-        if (const CBlockIndex* block = chainman().m_blockman.LookupBlockIndex(block_hash)) {
-            if (const CBlockIndex* ancestor = block->GetAncestor(ancestor_height)) {
-                return FillBlock(ancestor, ancestor_out, lock, active, chainman().m_blockman);
-            }
-        }
-        return FillBlock(nullptr, ancestor_out, lock, active, chainman().m_blockman);
+        return ApplyFoundBlockResult(chainman().FindAncestorByHeight(block_hash, ancestor_height, MakeChainBlockQuery(ancestor_out)), ancestor_out);
     }
     bool findAncestorByHash(const uint256& block_hash, const uint256& ancestor_hash, const FoundBlock& ancestor_out) override
     {
-        WAIT_LOCK(cs_main, lock);
-        const CBlockIndex* block = chainman().m_blockman.LookupBlockIndex(block_hash);
-        const CBlockIndex* ancestor = chainman().m_blockman.LookupBlockIndex(ancestor_hash);
-        if (block && ancestor && block->GetAncestor(ancestor->nHeight) != ancestor) ancestor = nullptr;
-        return FillBlock(ancestor, ancestor_out, lock, chainman().ActiveChain(), chainman().m_blockman);
+        return ApplyFoundBlockResult(chainman().FindAncestorByHash(block_hash, ancestor_hash, MakeChainBlockQuery(ancestor_out)), ancestor_out);
     }
     bool findCommonAncestor(const uint256& block_hash1, const uint256& block_hash2, const FoundBlock& ancestor_out, const FoundBlock& block1_out, const FoundBlock& block2_out) override
     {
-        WAIT_LOCK(cs_main, lock);
-        const CChain& active = chainman().ActiveChain();
-        const CBlockIndex* block1 = chainman().m_blockman.LookupBlockIndex(block_hash1);
-        const CBlockIndex* block2 = chainman().m_blockman.LookupBlockIndex(block_hash2);
-        const CBlockIndex* ancestor = block1 && block2 ? LastCommonAncestor(block1, block2) : nullptr;
+        auto result{chainman().FindCommonAncestor(
+            block_hash1,
+            block_hash2,
+            MakeChainBlockQuery(ancestor_out),
+            MakeChainBlockQuery(block1_out),
+            MakeChainBlockQuery(block2_out))};
         // Using & instead of && below to avoid short circuiting and leaving
         // output uninitialized. Cast bool to int to avoid -Wbitwise-instead-of-logical
         // compiler warnings.
-        return int{FillBlock(ancestor, ancestor_out, lock, active, chainman().m_blockman)} &
-               int{FillBlock(block1, block1_out, lock, active, chainman().m_blockman)} &
-               int{FillBlock(block2, block2_out, lock, active, chainman().m_blockman)};
+        return int{ApplyFoundBlockResult(std::move(result.ancestor), ancestor_out)} &
+               int{ApplyFoundBlockResult(std::move(result.block1), block1_out)} &
+               int{ApplyFoundBlockResult(std::move(result.block2), block2_out)};
     }
     void findCoins(std::map<COutPoint, Coin>& coins) override { return FindCoins(m_node, coins); }
     double guessVerificationProgress(const uint256& block_hash) override
     {
-        LOCK(chainman().GetMutex());
-        return chainman().GuessVerificationProgress(chainman().m_blockman.LookupBlockIndex(block_hash));
+        return chainman().GuessVerificationProgress(block_hash);
     }
     bool hasBlocks(const uint256& block_hash, int min_height, std::optional<int> max_height) override
     {
@@ -530,15 +525,7 @@ public:
         // For simplicity and robustness, min_height and max_height are only
         // used to limit the range, and passing min_height that's too low or
         // max_height that's too high will not crash or change the result.
-        LOCK(::cs_main);
-        if (const CBlockIndex* block = chainman().m_blockman.LookupBlockIndex(block_hash)) {
-            if (max_height && block->nHeight >= *max_height) block = block->GetAncestor(*max_height);
-            for (; block->nStatus & BLOCK_HAVE_DATA; block = block->pprev) {
-                // Check pprev to not segfault if min_height is too low
-                if (block->nHeight <= min_height || !block->pprev) return true;
-            }
-        }
-        return false;
+        return chainman().HaveBlocksOnDisk(block_hash, min_height, max_height);
     }
     RBFTransactionState isRBFOptIn(const CTransaction& tx) override
     {
@@ -642,22 +629,13 @@ public:
     }
     bool havePruned() override
     {
-        LOCK(::cs_main);
-        return chainman().m_blockman.m_have_pruned;
+        return chainman().HavePruned();
     }
     std::optional<int> getPruneHeight() override
     {
-        LOCK(chainman().GetMutex());
-        const CChain& chain{chainman().ActiveChain()};
-        const CBlockIndex* first_block{chain[1]};
-        const CBlockIndex* chain_tip{chain.Tip()};
-        if (!first_block || !chain_tip) return std::nullopt;
-        if ((chain_tip->nStatus & BLOCK_HAVE_MASK) != BLOCK_HAVE_MASK) return chain_tip->nHeight;
-        const auto& first_unpruned{chainman().m_blockman.GetFirstBlock(*chain_tip, BLOCK_HAVE_MASK, first_block)};
-        if (&first_unpruned == first_block) return std::nullopt;
-        return CHECK_NONFATAL(first_unpruned.pprev)->nHeight;
+        return chainman().PruneHeight();
     }
-    bool isReadyToBroadcast() override { return !chainman().m_blockman.LoadingBlocks() && !isInitialBlockDownload(); }
+    bool isReadyToBroadcast() override { return !chainman().LoadingBlocks() && !isInitialBlockDownload(); }
     bool isInitialBlockDownload() override
     {
         return chainman().IsInitialBlockDownload();
@@ -676,7 +654,8 @@ public:
     }
     void waitForNotificationsIfTipChanged(const uint256& old_tip) override
     {
-        if (!old_tip.IsNull() && old_tip == WITH_LOCK(::cs_main, return chainman().ActiveChain().Tip()->GetBlockHash())) return;
+        const auto tip{chainman().ActiveTipSnapshot()};
+        if (!old_tip.IsNull() && tip && old_tip == tip->hash) return;
         validation_signals().SyncWithValidationInterfaceQueue();
     }
     void waitForNotifications() override
@@ -795,7 +774,7 @@ public:
         return ChainValidationService{chainman()}.ProcessNewBlock(
             chain_events ? &*chain_events : nullptr,
             std::make_shared<const CBlock>(m_block_template->block),
-            {.force_processing = true, .header = {.min_pow_checked = true}},
+            {.block_data_storage = BlockDataStorageMode::ForceStore, .header = {.min_pow_checked = true}},
             CurrentBlockValidationTime())
             .processed();
     }
@@ -891,11 +870,10 @@ public:
 
     bool checkBlock(const CBlock& block, const node::BlockCheckOptions& options, std::string& reason, std::string& debug) override
     {
-        LOCK(chainman().GetMutex());
         const Consensus::BlockCheckOptions validity_options{
             .check_pow = options.check_pow,
             .check_merkle_root = options.check_merkle_root};
-        BlockValidationState state{ChainValidationService{chainman()}.TestBlockValidity(chainman().ActiveChainstate(), block, validity_options, CurrentBlockValidationTime())};
+        BlockValidationState state{ChainValidationService{chainman()}.TestActiveBlockValidity(block, validity_options, CurrentBlockValidationTime())};
         reason = state.GetRejectReason();
         debug = state.GetDebugMessage();
         return state.IsValid();

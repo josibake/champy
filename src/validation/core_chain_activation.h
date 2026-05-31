@@ -22,14 +22,15 @@ class Chainstate;
 class CBlock;
 class CBlockIndex;
 class ChainstateEventSink;
+class CoreChainLock;
 class CoreChainValidationContext;
-class ValidationSignals;
 
 namespace kernel {
 class Notifications;
 } // namespace kernel
 namespace validation {
 class BlockConnectionState;
+class ValidationEventQueue;
 } // namespace validation
 
 struct ConnectedBlock {
@@ -93,8 +94,9 @@ struct CoreConnectTipResources {
     std::optional<const char*>& last_script_check_reason_logged;
     std::vector<ConnectedBlock>& connected_blocks;
     ChainstateEventSink* chain_events{nullptr};
-    ValidationSignals* signals{nullptr};
+    validation::ValidationEventQueue& validation_events;
     CoreConnectTipTiming timing;
+    CoreChainLock* chain_lock{nullptr};
 };
 
 struct CoreConnectTipRequest {

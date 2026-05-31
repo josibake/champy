@@ -17,10 +17,11 @@ CoreBlockConnectionSetup::CoreBlockConnectionSetup(CoreBlockConnectionRuntimeInp
       m_block_index_committer{runtime.block_index_committer},
       m_connection_plan{std::move(connection_plan)},
       m_script_checks{
-          runtime.script_check_queue,
+          runtime.script_check_scheduler,
           m_connection_plan.script_check_decision.run_script_checks,
           cache_script_results,
-          runtime.validation_cache},
+          runtime.validation_cache,
+          runtime.chain_lock},
       m_trace{runtime.trace_counters}
 {
 }

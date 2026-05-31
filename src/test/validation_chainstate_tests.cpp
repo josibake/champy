@@ -67,6 +67,24 @@ BOOST_AUTO_TEST_CASE(validation_chainstate_resize_caches)
     }
 }
 
+BOOST_AUTO_TEST_CASE(chainstatemanager_get_unspent_output_returns_copied_coin)
+{
+    ChainstateManager& manager = *Assert(m_node.chainman);
+    Chainstate& chainstate = WITH_LOCK(cs_main, return manager.InitializeChainstate());
+    chainstate.InitCoinsDB(
+        /*cache_size_bytes=*/8_MiB, /*in_memory=*/true, /*should_wipe=*/false);
+    WITH_LOCK(::cs_main, chainstate.InitCoinsCache(8_MiB));
+
+    COutPoint outpoint;
+    {
+        LOCK(::cs_main);
+        outpoint = AddTestCoin(m_rng, chainstate.CoinsTip());
+    }
+
+    BOOST_CHECK(manager.GetUnspentOutput(outpoint).has_value());
+    BOOST_CHECK(!manager.GetUnspentOutput(COutPoint{Txid::FromUint256(m_rng.rand256()), 0}).has_value());
+}
+
 BOOST_FIXTURE_TEST_CASE(connect_tip_does_not_cache_inputs_on_failed_connect, TestChain100Setup)
 {
     Chainstate& chainstate{Assert(m_node.chainman)->ActiveChainstate()};
@@ -86,7 +104,7 @@ BOOST_FIXTURE_TEST_CASE(connect_tip_does_not_cache_inputs_on_failed_connect, Tes
     const CBlock block{CreateBlock({tx}, CScript{} << OP_TRUE, chainstate)};
     BOOST_CHECK(ChainValidationService{*Assert(m_node.chainman)}.ProcessNewBlock(
         std::make_shared<CBlock>(block),
-        {.force_processing = true, .header = {.min_pow_checked = true}},
+        {.block_data_storage = BlockDataStorageMode::ForceStore, .header = {.min_pow_checked = true}},
         CurrentBlockValidationTime())
         .processed());
 

@@ -817,7 +817,7 @@ BOOST_AUTO_TEST_CASE(CreateNewBlock_validity)
         if (current_height % 2 == 0) {
             BOOST_REQUIRE(ChainValidationService{*Assert(m_node.chainman)}.ProcessNewBlock(
                 shared_pblock,
-                {.force_processing = true, .header = {.min_pow_checked = true}},
+                {.block_data_storage = BlockDataStorageMode::ForceStore, .header = {.min_pow_checked = true}},
                 CurrentBlockValidationTime())
                 .processed());
         } else {

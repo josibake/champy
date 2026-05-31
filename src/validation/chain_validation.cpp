@@ -4,6 +4,7 @@
 
 #include <validation/chain_validation.h>
 
+#include <chainstate.h>
 #include <validation/block_validation_internal.h>
 #include <validation/core_chain_validation_context.h>
 
@@ -13,7 +14,8 @@ NewBlockHeadersResult ChainValidationService::ProcessNewBlockHeaders(
     BlockValidationTime time,
     BlockValidationState& state)
 {
-    CoreChainValidationContext context{m_chainman};
+    CoreChainValidationRuntime runtime{m_chainman};
+    CoreChainValidationContext context{m_chainman, runtime};
     return ::ProcessNewBlockHeaders(context, headers, options, time, state);
 }
 
@@ -23,7 +25,8 @@ BlockAcceptanceResult ChainValidationService::AcceptBlock(
     BlockAcceptanceOptions options,
     BlockValidationTime time)
 {
-    CoreChainValidationContext context{m_chainman};
+    CoreChainValidationRuntime runtime{m_chainman};
+    CoreChainValidationContext context{m_chainman, runtime};
     return ::AcceptBlock(context, block, state, options, time);
 }
 
@@ -33,7 +36,8 @@ NewBlockProcessingResult ChainValidationService::ProcessNewBlock(
     NewBlockProcessingOptions options,
     BlockValidationTime time)
 {
-    CoreChainValidationContext context{m_chainman};
+    CoreChainValidationRuntime runtime{m_chainman};
+    CoreChainValidationContext context{m_chainman, runtime};
     return ::ProcessNewBlock(context, chain_events, block, options, time);
 }
 
@@ -42,7 +46,8 @@ NewBlockProcessingResult ChainValidationService::ProcessNewBlock(
     NewBlockProcessingOptions options,
     BlockValidationTime time)
 {
-    CoreChainValidationContext context{m_chainman};
+    CoreChainValidationRuntime runtime{m_chainman};
+    CoreChainValidationContext context{m_chainman, runtime};
     return ::ProcessNewBlock(context, block, options, time);
 }
 
@@ -53,4 +58,13 @@ BlockValidationState ChainValidationService::TestBlockValidity(
     BlockValidationTime time)
 {
     return ::TestBlockValidity(chainstate, block, options, time);
+}
+
+BlockValidationState ChainValidationService::TestActiveBlockValidity(
+    const CBlock& block,
+    const Consensus::BlockCheckOptions& options,
+    BlockValidationTime time)
+{
+    LOCK(::cs_main);
+    return TestBlockValidity(m_chainman.ActiveChainstate(), block, options, time);
 }

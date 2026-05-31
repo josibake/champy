@@ -7,7 +7,6 @@
 #define BITCOIN_CHAINSTATE_H
 
 #include <arith_uint256.h>
-#include <validation/block_validation.h>
 #include <chain.h>
 #include <chainstate_cache.h>
 #include <checkqueue.h>
@@ -15,11 +14,12 @@
 #include <consensus/amount.h>
 #include <cuckoocache.h>
 #include <deploymentstatus.h>
+#include <flatfile.h>
+#include <kernel/blockstorage.h>
 #include <kernel/chain.h>
 #include <kernel/chainparams.h>
 #include <kernel/chainstatemanager_opts.h>
 #include <kernel/cs_main.h> // IWYU pragma: export
-#include <kernel/blockstorage.h>
 #include <script/script_check.h>
 #include <script/sigcache.h>
 #include <sync.h>
@@ -27,15 +27,20 @@
 #include <uint256.h>
 #include <util/byte_units.h>
 #include <util/check.h>
+#include <util/expected.h>
 #include <util/fs.h>
 #include <util/hasher.h>
 #include <util/result.h>
 #include <util/time.h>
 #include <util/translation.h>
+#include <validation/active_chain.h>
+#include <validation/block_index_snapshot.h>
+#include <validation/block_validation.h>
 #include <versionbits.h>
 
 #include <algorithm>
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <map>
 #include <memory>
@@ -49,6 +54,12 @@
 
 class Chainstate;
 class ChainstateManager;
+class BlockDataAvailability;
+class BlockDataReader;
+class BlockIndexLookup;
+class BlockIndexValidityCommitter;
+class BlockUndoReader;
+class BlockUndoWriter;
 class CoreChainActivationState;
 class CoreChainValidationContext;
 struct ChainTxData;
@@ -60,6 +71,10 @@ struct Params;
 namespace util {
 class SignalInterrupt;
 } // namespace util
+namespace validation {
+class ActiveChainView;
+class ScriptCheckScheduler;
+} // namespace validation
 
 /** Block files containing a block-height within MIN_BLOCKS_TO_KEEP of ActiveChain().Tip() will not be pruned. */
 static const unsigned int MIN_BLOCKS_TO_KEEP = 288;
@@ -97,9 +112,10 @@ class ValidationCache
 private:
     //! Pre-initialized hasher to avoid having to recreate it for every hash calculation.
     CSHA256 m_script_execution_cache_hasher;
+    Mutex m_script_execution_cache_mutex;
+    CuckooCache::cache<uint256, SignatureCacheHasher> m_script_execution_cache GUARDED_BY(m_script_execution_cache_mutex);
 
 public:
-    CuckooCache::cache<uint256, SignatureCacheHasher> m_script_execution_cache;
     SignatureCache m_signature_cache;
 
     ValidationCache(size_t script_execution_cache_bytes, size_t signature_cache_bytes);
@@ -109,6 +125,8 @@ public:
 
     //! Return a copy of the pre-initialized hasher.
     CSHA256 ScriptExecutionCacheHasher() const { return m_script_execution_cache_hasher; }
+    [[nodiscard]] bool ContainsScriptExecution(const uint256& entry, bool erase) EXCLUSIVE_LOCKS_REQUIRED(!m_script_execution_cache_mutex);
+    void StoreScriptExecution(const uint256& entry) EXCLUSIVE_LOCKS_REQUIRED(!m_script_execution_cache_mutex);
 };
 
 enum class VerifyDBResult {
@@ -117,6 +135,195 @@ enum class VerifyDBResult {
     INTERRUPTED,
     SKIPPED_L3_CHECKS,
     SKIPPED_MISSING_BLOCKS,
+};
+
+struct VerifyDBRequest {
+    validation::ActiveChainView& active_chain;
+    const Consensus::Params& consensus_params;
+    CCoinsView& coins_view;
+    CCoinsViewCache& coins_tip;
+    size_t coins_tip_cache_size_bytes;
+    BlockDataReader& block_reader;
+    BlockUndoReader& undo_reader;
+    BlockUndoWriter& undo_writer;
+    BlockDataAvailability& block_data_availability;
+    BlockIndexLookup& block_index_lookup;
+    BlockIndexValidityCommitter& block_index_committer;
+    CoreChainValidationContext& validation_context;
+    validation::ScriptCheckScheduler& script_check_scheduler;
+    std::optional<const char*>& last_script_check_reason_logged;
+    const util::SignalInterrupt& interrupt;
+};
+
+struct ChainBlockQuery {
+    bool hash{false};
+    bool height{false};
+    bool time{false};
+    bool max_time{false};
+    bool median_time_past{false};
+    bool in_active_chain{false};
+    bool locator{false};
+    bool data{false};
+    std::unique_ptr<ChainBlockQuery> next_block{};
+};
+
+struct ChainBlockQueryResult {
+    bool found{false};
+    std::optional<uint256> hash{};
+    std::optional<int> height{};
+    std::optional<int64_t> time{};
+    std::optional<int64_t> max_time{};
+    std::optional<int64_t> median_time_past{};
+    std::optional<bool> in_active_chain{};
+    std::optional<CBlockLocator> locator{};
+    std::optional<CBlock> data{};
+    std::unique_ptr<ChainBlockQueryResult> next_block{};
+};
+
+struct ChainCommonAncestorQueryResult {
+    ChainBlockQueryResult ancestor;
+    ChainBlockQueryResult block1;
+    ChainBlockQueryResult block2;
+};
+
+struct ChainLocatorSnapshot {
+    CBlockLocator locator{};
+    int height{-1};
+};
+
+struct InitialHeadersSyncSnapshot {
+    CBlockLocator locator{};
+    int locator_height{-1};
+    int64_t best_header_time{0};
+};
+
+struct HeadersSyncStartSnapshot {
+    CBlockHeader header{};
+    int height{-1};
+    arith_uint256 chain_work{};
+    int64_t median_time_past{0};
+    CBlockLocator locator{};
+};
+
+struct KnownBlockContext {
+    arith_uint256 chain_work{};
+    bool segwit_active_after{false};
+};
+
+struct ChainBlockRelayFacts {
+    int height{-1};
+    int64_t block_time{0};
+    std::optional<int64_t> best_header_time{};
+    std::optional<int> active_tip_height{};
+    std::optional<uint256> active_tip_hash{};
+    FlatFilePos block_pos{};
+    bool request_allowed{false};
+    bool needs_active_chain{false};
+    bool has_data{false};
+};
+
+enum class ActiveChainInventoryStopReason {
+    NONE,
+    STOP_HASH,
+    PRUNED,
+    LIMIT,
+};
+
+struct ActiveChainInventory {
+    int first_height{-1};
+    int stop_height{-1};
+    uint256 stop_hash{};
+    ActiveChainInventoryStopReason stop_reason{ActiveChainInventoryStopReason::NONE};
+    std::vector<uint256> block_hashes{};
+    std::optional<uint256> continuation{};
+};
+
+struct ActiveChainHeaders {
+    bool found{false};
+    bool request_allowed{true};
+    int first_height{-1};
+    std::vector<CBlock> headers{};
+    std::optional<ChainWorkBlockSnapshot> best_header_sent{};
+};
+
+struct HeaderAnnouncementRequest {
+    std::span<const uint256> block_hashes{};
+    std::optional<uint256> peer_best_known_block{};
+    std::optional<uint256> peer_best_header_sent{};
+    bool try_headers{true};
+    bool include_best_block_pos{false};
+};
+
+struct HeaderAnnouncementFallback {
+    uint256 hash{};
+    bool found{false};
+    bool in_active_chain{false};
+    bool peer_has_header{false};
+    std::optional<uint256> active_tip_hash{};
+};
+
+struct HeaderAnnouncementResponse {
+    bool revert_to_inv{false};
+    std::vector<CBlock> headers{};
+    std::optional<ChainWorkBlockSnapshot> best_header_sent{};
+    HeaderAnnouncementFallback fallback{};
+    std::optional<FlatFilePos> best_block_pos{};
+};
+
+struct BlockTipAnnouncementFacts {
+    int height{-1};
+    int64_t block_time{0};
+    //! New block hashes in announcement order, oldest to newest.
+    std::vector<uint256> block_hashes{};
+};
+
+struct BlockDownloadCandidate {
+    ChainWorkBlockSnapshot block{};
+    bool valid_tree{false};
+    bool segwit_active{false};
+    bool has_data{false};
+    bool in_active_chain{false};
+    bool have_num_chain_txs{false};
+};
+
+struct BlockDownloadCandidates {
+    bool found{false};
+    bool interesting{false};
+    int window_end{-1};
+    int best_known_height{-1};
+    std::optional<ChainWorkBlockSnapshot> last_common{};
+    std::vector<BlockDownloadCandidate> candidates{};
+};
+
+struct HeadersDirectFetchRequest {
+    uint256 last_header_hash{};
+    std::span<const uint256> blocks_in_flight{};
+    bool can_serve_witnesses{false};
+    int max_blocks{0};
+};
+
+struct HeadersDirectFetchPlan {
+    bool found{false};
+    bool requestable{false};
+    bool large_reorg{false};
+    ChainWorkBlockSnapshot last_header{};
+    bool last_header_parent_valid_chain{false};
+    std::vector<ChainWorkBlockSnapshot> blocks{};
+};
+
+struct CompactBlockDownloadFacts {
+    ChainWorkBlockSnapshot block{};
+    bool active_tip_available{false};
+    bool more_work_than_active_tip{false};
+    bool near_active_tip{false};
+    bool has_block_data{false};
+    bool has_block_transactions{false};
+};
+
+struct PoWValidBlockAnnouncementFacts {
+    ChainWorkBlockSnapshot block{};
+    std::optional<uint256> previous_hash{};
+    bool segwit_active{false};
 };
 
 /** RAII wrapper for VerifyDB: Verify consistency of the block and coin databases */
@@ -129,6 +336,10 @@ public:
     explicit CVerifyDB(kernel::Notifications& notifications);
     ~CVerifyDB();
     [[nodiscard]] VerifyDBResult VerifyDB(
+        VerifyDBRequest request,
+        int nCheckLevel,
+        int nCheckDepth) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
+    [[nodiscard]] VerifyDBResult VerifyDB(
         Chainstate& chainstate,
         const Consensus::Params& consensus_params,
         CCoinsView& coinsview,
@@ -138,7 +349,7 @@ public:
 
 /** @see Chainstate::FlushStateToDisk */
 inline constexpr std::array FlushStateModeNames{"NONE", "IF_NEEDED", "PERIODIC", "FORCE_FLUSH", "FORCE_SYNC"};
-enum class FlushStateMode: uint8_t {
+enum class FlushStateMode : uint8_t {
     NONE,
     IF_NEEDED,
     PERIODIC,
@@ -155,8 +366,8 @@ enum class FlushStateMode: uint8_t {
  * ultimately falling back on cache misses to the canonical store of UTXOs on
  * disk, `m_dbview`.
  */
-class CoinsViews {
-
+class CoinsViews
+{
 public:
     //! The lowest level of the CoinsViews cache hierarchy sits in a leveldb database on disk.
     //! All unspent coins reside in this store.
@@ -185,8 +396,7 @@ public:
     void InitCache() EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
 };
 
-enum class CoinsCacheSizeState
-{
+enum class CoinsCacheSizeState {
     //! The coins cache is in immediate need of a flush.
     CRITICAL = 2,
     //! The cache is at >= 90% capacity.
@@ -218,6 +428,7 @@ constexpr int64_t LargeCoinsCacheThreshold(int64_t total_space) noexcept
  */
 class Chainstate
 {
+    friend class ChainstateActivationOrchestrator;
     friend class CoreChainActivationState;
     friend class CoreChainValidationContext;
 
@@ -372,7 +583,7 @@ public:
         std::shared_ptr<const CBlock> pblock = nullptr,
         ChainstateEventSink* chain_events = nullptr)
         EXCLUSIVE_LOCKS_REQUIRED(!m_chainstate_mutex)
-        LOCKS_EXCLUDED(::cs_main);
+            LOCKS_EXCLUDED(::cs_main);
 
     // Apply the effects of a block disconnection on the UTXO set.
     bool DisconnectTip(
@@ -386,12 +597,12 @@ public:
      */
     bool PreciousBlock(BlockValidationState& state, CBlockIndex* pindex, ChainstateEventSink* chain_events = nullptr)
         EXCLUSIVE_LOCKS_REQUIRED(!m_chainstate_mutex)
-        LOCKS_EXCLUDED(::cs_main);
+            LOCKS_EXCLUDED(::cs_main);
 
     /** Mark a block as invalid. */
     bool InvalidateBlock(BlockValidationState& state, CBlockIndex* pindex, ChainstateEventSink* chain_events = nullptr)
         EXCLUSIVE_LOCKS_REQUIRED(!m_chainstate_mutex)
-        LOCKS_EXCLUDED(::cs_main);
+            LOCKS_EXCLUDED(::cs_main);
 
     /** Set invalidity status to all descendants of a block */
     void SetBlockFailureFlags(CBlockIndex* pindex) EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
@@ -400,7 +611,7 @@ public:
     void ResetBlockFailureFlags(CBlockIndex* pindex) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
 
     /** Replay blocks that aren't fully applied to the database. */
-    bool ReplayBlocks();
+    bool ReplayBlocks() EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
 
     /** Whether the chain state needs to be redownloaded due to lack of witness data */
     [[nodiscard]] bool NeedsRedownload() const EXCLUSIVE_LOCKS_REQUIRED(cs_main);
@@ -440,6 +651,8 @@ public:
     std::pair<int, int> GetPruneRange(int last_height_can_prune) const EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
 
 protected:
+    void SetActiveChainTip(CBlockIndex& block_index) EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
+
     void AdvanceActiveChainTip(CBlockIndex& block_index, ChainstateEventSink* chain_events)
         EXCLUSIVE_LOCKS_REQUIRED(cs_main);
 
@@ -466,7 +679,6 @@ protected:
 class ChainstateManager
 {
 private:
-
     /** The last header for which a headerTip notification was issued. */
     CBlockIndex* m_last_notified_header GUARDED_BY(GetMutex()){nullptr};
 
@@ -494,7 +706,7 @@ private:
     SteadyClock::duration GUARDED_BY(::cs_main) time_post_connect{};
 
 public:
-    // Accessors for timing counters (used by block_validation.cpp)
+    // Accessors for validation timing counters.
     SteadyClock::duration& TimeCheck() EXCLUSIVE_LOCKS_REQUIRED(::cs_main) { return time_check; }
     const SteadyClock::duration& TimeCheck() const EXCLUSIVE_LOCKS_REQUIRED(::cs_main) { return time_check; }
     SteadyClock::duration& TimeForks() EXCLUSIVE_LOCKS_REQUIRED(::cs_main) { return time_forks; }
@@ -507,6 +719,11 @@ public:
     const SteadyClock::duration& TimeUndo() const EXCLUSIVE_LOCKS_REQUIRED(::cs_main) { return time_undo; }
     SteadyClock::duration& TimeIndex() EXCLUSIVE_LOCKS_REQUIRED(::cs_main) { return time_index; }
     const SteadyClock::duration& TimeIndex() const EXCLUSIVE_LOCKS_REQUIRED(::cs_main) { return time_index; }
+    SteadyClock::duration& TimeTotal() EXCLUSIVE_LOCKS_REQUIRED(::cs_main) { return time_total; }
+    SteadyClock::duration& TimeConnectTotal() EXCLUSIVE_LOCKS_REQUIRED(::cs_main) { return time_connect_total; }
+    SteadyClock::duration& TimeFlush() EXCLUSIVE_LOCKS_REQUIRED(::cs_main) { return time_flush; }
+    SteadyClock::duration& TimeChainstate() EXCLUSIVE_LOCKS_REQUIRED(::cs_main) { return time_chainstate; }
+    SteadyClock::duration& TimePostConnect() EXCLUSIVE_LOCKS_REQUIRED(::cs_main) { return time_post_connect; }
     int64_t& NumBlocksTotal() EXCLUSIVE_LOCKS_REQUIRED(::cs_main) { return num_blocks_total; }
     int64_t NumBlocksTotal() const EXCLUSIVE_LOCKS_REQUIRED(::cs_main) { return num_blocks_total; }
 
@@ -515,6 +732,7 @@ protected:
 
 public:
     using Options = kernel::ChainstateManagerOpts;
+    using RawBlockDataReadResult = util::Expected<std::vector<std::byte>, kernel::ReadRawError>;
 
     explicit ChainstateManager(const util::SignalInterrupt& interrupt, Options options, kernel::BlockManager::Options blockman_options);
 
@@ -554,6 +772,14 @@ public:
 
     ValidationCache m_validation_cache;
 
+    //! Copied active-tip facts for readers that do not need live block-index state.
+    mutable Mutex m_active_chain_snapshot_mutex;
+    std::optional<validation::ActiveChainTipSnapshot> m_active_chain_tip_snapshot GUARDED_BY(m_active_chain_snapshot_mutex);
+
+    //! Copied best-header facts for readers that do not need live block-index state.
+    mutable Mutex m_best_header_snapshot_mutex;
+    std::optional<validation::BestHeaderSnapshot> m_best_header_snapshot GUARDED_BY(m_best_header_snapshot_mutex);
+
     /**
      * Whether initial block download (IBD) is ongoing.
      *
@@ -592,6 +818,10 @@ public:
         because CBlockIndexWorkComparator tiebreaker rules are not applied. */
     CBlockIndex* m_best_header GUARDED_BY(::cs_main){nullptr};
 
+    void SetBestHeader(CBlockIndex* header)
+        EXCLUSIVE_LOCKS_REQUIRED(::cs_main)
+        EXCLUSIVE_LOCKS_REQUIRED(!m_best_header_snapshot_mutex);
+
     //! The total number of bytes available for us to use across all in-memory
     //! coins caches. This will be split somehow across chainstates.
     size_t m_total_coinstip_cache{0};
@@ -610,6 +840,228 @@ public:
     int ActiveHeight() const EXCLUSIVE_LOCKS_REQUIRED(GetMutex()) { return ActiveChain().Height(); }
     CBlockIndex* ActiveTip() const EXCLUSIVE_LOCKS_REQUIRED(GetMutex()) { return ActiveChain().Tip(); }
 
+    //! Return copied active-tip facts without exposing mutable CBlockIndex state.
+    std::optional<validation::ActiveChainTipSnapshot> ActiveTipSnapshot() const
+        EXCLUSIVE_LOCKS_REQUIRED(!m_active_chain_snapshot_mutex);
+
+    //! Return copied best-header facts without exposing mutable CBlockIndex state.
+    std::optional<validation::BestHeaderSnapshot> BestHeaderSnapshot() const
+        EXCLUSIVE_LOCKS_REQUIRED(!m_best_header_snapshot_mutex);
+
+    //! Return a copied locator for the current best header.
+    std::optional<ChainLocatorSnapshot> BestHeaderLocatorSnapshot() const LOCKS_EXCLUDED(::cs_main);
+
+    //! Same as BestHeaderLocatorSnapshot(), for callers already holding cs_main.
+    std::optional<ChainLocatorSnapshot> BestHeaderLocatorSnapshotLocked() const EXCLUSIVE_LOCKS_REQUIRED(GetMutex());
+
+    //! Return the locator and best-header time needed to start headers sync.
+    std::optional<InitialHeadersSyncSnapshot> InitialHeadersSyncSnapshotLocked() EXCLUSIVE_LOCKS_REQUIRED(GetMutex()) EXCLUSIVE_LOCKS_REQUIRED(!m_best_header_snapshot_mutex);
+
+    //! Return the value context needed to run low-work headers sync.
+    std::optional<HeadersSyncStartSnapshot> FindHeadersSyncStart(const uint256& block_hash) const LOCKS_EXCLUDED(::cs_main);
+
+    //! Same as FindHeadersSyncStart(), for callers already holding cs_main.
+    std::optional<HeadersSyncStartSnapshot> FindHeadersSyncStartLocked(const uint256& block_hash) const EXCLUSIVE_LOCKS_REQUIRED(GetMutex());
+
+    //! Return copied active-chain block facts without exposing mutable CBlockIndex state.
+    std::optional<validation::ChainBlockSnapshot> ActiveChainBlockSnapshot(int height) const LOCKS_EXCLUDED(::cs_main);
+
+    //! Return copied active-tip chain-work facts.
+    std::optional<ChainWorkBlockSnapshot> ActiveTipChainWorkBlockSnapshot() const
+        LOCKS_EXCLUDED(::cs_main)
+        EXCLUSIVE_LOCKS_REQUIRED(!m_active_chain_snapshot_mutex);
+
+    //! Same as ActiveTipChainWorkBlockSnapshot(), for callers already holding cs_main.
+    std::optional<ChainWorkBlockSnapshot> ActiveTipChainWorkBlockSnapshotLocked() const EXCLUSIVE_LOCKS_REQUIRED(GetMutex());
+
+    //! Return a copied locator for the parent of a known block-index entry.
+    std::optional<ChainLocatorSnapshot> PreviousBlockLocatorSnapshot(const uint256& block_hash) const LOCKS_EXCLUDED(::cs_main);
+
+    //! Same as PreviousBlockLocatorSnapshot(), for callers already holding cs_main.
+    std::optional<ChainLocatorSnapshot> PreviousBlockLocatorSnapshotLocked(const uint256& block_hash) const EXCLUSIVE_LOCKS_REQUIRED(GetMutex());
+
+    //! Return a copied locator for a known block-index entry.
+    std::optional<ChainLocatorSnapshot> BlockLocatorSnapshot(const uint256& block_hash) const LOCKS_EXCLUDED(::cs_main);
+
+    //! Same as BlockLocatorSnapshot(), for callers already holding cs_main.
+    std::optional<ChainLocatorSnapshot> BlockLocatorSnapshotLocked(const uint256& block_hash) const EXCLUSIVE_LOCKS_REQUIRED(GetMutex());
+
+    //! Return copied active-tip work, if an active tip exists.
+    std::optional<arith_uint256> ActiveTipWork() const
+        LOCKS_EXCLUDED(::cs_main)
+        EXCLUSIVE_LOCKS_REQUIRED(!m_active_chain_snapshot_mutex);
+
+    //! Same as ActiveTipWork(), for callers already holding cs_main.
+    std::optional<arith_uint256> ActiveTipWorkLocked() const EXCLUSIVE_LOCKS_REQUIRED(GetMutex());
+
+    //! Return copied active-tip height, if an active tip exists.
+    std::optional<int> ActiveTipHeight() const
+        LOCKS_EXCLUDED(::cs_main)
+        EXCLUSIVE_LOCKS_REQUIRED(!m_active_chain_snapshot_mutex);
+
+    //! Same as ActiveTipHeight(), for callers already holding cs_main.
+    std::optional<int> ActiveTipHeightLocked() const EXCLUSIVE_LOCKS_REQUIRED(GetMutex());
+
+    //! Return copied active-tip hash, if an active tip exists.
+    std::optional<uint256> ActiveTipHash() const
+        LOCKS_EXCLUDED(::cs_main)
+        EXCLUSIVE_LOCKS_REQUIRED(!m_active_chain_snapshot_mutex);
+
+    //! Same as ActiveTipHash(), for callers already holding cs_main.
+    std::optional<uint256> ActiveTipHashLocked() const EXCLUSIVE_LOCKS_REQUIRED(GetMutex());
+
+    //! Return chain work for a known block-index entry.
+    std::optional<arith_uint256> BlockChainWork(const uint256& block_hash) const LOCKS_EXCLUDED(::cs_main);
+
+    //! Return copied chain-work facts for a known block-index entry.
+    std::optional<ChainWorkBlockSnapshot> FindChainWorkBlockSnapshot(const uint256& block_hash) const LOCKS_EXCLUDED(::cs_main);
+
+    //! Same as FindChainWorkBlockSnapshot(), for callers already holding cs_main.
+    std::optional<ChainWorkBlockSnapshot> FindChainWorkBlockSnapshotLocked(const uint256& block_hash) const EXCLUSIVE_LOCKS_REQUIRED(GetMutex());
+
+    //! Return copied context facts for a known block-index entry.
+    std::optional<KnownBlockContext> FindKnownBlockContext(const uint256& block_hash) const LOCKS_EXCLUDED(::cs_main);
+
+    //! Same as FindKnownBlockContext(), for callers already holding cs_main.
+    std::optional<KnownBlockContext> FindKnownBlockContextLocked(const uint256& block_hash) const EXCLUSIVE_LOCKS_REQUIRED(GetMutex());
+
+    //! Return whether a block is on the active chain.
+    bool ActiveChainContains(const CBlockIndex& block_index) const EXCLUSIVE_LOCKS_REQUIRED(GetMutex());
+
+    //! Return active-chain inventory hashes after a locator.
+    ActiveChainInventory FindActiveChainInventory(
+        const CBlockLocator& locator,
+        const uint256& stop_hash,
+        int max_hashes,
+        int pruned_block_depth) const LOCKS_EXCLUDED(::cs_main);
+
+    //! Return active-chain headers after a locator, or the stop-hash header for a null locator.
+    ActiveChainHeaders FindActiveChainHeaders(
+        const CBlockLocator& locator,
+        const uint256& stop_hash,
+        int max_headers,
+        int64_t stale_relay_age_seconds) const LOCKS_EXCLUDED(::cs_main);
+
+    //! Return copied facts needed to announce active-chain headers to a peer.
+    HeaderAnnouncementResponse FindHeaderAnnouncement(const HeaderAnnouncementRequest& request) const LOCKS_EXCLUDED(::cs_main);
+
+    //! Same as FindHeaderAnnouncement(), for callers already holding cs_main.
+    HeaderAnnouncementResponse FindHeaderAnnouncementLocked(const HeaderAnnouncementRequest& request) const EXCLUSIVE_LOCKS_REQUIRED(GetMutex());
+
+    //! Return copied facts needed after the active tip changes.
+    std::optional<BlockTipAnnouncementFacts> FindBlockTipAnnouncementFacts(
+        const uint256& new_tip_hash,
+        const std::optional<uint256>& fork_hash,
+        size_t max_announcements) const LOCKS_EXCLUDED(::cs_main);
+
+    //! Same as FindBlockTipAnnouncementFacts(), for callers already holding cs_main.
+    std::optional<BlockTipAnnouncementFacts> FindBlockTipAnnouncementFactsLocked(
+        const uint256& new_tip_hash,
+        const std::optional<uint256>& fork_hash,
+        size_t max_announcements) const EXCLUSIVE_LOCKS_REQUIRED(GetMutex());
+
+    //! Return whether a known block is an ancestor of the best header or active tip.
+    std::optional<bool> KnownBlockIsAncestorOfBestHeaderOrTip(const uint256& block_hash) const LOCKS_EXCLUDED(::cs_main);
+
+    //! Same as KnownBlockIsAncestorOfBestHeaderOrTip(), for callers already holding cs_main.
+    std::optional<bool> KnownBlockIsAncestorOfBestHeaderOrTipLocked(const uint256& block_hash) const EXCLUSIVE_LOCKS_REQUIRED(GetMutex());
+
+    //! Return whether a known header is already known to a peer's chain view.
+    bool KnownHeaderIsKnownToPeer(
+        const uint256& header_hash,
+        const std::optional<uint256>& peer_best_known_block,
+        const std::optional<uint256>& peer_best_header_sent) const LOCKS_EXCLUDED(::cs_main);
+
+    //! Same as KnownHeaderIsKnownToPeer(), for callers already holding cs_main.
+    bool KnownHeaderIsKnownToPeerLocked(
+        const uint256& header_hash,
+        const std::optional<uint256>& peer_best_known_block,
+        const std::optional<uint256>& peer_best_header_sent) const EXCLUSIVE_LOCKS_REQUIRED(GetMutex());
+
+    //! Return chain facts for the node-owned block download planner.
+    BlockDownloadCandidates FindBlockDownloadCandidatesLocked(
+        const uint256& best_known_hash,
+        const std::optional<uint256>& last_common_hash,
+        int download_window) const EXCLUSIVE_LOCKS_REQUIRED(GetMutex());
+
+    //! Return ordered block requests for direct fetching after a headers announcement.
+    HeadersDirectFetchPlan FindHeadersDirectFetchBlocksLocked(const HeadersDirectFetchRequest& request) const EXCLUSIVE_LOCKS_REQUIRED(GetMutex());
+
+    //! Return copied facts needed for compact-block reconstruction decisions.
+    std::optional<CompactBlockDownloadFacts> FindCompactBlockDownloadFactsLocked(const uint256& block_hash) const EXCLUSIVE_LOCKS_REQUIRED(GetMutex());
+
+    //! Return whether a known block is valid through transaction validity.
+    bool BlockValidTransactionsLocked(const uint256& block_hash) const EXCLUSIVE_LOCKS_REQUIRED(GetMutex());
+
+    //! Return copied facts needed to fast-announce a new PoW-valid block.
+    std::optional<PoWValidBlockAnnouncementFacts> FindPoWValidBlockAnnouncementFactsLocked(const uint256& block_hash) const EXCLUSIVE_LOCKS_REQUIRED(GetMutex());
+
+    //! Return copied facts needed for node block relay decisions.
+    std::optional<ChainBlockRelayFacts> FindBlockRelayFacts(const uint256& block_hash, int64_t stale_relay_age_seconds) const LOCKS_EXCLUDED(::cs_main);
+
+    //! Return whether block files are currently importing or being indexed.
+    bool LoadingBlocks() const { return m_blockman.LoadingBlocks(); }
+
+    //! Read stored block bytes by position.
+    //!
+    //! The position is a copied block-index fact. The read may fail if block
+    //! storage has been pruned or otherwise became unavailable after that fact
+    //! was copied.
+    RawBlockDataReadResult ReadRawBlockData(const FlatFilePos& pos);
+
+    //! Read a stored block by position and expected hash.
+    //!
+    //! The expected hash binds the copied block-index fact to the bytes read
+    //! from storage. The read may fail if the file was pruned or unavailable
+    //! after the caller copied the position.
+    bool ReadStoredBlock(CBlock& block, const FlatFilePos& pos, const uint256& expected_hash);
+
+    //! Return whether a block index entry is known.
+    bool HasBlockIndex(const uint256& block_hash) const LOCKS_EXCLUDED(::cs_main);
+
+    //! Same as HasBlockIndex(), for callers already holding cs_main.
+    bool HasBlockIndexLocked(const uint256& block_hash) const EXCLUSIVE_LOCKS_REQUIRED(GetMutex());
+
+    //! Return whether a known block is pruned.
+    bool IsBlockPruned(const uint256& block_hash) const LOCKS_EXCLUDED(::cs_main);
+
+    //! Return copied active-tip work minus a block-proof buffer.
+    std::optional<arith_uint256> ActiveTipWorkWithBlockProofBuffer(unsigned int block_proof_count) const
+        LOCKS_EXCLUDED(::cs_main)
+        EXCLUSIVE_LOCKS_REQUIRED(!m_active_chain_snapshot_mutex);
+
+    //! Same as ActiveTipWorkWithBlockProofBuffer(), for callers already holding cs_main.
+    std::optional<arith_uint256> ActiveTipWorkWithBlockProofBufferLocked(unsigned int block_proof_count) const EXCLUSIVE_LOCKS_REQUIRED(GetMutex());
+
+    //! Return whether the active-chain block at `height` has block data on disk.
+    bool HaveActiveChainBlockData(int height) const LOCKS_EXCLUDED(::cs_main);
+
+    //! Return whether all requested ancestors have block data on disk.
+    bool HaveBlocksOnDisk(const uint256& block_hash, int min_height, std::optional<int> max_height) const LOCKS_EXCLUDED(::cs_main);
+
+    //! Return whether any block files have ever been pruned.
+    bool HavePruned() const LOCKS_EXCLUDED(::cs_main);
+
+    //! Return the current prune height, if the active chain is pruned.
+    std::optional<int> PruneHeight() const LOCKS_EXCLUDED(::cs_main);
+
+    //! Return a copied active-chain UTXO, if unspent.
+    std::optional<Coin> GetUnspentOutput(const COutPoint& output) LOCKS_EXCLUDED(::cs_main);
+
+    //! Return the active-chain fork height named by `locator`, if any.
+    std::optional<int> FindLocatorForkHeight(const CBlockLocator& locator) const LOCKS_EXCLUDED(::cs_main);
+
+    ChainBlockQueryResult FindBlock(const uint256& block_hash, const ChainBlockQuery& query) const LOCKS_EXCLUDED(::cs_main);
+    ChainBlockQueryResult FindFirstBlockWithTimeAndHeight(int64_t min_time, int min_height, const ChainBlockQuery& query) const LOCKS_EXCLUDED(::cs_main);
+    ChainBlockQueryResult FindAncestorByHeight(const uint256& block_hash, int ancestor_height, const ChainBlockQuery& query) const LOCKS_EXCLUDED(::cs_main);
+    ChainBlockQueryResult FindAncestorByHash(const uint256& block_hash, const uint256& ancestor_hash, const ChainBlockQuery& query) const LOCKS_EXCLUDED(::cs_main);
+    ChainCommonAncestorQueryResult FindCommonAncestor(
+        const uint256& block_hash1,
+        const uint256& block_hash2,
+        const ChainBlockQuery& ancestor_query,
+        const ChainBlockQuery& block1_query,
+        const ChainBlockQuery& block2_query) const LOCKS_EXCLUDED(::cs_main);
+
     /**
      * Update and possibly latch the IBD status.
      *
@@ -622,6 +1074,14 @@ public:
      * `ImportBlocks()` finishes).
      */
     void UpdateIBDStatus() EXCLUSIVE_LOCKS_REQUIRED(cs_main);
+
+    void UpdateActiveTipSnapshot(const CBlockIndex* tip)
+        EXCLUSIVE_LOCKS_REQUIRED(::cs_main)
+        EXCLUSIVE_LOCKS_REQUIRED(!m_active_chain_snapshot_mutex);
+
+    void UpdateBestHeaderSnapshot(const CBlockIndex* header)
+        EXCLUSIVE_LOCKS_REQUIRED(::cs_main)
+        EXCLUSIVE_LOCKS_REQUIRED(!m_best_header_snapshot_mutex);
 
     kernel::BlockMap& BlockIndex() EXCLUSIVE_LOCKS_REQUIRED(::cs_main)
     {
@@ -639,6 +1099,8 @@ public:
 
     /** Guess verification progress (as a fraction between 0.0=genesis and 1.0=current tip). */
     double GuessVerificationProgress(const CBlockIndex* pindex) const EXCLUSIVE_LOCKS_REQUIRED(GetMutex());
+    double GuessVerificationProgressForActiveTip() const LOCKS_EXCLUDED(::cs_main);
+    double GuessVerificationProgress(const uint256& block_hash) const LOCKS_EXCLUDED(::cs_main);
 
     /**
      * Import blocks from an external file
@@ -674,7 +1136,9 @@ public:
     void ReceivedBlockTransactions(const CBlock& block, CBlockIndex* pindexNew, const FlatFilePos& pos) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
 
     //! Load the block tree and coins database from disk, initializing state if we're running with -reindex
-    bool LoadBlockIndex() EXCLUSIVE_LOCKS_REQUIRED(cs_main);
+    bool LoadBlockIndex()
+        EXCLUSIVE_LOCKS_REQUIRED(cs_main)
+        EXCLUSIVE_LOCKS_REQUIRED(!m_best_header_snapshot_mutex);
 
     //! Check to see if caches are out of balance and if so, call
     //! ResizeCoinsCaches() as needed.
@@ -686,7 +1150,10 @@ public:
      *  information. */
     void ReportHeadersPresync(int64_t height, int64_t timestamp);
 
-    void ResetChainstates() EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
+    void ResetChainstates()
+        EXCLUSIVE_LOCKS_REQUIRED(::cs_main)
+        EXCLUSIVE_LOCKS_REQUIRED(!m_active_chain_snapshot_mutex)
+        EXCLUSIVE_LOCKS_REQUIRED(!m_best_header_snapshot_mutex);
 
     //! Call ActivateBestChain() on the chainstate.
     util::Result<void> ActivateBestChains(ChainstateEventSink* chain_events = nullptr) LOCKS_EXCLUDED(::cs_main);
@@ -694,7 +1161,9 @@ public:
     //! If, due to invalidation / reconsideration of blocks, the previous
     //! best header is no longer valid / guaranteed to be the most-work
     //! header in our block-index not known to be invalid, recalculate it.
-    void RecalculateBestHeader() EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
+    void RecalculateBestHeader()
+        EXCLUSIVE_LOCKS_REQUIRED(::cs_main)
+        EXCLUSIVE_LOCKS_REQUIRED(!m_best_header_snapshot_mutex);
 
     //! Returns how many blocks the best header is ahead of the current tip,
     //! or nullopt if the best header does not extend the tip.
@@ -711,19 +1180,19 @@ public:
 };
 
 /** Deployment* info via ChainstateManager */
-template<typename DEP>
+template <typename DEP>
 bool DeploymentActiveAfter(const CBlockIndex* pindexPrev, const ChainstateManager& chainman, DEP dep)
 {
     return DeploymentActiveAfter(pindexPrev, chainman.GetConsensus(), dep, chainman.m_versionbitscache);
 }
 
-template<typename DEP>
+template <typename DEP>
 bool DeploymentActiveAt(const CBlockIndex& index, const ChainstateManager& chainman, DEP dep)
 {
     return DeploymentActiveAt(index, chainman.GetConsensus(), dep, chainman.m_versionbitscache);
 }
 
-template<typename DEP>
+template <typename DEP>
 bool DeploymentEnabled(const ChainstateManager& chainman, DEP dep)
 {
     return DeploymentEnabled(chainman.GetConsensus(), dep);

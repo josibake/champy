@@ -9,14 +9,15 @@
 #include <consensus/amount.h>
 #include <consensus/block_check.h>
 #include <consensus/params.h>
+#include <validation/block_index_snapshot.h>
+#include <validation/block_data_admission.h>
 #include <validation_state.h>
 #include <primitives/block.h>
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <span>
-
-class CBlockIndex;
 
 struct FlatFilePos;
 
@@ -39,24 +40,19 @@ struct BlockValidationTime {
 [[nodiscard]] BlockValidationTime CurrentBlockValidationTime();
 
 struct BlockAcceptanceOptions {
-    bool block_data_requested{false};
+    BlockDataStorageMode block_data_storage{BlockDataStorageMode::ApplyAdmissionChecks};
     const FlatFilePos* existing_block_pos{nullptr};
     BlockHeaderAcceptanceOptions header{};
 };
 
 struct NewBlockProcessingOptions {
-    bool force_processing{false};
+    BlockDataStorageMode block_data_storage{BlockDataStorageMode::ApplyAdmissionChecks};
     BlockHeaderAcceptanceOptions header{};
-};
-
-struct BlockHeaderAcceptanceResult {
-    bool accepted{false};
-    CBlockIndex* block_index{nullptr};
 };
 
 struct NewBlockHeadersResult {
     bool accepted{false};
-    const CBlockIndex* last_accepted{nullptr};
+    std::optional<AcceptedBlockHeaderSnapshot> last_accepted{};
 };
 
 enum class BlockAcceptanceStatus {
@@ -73,7 +69,7 @@ enum class BlockAcceptanceStatus {
 
 struct BlockAcceptanceResult {
     BlockAcceptanceStatus status{BlockAcceptanceStatus::HeaderRejected};
-    CBlockIndex* block_index{nullptr};
+    std::optional<ChainWorkBlockSnapshot> block{};
 
     [[nodiscard]] bool accepted_for_processing() const noexcept
     {

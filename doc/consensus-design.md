@@ -42,6 +42,10 @@ Validation integrates consensus rules with Core state. It owns:
 
 Validation should pass explicit facts or narrow capabilities into consensus. It
 should not make consensus code pull from Core runtime state.
+Runtime notifications are sent through validation event capabilities, not from
+consensus code.
+Serialized Core chainstate work is entered through a commit-executor
+capability.
 
 ### Core Storage Adapters
 
@@ -57,6 +61,9 @@ This target adapts the current Core runtime to validation interfaces:
 
 LevelDB, block files, the block index, and `CCoinsViewCache` are default Core
 implementations. They are not consensus abstractions.
+
+Node block relay reads stored block data through `ChainstateManager` helpers.
+Those helpers currently use Core's default block storage implementation.
 
 ### Kernel
 
@@ -108,6 +115,8 @@ Consensus entry points receive value-shaped context:
 - `BlockContextualConsensusOptions`
 - `BlockSpendConsensusOptions`
 - `BlockCommitContext`
+- `ChainWorkBlockSnapshot`
+- `AcceptedBlockHeaderSnapshot`
 
 Core-specific state is converted into these values in validation adapters.
 Protocol values should not carry hidden validation cache state.
@@ -133,6 +142,7 @@ Script execution is handled by `BlockScriptChecker`:
 - `DirectBlockScriptChecker` is useful for tests and fixtures.
 - `CoreBlockScriptChecker` adapts Core's cache and check queue.
 
+Core supplies script execution through a `ScriptCheckScheduler` capability.
 Script execution is separate from spend accounting.
 
 ### Effects Then Commit
@@ -151,10 +161,10 @@ This keeps validation review separate from mutation review.
 
 ### Chain Events
 
-Validation reports chain events through `ChainstateEventSink`.
+Validation reports value batches through `ChainstateEventSink`.
 
 `node::MempoolChainSync` implements mempool repair in node. Validation does not
-own mempool policy or mempool state.
+own mempool policy, mempool state, or mempool locking.
 
 ## Placement Rules
 

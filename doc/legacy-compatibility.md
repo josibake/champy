@@ -12,6 +12,8 @@ Some validation requests still carry broad Core objects or runtime capabilities
 such as `CBlockIndex`. `ChainValidationService` still wraps
 `ChainstateManager`, but internal block/header admission now receives a
 `CoreChainValidationContext`.
+Header and block admission results return copied snapshots, not live
+`CBlockIndex` pointers.
 
 Current role:
 
@@ -31,6 +33,14 @@ of a raw `CCoinsViewCache`.
 Other validation paths still use broader adapters while admission, replay, and
 verification are being kept behavior-compatible.
 
+Validation-interface notifications are emitted through `ValidationEventQueue`.
+The remaining direct `ValidationSignals` use in chainstate is queue backpressure
+compatibility (`LimitValidationInterfaceQueue`), not event publication.
+
+`CoreValidationCommitExecutor` currently wraps the existing chainstate mutex and
+`cs_main` locking model. It is an explicit compatibility boundary, not a new
+lock design.
+
 ## `cs_main`
 
 `cs_main` still protects broad parts of chain validation.
@@ -47,24 +57,40 @@ Target:
 - serialize commit explicitly
 - publish node events after commit and outside broad locks where possible
 
+`ChainstateManager::ActiveChain()` still exposes the mutable `CChain` for
+legacy callers. `ChainstateManager::m_best_header` is also still exposed as a
+mutable block-index pointer. New read-only callers should prefer copied
+active-tip, best-header, and block-index query snapshots. New active-tip or
+best-header mutations should go through the ChainstateManager helpers so
+snapshots stay synchronized with the committed Core state.
+
 ## `ChainstateEventSink`
 
 `ChainstateEventSink` is a generic validation-to-node event boundary, but its
-current lock shape still reflects Core's mempool repair path. The interface no
-longer passes `Chainstate` or `CCoinsViewCache`; node-owned implementations
-bind any Core state they need at construction.
+current event set still reflects Core's mempool repair path. The interface no
+longer passes `Chainstate`, `CCoinsViewCache`, or a node-owned mutex;
+node-owned implementations bind any Core state they need at construction.
 
 Current role:
 
 - keep mempool repair behavior stable during chain activation and invalidation
-- hold `cs_main` and `CTxMemPool::cs` across legacy reorg repair
+- buffer activation reorg events under `cs_main`, then apply them under the
+  node event sink before `cs_main` is released
+- buffer invalidation repair events and let node apply each repair batch
 - let validation report chain events without owning mempool policy
+- let the node event sink lock `CTxMemPool::cs` internally
 
 Target:
 
-- replace the dynamic event mutex with explicit execution/commit contracts
+- replace mempool-specific event values with explicit execution/commit contracts
 - publish node events from a narrower post-commit boundary
 - keep mempool-specific replay and repair entirely in node orchestration
+
+Straight connects no longer hold the mempool lock across block connection.
+Activation reorgs use an in-memory event batch instead of holding the mempool
+lock across script work. Invalidation now batches each disconnect-and-repair
+step, but it still runs synchronously under `cs_main` until node owns an
+explicit reorg repair executor or epoch.
 
 ## Legacy Script Reject Reasons
 
@@ -76,8 +102,8 @@ the adapter boundary.
 
 ## Block Data Admission
 
-`AcceptBlock` still carries block-download policy through
-`BlockAcceptanceOptions::block_data_requested`.
+`AcceptBlock` still accepts forced block-data storage through
+`BlockAcceptanceOptions::block_data_storage`.
 
 Current role:
 
@@ -86,7 +112,8 @@ Current role:
 
 Target:
 
-- replace the policy flag with a validation-facing chain-candidate query
+- replace `BlockDataStorageMode::ForceStore` with a validation-facing
+  chain-candidate query where possible
 - keep download/orphan/peer policy in node orchestration
 
 ## Mixed Storage Flush
@@ -107,18 +134,28 @@ Target:
 
 ## Script Cache Locking
 
-Script-cache lookup still requires `cs_main` because Core's CuckooCache is
-externally synchronized.
+Script-cache lookup no longer requires `cs_main`. `ValidationCache` owns a
+dedicated script-execution-cache mutex, and `CoreScriptValidationCache` exposes
+the narrow lookup/store capability used by script checking.
 
 Current role:
 
 - preserve script-cache behavior and validation-cache sharing
 - keep cache lookup/store operations behind `CoreScriptValidationCache`
+- keep Core's current `CCheckQueue` behind `ScriptCheckScheduler`
+- keep legacy `CheckInputScripts` compatible with callers that read Core's live
+  coins view under `cs_main`
 
 Target:
 
-- give script execution an explicit cache capability with its own lock contract
-- remove `cs_main` from script-cache-only paths
+- finish separating block connection so queued script completion can run outside
+  broad chain locks
+- keep script scheduling behind an explicit runtime capability
+
+Queued script completion may temporarily release `cs_main` through
+`CoreChainLock`. The helper uses `NO_THREAD_SAFETY_ANALYSIS` because Clang
+cannot model the indirect `UniqueLock` handoff, but it still uses
+`REVERSE_LOCK` so debug lock-order checks remain active.
 
 ## Roll-Forward Replay
 

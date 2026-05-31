@@ -22,20 +22,49 @@
 
 namespace node {
 
+void MempoolChainSync::ProcessEvents(const ChainstateEventBatch& events)
+{
+    AssertLockHeld(cs_main);
+    if (events.Empty()) return;
+
+    LOCK(m_mempool.cs);
+    for (const ChainstateEvent& event : events.Events()) {
+        switch (event.type) {
+        case ChainstateEventType::TransactionsUpdated:
+            TransactionsUpdated();
+            break;
+        case ChainstateEventType::CheckPostReorgState:
+            CheckPostReorgState(event.spend_height);
+            break;
+        case ChainstateEventType::BlockDisconnected:
+            BlockDisconnected(event.Block());
+            break;
+        case ChainstateEventType::BlockConnected:
+            BlockConnected(event.Block(), event.block_height);
+            break;
+        case ChainstateEventType::ReorgCompleted:
+            ReorgCompleted(event.restore_disconnected_transactions);
+            break;
+        }
+    }
+}
+
 void MempoolChainSync::TransactionsUpdated()
 {
     AssertLockHeld(cs_main);
+    AssertLockHeld(m_mempool.cs);
     m_mempool.AddTransactionsUpdated(1);
 }
 
 void MempoolChainSync::CheckPostReorgState(int64_t spend_height) const
 {
     AssertLockHeld(cs_main);
+    AssertLockHeld(m_mempool.cs);
     m_mempool.check(m_chainstate.CoinsTip(), spend_height);
 }
 
 void MempoolChainSync::BlockDisconnected(
-    const CBlock& block) NO_THREAD_SAFETY_ANALYSIS
+    const CBlock& block)
 {
     AssertLockHeld(cs_main);
     AssertLockHeld(m_mempool.cs);
@@ -49,7 +78,7 @@ void MempoolChainSync::BlockDisconnected(
 
 void MempoolChainSync::BlockConnected(
     const CBlock& block,
-    unsigned int block_height) NO_THREAD_SAFETY_ANALYSIS
+    unsigned int block_height)
 {
     AssertLockHeld(cs_main);
     AssertLockHeld(m_mempool.cs);
@@ -59,7 +88,7 @@ void MempoolChainSync::BlockConnected(
 }
 
 void MempoolChainSync::ReorgCompleted(
-    bool restore_disconnected_transactions) NO_THREAD_SAFETY_ANALYSIS
+    bool restore_disconnected_transactions)
 {
     AssertLockHeld(cs_main);
     AssertLockHeld(m_mempool.cs);

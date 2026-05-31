@@ -8,8 +8,10 @@
 #include <validation/block_index_adapters.h>
 #include <validation/block_connection.h>
 #include <validation/block_connection_trace.h>
+#include <validation/block_script_check_adapters.h>
 #include <validation/core_coins_block_connection_state.h>
 #include <chain.h>
+#include <chainstate.h>
 #include <chainparams.h>
 #include <coins.h>
 #include <consensus/merkle.h>
@@ -21,6 +23,7 @@
 #include <kernel/notifications_interface.h>
 #include <primitives/transaction.h>
 #include <script/script.h>
+#include <script/script_error.h>
 #include <sync.h>
 #include <test/util/setup_common.h>
 #include <uint256.h>
@@ -28,6 +31,7 @@
 #include <validation_state.h>
 
 #include <memory>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -168,6 +172,100 @@ CBlock MakeBlock(const uint256& previous_block, CAmount coinbase_value, std::vec
 } // namespace
 
 BOOST_FIXTURE_TEST_SUITE(block_validation_adapters_tests, BasicTestingSetup)
+
+BOOST_AUTO_TEST_CASE(core_script_validation_cache_is_not_cs_main_locked)
+{
+    AssertLockNotHeld(::cs_main);
+
+    ValidationCache validation_cache{/*script_execution_cache_bytes=*/1024 * 1024, /*signature_cache_bytes=*/1024 * 1024};
+    CoreScriptValidationCache script_cache{validation_cache};
+    const CTransactionRef tx{MakeSpendTx(COutPoint{Txid::FromUint256(uint256::ONE), 0}, /*value=*/39)};
+    const uint256 entry{script_cache.ExecutionCacheEntry(*tx, script_verify_flags{})};
+
+    BOOST_CHECK(!script_cache.ContainsScriptExecution(entry, /*erase=*/false));
+    script_cache.StoreScriptExecution(entry);
+    BOOST_CHECK(script_cache.ContainsScriptExecution(entry, /*erase=*/false));
+}
+
+BOOST_AUTO_TEST_CASE(core_block_script_checker_runs_from_prepared_outputs_without_cs_main)
+{
+    AssertLockNotHeld(::cs_main);
+
+    ValidationCache validation_cache{/*script_execution_cache_bytes=*/1024 * 1024, /*signature_cache_bytes=*/1024 * 1024};
+    CCheckQueue<CScriptCheck> script_check_queue{/*batch_size=*/128, /*worker_threads_num=*/0};
+    validation::CCheckQueueScriptCheckScheduler script_check_scheduler{script_check_queue};
+    CoreBlockScriptChecks script_checks{
+        script_check_scheduler,
+        /*run_checks=*/true,
+        /*cache_results=*/true,
+        validation_cache};
+
+    const CTransactionRef tx{MakeSpendTx(COutPoint{Txid::FromUint256(uint256::ONE), 0}, /*value=*/39)};
+    Consensus::TransactionScriptCheckPlan plan{
+        .tx = tx,
+        .flags = script_verify_flags{},
+        .spent_outputs = {CTxOut{40, CScript{} << OP_TRUE}},
+    };
+
+    BOOST_REQUIRE(script_checks.Checker().Check(plan));
+    BOOST_REQUIRE(script_checks.Checker().Complete());
+}
+
+BOOST_AUTO_TEST_CASE(core_block_script_checker_preserves_failure_reason_without_cs_main)
+{
+    AssertLockNotHeld(::cs_main);
+
+    ValidationCache validation_cache{/*script_execution_cache_bytes=*/1024 * 1024, /*signature_cache_bytes=*/1024 * 1024};
+    CCheckQueue<CScriptCheck> script_check_queue{/*batch_size=*/128, /*worker_threads_num=*/0};
+    validation::CCheckQueueScriptCheckScheduler script_check_scheduler{script_check_queue};
+    CoreBlockScriptChecks script_checks{
+        script_check_scheduler,
+        /*run_checks=*/true,
+        /*cache_results=*/true,
+        validation_cache};
+
+    const CTransactionRef tx{MakeSpendTx(COutPoint{Txid::FromUint256(uint256::ONE), 0}, /*value=*/39)};
+    Consensus::TransactionScriptCheckPlan plan{
+        .tx = tx,
+        .flags = script_verify_flags{},
+        .spent_outputs = {CTxOut{40, CScript{} << OP_FALSE}},
+    };
+
+    const auto result{script_checks.Checker().Check(plan)};
+    BOOST_REQUIRE(!result);
+    BOOST_CHECK(result.error().issue == Consensus::BlockConsensusIssue::Consensus);
+    BOOST_CHECK_EQUAL(
+        result.error().reject_reason,
+        std::string{"block-script-verify-flag-failed ("} + ScriptErrorString(SCRIPT_ERR_EVAL_FALSE) + ")");
+}
+
+BOOST_AUTO_TEST_CASE(core_block_script_checker_reports_queued_failure_without_cs_main)
+{
+    AssertLockNotHeld(::cs_main);
+
+    ValidationCache validation_cache{/*script_execution_cache_bytes=*/1024 * 1024, /*signature_cache_bytes=*/1024 * 1024};
+    CCheckQueue<CScriptCheck> script_check_queue{/*batch_size=*/128, /*worker_threads_num=*/1};
+    validation::CCheckQueueScriptCheckScheduler script_check_scheduler{script_check_queue};
+    CoreBlockScriptChecks script_checks{
+        script_check_scheduler,
+        /*run_checks=*/true,
+        /*cache_results=*/true,
+        validation_cache};
+
+    const CTransactionRef tx{MakeSpendTx(COutPoint{Txid::FromUint256(uint256::ONE), 0}, /*value=*/39)};
+    Consensus::TransactionScriptCheckPlan plan{
+        .tx = tx,
+        .flags = script_verify_flags{},
+        .spent_outputs = {CTxOut{40, CScript{} << OP_FALSE}},
+    };
+
+    BOOST_REQUIRE(script_checks.Checker().Check(plan));
+    const auto result{script_checks.Checker().Complete()};
+    BOOST_REQUIRE(!result);
+    BOOST_CHECK_EQUAL(
+        result.error().reject_reason,
+        std::string{"block-script-verify-flag-failed ("} + ScriptErrorString(SCRIPT_ERR_EVAL_FALSE) + ")");
+}
 
 BOOST_AUTO_TEST_CASE(core_block_effects_writer_uses_storage_adapters)
 {

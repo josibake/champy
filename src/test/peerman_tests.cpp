@@ -29,7 +29,7 @@ static void mineBlock(const node::NodeContext& node, std::chrono::seconds block_
     SetMockTime(curr_time); // process block at current time
     Assert(ChainValidationService{*node.chainman}.ProcessNewBlock(
         std::make_shared<const CBlock>(block),
-        {.force_processing = true, .header = {.min_pow_checked = true}},
+        {.block_data_storage = BlockDataStorageMode::ForceStore, .header = {.min_pow_checked = true}},
         CurrentBlockValidationTime())
         .processed());
     node.validation_signals->SyncWithValidationInterfaceQueue(); // drain events queue

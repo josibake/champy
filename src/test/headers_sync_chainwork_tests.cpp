@@ -87,7 +87,13 @@ struct HeadersGeneratorSetup : public RegTestingSetup {
                     .commitment_period = COMMITMENT_PERIOD,
                     .redownload_buffer_size = REDOWNLOAD_BUFFER_SIZE,
                 },
-                chain_start,
+                HeadersSyncState::Start{
+                    .header = chain_start.GetBlockHeader(),
+                    .height = chain_start.nHeight,
+                    .chain_work = chain_start.nChainWork,
+                    .median_time_past = chain_start.GetMedianTimePast(),
+                    .locator = GetLocator(&chain_start),
+                },
                 /*minimum_required_work=*/CHAIN_WORK};
     }
 

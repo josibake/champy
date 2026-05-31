@@ -10,7 +10,7 @@ BlockDataAdmissionResult GetBlockDataAdmissionResult(const BlockDataAdmissionCon
         return BlockDataAdmissionResult::ALREADY_HAVE_DATA;
     }
 
-    if (context.block_data_requested) {
+    if (context.storage_mode == BlockDataStorageMode::ForceStore) {
         return BlockDataAdmissionResult::STORE_BLOCK_DATA;
     }
 

@@ -17,6 +17,7 @@ class CBlock;
 class CBlockIndex;
 class BlockUndoWriter;
 class BlockIndexValidityCommitter;
+class CoreChainLock;
 class ValidationCache;
 class uint256;
 
@@ -31,9 +32,10 @@ struct CoreBlockConnectionRuntimeInputs {
     kernel::Notifications& notifications;
     BlockUndoWriter& undo_writer;
     BlockIndexValidityCommitter& block_index_committer;
-    CCheckQueue<CScriptCheck>& script_check_queue;
+    validation::ScriptCheckScheduler& script_check_scheduler;
     ValidationCache& validation_cache;
     BlockConnectionTraceCounters trace_counters;
+    CoreChainLock* chain_lock{nullptr};
 };
 
 class CoreBlockConnectionSetup final {

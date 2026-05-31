@@ -109,12 +109,13 @@ void BenchmarkBlockConnectionEngine(benchmark::Bench& bench, std::vector<CKey>& 
         CCoinsViewCache viewNew{&chainstate.CoinsTip()};
         CoreBlockDataStore block_store{chainstate.m_blockman};
         CoreBlockIndexStore block_index_store{chainstate.m_chainman};
-        CoreChainValidationContext validation_context{chainstate.m_chainman};
+        CoreChainValidationRuntime validation_runtime{chainstate.m_chainman};
+        CoreChainValidationContext validation_context{chainstate.m_chainman, validation_runtime};
         const CoreBlockConnectionRuntimeInputs runtime_inputs{
             .notifications = validation_context.Notifications(),
             .undo_writer = block_store,
             .block_index_committer = block_index_store,
-            .script_check_queue = validation_context.ScriptCheckQueue(),
+            .script_check_scheduler = validation_context.ScriptCheckScheduler(),
             .validation_cache = validation_context.ScriptValidationCache(),
             .trace_counters = validation_context.TraceCounters(),
         };

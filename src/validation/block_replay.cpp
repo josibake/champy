@@ -5,13 +5,9 @@
 
 #include <validation/block_replay.h>
 
-#include <validation/block_coin_effects.h>
-#include <validation/block_data_adapters.h>
-#include <validation/block_index_adapters.h>
-
 #include <chain.h>
-#include <chainstate.h>
 #include <coins.h>
+#include <kernel/notifications_interface.h>
 #include <primitives/block.h>
 #include <primitives/transaction.h>
 #include <uint256.h>
@@ -19,6 +15,9 @@
 #include <util/check.h>
 #include <util/log.h>
 #include <util/translation.h>
+#include <validation/block_coin_effects.h>
+#include <validation/block_index.h>
+#include <validation/block_storage.h>
 
 #include <cassert>
 #include <vector>
@@ -89,12 +88,6 @@ DisconnectResult DisconnectBlock(BlockUndoReader& undo_reader, const CBlock& blo
     return fClean ? DISCONNECT_OK : DISCONNECT_UNCLEAN;
 }
 
-DisconnectResult DisconnectBlock(Chainstate& chainstate, const CBlock& block, const CBlockIndex* pindex, CCoinsViewCache& view)
-{
-    CoreBlockDataStore block_store{chainstate.m_blockman};
-    return DisconnectBlock(block_store, block, pindex, view);
-}
-
 bool RollforwardBlock(BlockDataReader& block_reader, const CBlockIndex* pindex, CCoinsViewCache& inputs)
 {
     AssertLockHeld(::cs_main);
@@ -108,33 +101,23 @@ bool RollforwardBlock(BlockDataReader& block_reader, const CBlockIndex* pindex, 
     return true;
 }
 
-bool RollforwardBlock(Chainstate& chainstate, const CBlockIndex* pindex, CCoinsViewCache& inputs)
+bool ReplayBlocks(const BlockReplayRequest& request)
 {
-    CoreBlockDataStore block_store{chainstate.m_blockman};
-    return RollforwardBlock(block_store, pindex, inputs);
-}
+    AssertLockHeld(::cs_main);
 
-bool ReplayBlocks(Chainstate& chainstate)
-{
-    LOCK(::cs_main);
-
-    CCoinsView& db = chainstate.CoinsDB();
-    CCoinsViewCache cache(&db);
-    CoreBlockDataStore block_store{chainstate.m_blockman};
-    CoreBlockIndexStore block_index{chainstate.m_chainman};
-
-    std::vector<uint256> hashHeads = db.GetHeadBlocks();
+    CCoinsViewCache cache(&request.coins_db);
+    std::vector<uint256> hashHeads = request.coins_db.GetHeadBlocks();
     if (hashHeads.empty()) return true;
     if (hashHeads.size() != 2) {
         LogError("ReplayBlocks(): unknown inconsistent state\n");
         return false;
     }
 
-    chainstate.m_chainman.GetNotifications().progress(_("Replaying blocks…"), 0, false);
+    request.notifications.progress(_("Replaying blocks…"), 0, false);
     LogInfo("Replaying blocks");
 
     const CBlockIndex* pindexOld = nullptr;
-    const CBlockIndex* pindexNew{block_index.LookupBlockIndex(hashHeads[0])};
+    const CBlockIndex* pindexNew{request.block_index.LookupBlockIndex(hashHeads[0])};
     const CBlockIndex* pindexFork = nullptr;
     if (!pindexNew) {
         LogError("ReplayBlocks(): reorganization to unknown block requested\n");
@@ -142,7 +125,7 @@ bool ReplayBlocks(Chainstate& chainstate)
     }
 
     if (!hashHeads[1].IsNull()) {
-        pindexOld = block_index.LookupBlockIndex(hashHeads[1]);
+        pindexOld = request.block_index.LookupBlockIndex(hashHeads[1]);
         if (!pindexOld) {
             LogError("ReplayBlocks(): reorganization from unknown block requested\n");
             return false;
@@ -157,14 +140,14 @@ bool ReplayBlocks(Chainstate& chainstate)
         while (pindexOld != pindexFork) {
             if (pindexOld->nHeight > 0) {
                 CBlock block;
-                if (!block_store.ReadBlock(block, *pindexOld)) {
+                if (!request.block_reader.ReadBlock(block, *pindexOld)) {
                     LogError("RollbackBlock(): ReadBlock() failed at %d, hash=%s\n", pindexOld->nHeight, pindexOld->GetBlockHash().ToString());
                     return false;
                 }
                 if (pindexOld->nHeight % 10'000 == 0) {
                     LogInfo("Rolling back %s (%i)", pindexOld->GetBlockHash().ToString(), pindexOld->nHeight);
                 }
-                const DisconnectResult disconnect_result{DisconnectBlock(block_store, block, pindexOld, cache)};
+                const DisconnectResult disconnect_result{DisconnectBlock(request.undo_reader, block, pindexOld, cache)};
                 if (disconnect_result == DISCONNECT_FAILED) {
                     LogError("RollbackBlock(): DisconnectBlock failed at %d, hash=%s\n", pindexOld->nHeight, pindexOld->GetBlockHash().ToString());
                     return false;
@@ -185,14 +168,14 @@ bool ReplayBlocks(Chainstate& chainstate)
             if (height % 10'000 == 0) {
                 LogInfo("Rolling forward %s (%i)", pindex.GetBlockHash().ToString(), height);
             }
-            chainstate.m_chainman.GetNotifications().progress(_("Replaying blocks…"), (int)((height - fork_height) * 100.0 / (pindexNew->nHeight - fork_height)), false);
-            if (!RollforwardBlock(block_store, &pindex, cache)) return false;
+            request.notifications.progress(_("Replaying blocks…"), (int)((height - fork_height) * 100.0 / (pindexNew->nHeight - fork_height)), false);
+            if (!RollforwardBlock(request.block_reader, &pindex, cache)) return false;
         }
         LogInfo("Rolled forward to %s", pindexNew->GetBlockHash().ToString());
     }
 
     cache.SetBestBlock(pindexNew->GetBlockHash());
     cache.Flush(/*reallocate_cache=*/false);
-    chainstate.m_chainman.GetNotifications().progress(bilingual_str{}, 100, false);
+    request.notifications.progress(bilingual_str{}, 100, false);
     return true;
 }
