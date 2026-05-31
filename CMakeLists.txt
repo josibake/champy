@@ -105,13 +105,7 @@ if(WITH_USDT)
   find_package(USDT MODULE REQUIRED)
 endif()
 
-option(WITH_EXTERNAL_LIBMULTIPROCESS "Build with an externally provided libmultiprocess package." OFF)
-if(WITH_EXTERNAL_LIBMULTIPROCESS)
-  find_package(Libmultiprocess REQUIRED COMPONENTS Lib)
-  find_package(LibmultiprocessNative REQUIRED COMPONENTS Bin
-    NAMES Libmultiprocess
-  )
-endif()
+find_package(CapnProto REQUIRED)
 
 option(BUILD_BENCH "Build bench_bitcoin executable." OFF)
 option(BUILD_FUZZ_BINARY "Build fuzz binary." OFF)
