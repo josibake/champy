@@ -19,6 +19,9 @@ add_executable(test_bitcoin
   bip32_tests.cpp
   bip324_tests.cpp
   blockchain_tests.cpp
+  block_download_tracker_tests.cpp
+  block_inflight_index_tests.cpp
+  block_download_planner_tests.cpp
   block_validation_adapters_tests.cpp
   blockencodings_tests.cpp
   blockmanager_tests.cpp

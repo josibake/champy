@@ -319,6 +319,9 @@ add_library(bitcoin_node STATIC EXCLUDE_FROM_ALL
   net_processing.cpp
   netgroup.cpp
   node/abort.cpp
+  node/block_download_tracker.cpp
+  node/block_inflight_index.cpp
+  node/block_download_planner.cpp
   node/blockmanager_args.cpp
   node/caches.cpp
   node/chainstatemanager_args.cpp
