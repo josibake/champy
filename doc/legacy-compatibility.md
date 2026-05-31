@@ -119,7 +119,8 @@ Target:
 ## Mixed Storage Flush
 
 `FlushStateToDisk()` still flushes block storage and chainstate storage through
-one validation call.
+one Core runtime operation. Validation reaches it through
+`ChainstateManager::FlushActiveChainstateToDisk()`.
 
 Current role:
 
@@ -128,7 +129,6 @@ Current role:
 
 Target:
 
-- move mixed storage coordination behind a ChainstateManager/runtime boundary
 - let alternate storage implementations make equivalent flush decisions
   without changing consensus code
 

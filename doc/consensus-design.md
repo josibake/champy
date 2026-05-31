@@ -182,9 +182,10 @@ recovery boundary.
 
 ## Current Limits
 
-`bitcoin_consensus` installs an experimental static library and public header
-closure, but it is not a supported external package yet. It still needs package
-export metadata, versioning, and dependency export rules.
+`bitcoin_consensus` installs an experimental static library, public header
+closure, and pkg-config metadata. It is not a supported external package yet.
+It still needs a stable API/versioning decision and external conformance
+coverage before it should be treated as a public contract.
 
 Kernel still uses Core's default LevelDB/block-file/block-index runtime
 internally. That is acceptable as a default implementation, but alternate

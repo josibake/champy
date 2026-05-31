@@ -459,11 +459,8 @@ BlockAcceptanceResult AcceptBlock(CoreChainValidationContext& context, const std
 
     // Compatibility note: node code still decides when to force block-data
     // storage for downloaded blocks; see doc/legacy-compatibility.md.
-    // TODO: Replace ForceStore with a chain-candidate query.
-    // This requires some new chain data structure to efficiently look up if a
-    // block is in a chain leading to a candidate for best tip, despite not
-    // being such a candidate itself.
-    // Note that this would break the getblockfrompeer RPC
+    // Keep ForceStore until node can ask validation whether a block is in a
+    // chain leading to a candidate tip without breaking getblockfrompeer.
 
     const CBlockIndex* active_tip{context.ActiveTip()};
     const BlockDataAdmissionResult block_data_admission{GetBlockDataAdmissionResult({
@@ -501,10 +498,8 @@ BlockAcceptanceResult AcceptBlock(CoreChainValidationContext& context, const std
         return {.status = BlockAcceptanceStatus::StorageFailed, .block = accepted_block};
     }
 
-    // Compatibility note: FlushStateToDisk() still handles both block and
-    // chainstate data; see doc/legacy-compatibility.md.
-    // TODO: Move mixed flushing to ChainstateManager so it can make an explicit
-    // storage decision.
+    // Compatibility note: Core's runtime still handles mixed block and
+    // chainstate flush decisions; see doc/legacy-compatibility.md.
     // For now, since FlushStateMode::NONE is used, all that can happen is that
     // the block files may be pruned, so we can just call this on one
     // chainstate (particularly if we haven't implemented pruning with

@@ -73,7 +73,7 @@ FUZZ_TARGET(process_message, .init = initialize_process_message)
     auto& connman{static_cast<ConnmanTestMsg&>(*node.connman)};
     connman.Reset();
     auto& chainman{static_cast<TestChainstateManager&>(*node.chainman)};
-    const auto block_index_size{WITH_LOCK(chainman.GetMutex(), return chainman.BlockIndex().size())};
+    const auto block_index_size{WITH_LOCK(chainman.GetMutex(), return chainman.BlockIndexSizeLocked())};
     NodeClockContext clock_ctx{1610000000s}; // any time to successfully reset ibd
     chainman.ResetIbd();
     chainman.DisableNextWrite();
@@ -128,7 +128,7 @@ FUZZ_TARGET(process_message, .init = initialize_process_message)
     node.validation_signals->SyncWithValidationInterfaceQueue();
     node.validation_signals->UnregisterValidationInterface(node.peerman.get());
     node.connman->StopNodes();
-    if (block_index_size != WITH_LOCK(chainman.GetMutex(), return chainman.BlockIndex().size())) {
+    if (block_index_size != WITH_LOCK(chainman.GetMutex(), return chainman.BlockIndexSizeLocked())) {
         // Reuse the global chainman, but reset it when it is dirty
         ResetChainman(*g_setup);
     }

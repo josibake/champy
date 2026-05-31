@@ -732,7 +732,12 @@ protected:
 
 public:
     using Options = kernel::ChainstateManagerOpts;
-    using RawBlockDataReadResult = util::Expected<std::vector<std::byte>, kernel::ReadRawError>;
+
+    enum class RawBlockDataReadError {
+        IO,
+        BadPartRange,
+    };
+    using RawBlockDataReadResult = util::Expected<std::vector<std::byte>, RawBlockDataReadError>;
 
     explicit ChainstateManager(const util::SignalInterrupt& interrupt, Options options, kernel::BlockManager::Options blockman_options);
 
@@ -1022,6 +1027,9 @@ public:
     //! Same as HasBlockIndex(), for callers already holding cs_main.
     bool HasBlockIndexLocked(const uint256& block_hash) const EXCLUSIVE_LOCKS_REQUIRED(GetMutex());
 
+    //! Return whether any block index entry is known.
+    bool HasAnyBlockIndexLocked() const EXCLUSIVE_LOCKS_REQUIRED(GetMutex());
+
     //! Return whether a known block is pruned.
     bool IsBlockPruned(const uint256& block_hash) const LOCKS_EXCLUDED(::cs_main);
 
@@ -1083,11 +1091,7 @@ public:
         EXCLUSIVE_LOCKS_REQUIRED(::cs_main)
         EXCLUSIVE_LOCKS_REQUIRED(!m_best_header_snapshot_mutex);
 
-    kernel::BlockMap& BlockIndex() EXCLUSIVE_LOCKS_REQUIRED(::cs_main)
-    {
-        AssertLockHeld(::cs_main);
-        return m_blockman.m_block_index;
-    }
+    size_t BlockIndexSizeLocked() const EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
 
     /**
      * Track versionbit status
@@ -1168,6 +1172,12 @@ public:
     //! Returns how many blocks the best header is ahead of the current tip,
     //! or nullopt if the best header does not extend the tip.
     std::optional<int> BlocksAheadOfTip() const LOCKS_EXCLUDED(::cs_main);
+
+    //! Flush Core's active chainstate through the runtime boundary.
+    bool FlushActiveChainstateToDisk(BlockValidationState& state, FlushStateMode mode) EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
+
+    //! Flush Core's active chainstate if cache pressure requires it.
+    bool FlushActiveChainstateIfNeeded(BlockValidationState& state, ExternalCacheUsage external_cache_usage) EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
 
     CCheckQueue<CScriptCheck>& GetCheckQueue() { return m_script_check_queue; }
 

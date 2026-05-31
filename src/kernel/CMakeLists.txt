@@ -4,10 +4,8 @@
 
 include(GNUInstallDirs)
 
-# TODO: libbitcoinkernel is a work in progress consensus engine
-#       library, as more and more modules are decoupled from the
-#       consensus engine, this list will shrink to only those
-#       which are absolutely necessary.
+# libbitcoinkernel is Core's embeddable runtime. Keep node-only code out of
+# this target as validation and consensus boundaries continue to narrow.
 add_library(bitcoinkernel
   bitcoinkernel.cpp
   blockimport.cpp

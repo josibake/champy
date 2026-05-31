@@ -44,6 +44,7 @@ foreach(path IN LISTS kernel_sources)
 endforeach()
 
 forbid_text("src/kernel/CMakeLists.txt" "../node/")
+forbid_text("src/kernel/chainstate_load.cpp" "m_blockman.LookupBlockIndex(")
 
 foreach(needle IN ITEMS
     "CTxMemPool"

@@ -136,6 +136,8 @@ install(TARGETS bitcoin_consensus
   LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR} COMPONENT bitcoin_consensus
   ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR} COMPONENT bitcoin_consensus
 )
+configure_file(${PROJECT_SOURCE_DIR}/libbitcoinconsensus.pc.in ${PROJECT_BINARY_DIR}/libbitcoinconsensus.pc @ONLY)
+install(FILES ${PROJECT_BINARY_DIR}/libbitcoinconsensus.pc DESTINATION "${CMAKE_INSTALL_LIBDIR}/pkgconfig" COMPONENT bitcoin_consensus)
 foreach(header IN LISTS BITCOIN_CONSENSUS_INSTALL_HEADERS)
   get_filename_component(header_directory "${header}" DIRECTORY)
   if(header_directory STREQUAL "")

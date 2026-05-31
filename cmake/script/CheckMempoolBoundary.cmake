@@ -186,6 +186,8 @@ foreach(relative_path IN ITEMS
   forbid_text("${relative_path}" "TxValidationResult")
 endforeach()
 
+forbid_text("src/node/mempool_validation.cpp" "m_blockman.LookupBlockIndex(")
+
 foreach(relative_path IN ITEMS
     src/kernel/bitcoinkernel.cpp
     src/kernel/bitcoinkernel.h

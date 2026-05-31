@@ -115,12 +115,12 @@ void CoreChainValidationContext::AdvanceActiveChainTip(CBlockIndex& block_index,
 
 bool CoreChainValidationContext::FlushActiveChainstateToDisk(BlockValidationState& state, FlushStateMode mode) const
 {
-    return m_chainman.ActiveChainstate().FlushStateToDisk(state, mode);
+    return m_chainman.FlushActiveChainstateToDisk(state, mode);
 }
 
 bool CoreChainValidationContext::FlushActiveChainstateIfNeeded(BlockValidationState& state, ExternalCacheUsage external_cache_usage) const
 {
-    return m_chainman.ActiveChainstate().FlushStateToDisk(state, FlushStateMode::IF_NEEDED, /*nManualPruneHeight=*/0, external_cache_usage);
+    return m_chainman.FlushActiveChainstateIfNeeded(state, external_cache_usage);
 }
 
 bool CoreChainValidationContext::ActivateBestChain(BlockValidationState& state, const std::shared_ptr<const CBlock>& block, ChainstateEventSink* chain_events) const

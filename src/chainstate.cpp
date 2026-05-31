@@ -506,10 +506,8 @@ bool Chainstate::FlushStateToDisk(
                 LOG_TIME_MILLIS_WITH_CATEGORY("write block and undo data to disk", BCLog::BENCH);
 
                 // First make sure all block and undo data is flushed to disk.
-                // TODO: Handle return error, or add detailed comment why it is
-                // safe to not return an error upon failure.
                 if (!m_blockman.FlushChainstateBlockFile(m_chain.Height())) {
-                    LogWarning("%s: Failed to flush block file.\n", __func__);
+                    return state.Error(_("Flushing block file to disk failed. This is likely the result of an I/O error.").original);
                 }
             }
 
@@ -2055,6 +2053,22 @@ Chainstate& ChainstateManager::ActiveChainstate() const
     return *m_chainstate;
 }
 
+bool ChainstateManager::FlushActiveChainstateToDisk(BlockValidationState& state, FlushStateMode mode)
+{
+    AssertLockHeld(::cs_main);
+    return Assert(m_chainstate)->FlushStateToDisk(state, mode);
+}
+
+bool ChainstateManager::FlushActiveChainstateIfNeeded(BlockValidationState& state, ExternalCacheUsage external_cache_usage)
+{
+    AssertLockHeld(::cs_main);
+    return Assert(m_chainstate)->FlushStateToDisk(
+        state,
+        FlushStateMode::IF_NEEDED,
+        /*nManualPruneHeight=*/0,
+        external_cache_usage);
+}
+
 std::optional<validation::ActiveChainTipSnapshot> ChainstateManager::ActiveTipSnapshot() const
     EXCLUSIVE_LOCKS_REQUIRED(!m_active_chain_snapshot_mutex)
 {
@@ -2679,7 +2693,17 @@ std::optional<ChainBlockRelayFacts> ChainstateManager::FindBlockRelayFacts(const
 
 ChainstateManager::RawBlockDataReadResult ChainstateManager::ReadRawBlockData(const FlatFilePos& pos)
 {
-    return m_blockman.ReadRawBlock(pos);
+    auto result{m_blockman.ReadRawBlock(pos)};
+    if (result) return std::move(*result);
+
+    switch (result.error()) {
+    case kernel::ReadRawError::IO:
+        return util::Unexpected{RawBlockDataReadError::IO};
+    case kernel::ReadRawError::BadPartRange:
+        return util::Unexpected{RawBlockDataReadError::BadPartRange};
+    }
+    Assume(false);
+    return util::Unexpected{RawBlockDataReadError::IO};
 }
 
 bool ChainstateManager::ReadStoredBlock(CBlock& block, const FlatFilePos& pos, const uint256& expected_hash)
@@ -2699,6 +2723,18 @@ bool ChainstateManager::HasBlockIndexLocked(const uint256& block_hash) const
     AssertLockHeld(::cs_main);
     CoreBlockIndexView block_index{*this};
     return block_index.LookupBlockIndex(block_hash) != nullptr;
+}
+
+bool ChainstateManager::HasAnyBlockIndexLocked() const
+{
+    AssertLockHeld(::cs_main);
+    return !m_blockman.GetAllBlockIndices().empty();
+}
+
+size_t ChainstateManager::BlockIndexSizeLocked() const
+{
+    AssertLockHeld(::cs_main);
+    return m_blockman.GetAllBlockIndices().size();
 }
 
 bool ChainstateManager::IsBlockPruned(const uint256& block_hash) const

@@ -670,7 +670,8 @@ bool MemPoolAccept::PreChecks(ATMPArgs& args, Workspace& ws)
     // backend lookups (which would avoid coins_to_uncache tracking).
     m_view.SetBackend(CoinsViewEmpty::Get());
 
-    assert(m_active_chainstate.m_blockman.LookupBlockIndex(m_view.GetBestBlock()) == m_active_chainstate.m_chain.Tip());
+    assert(m_active_chainstate.m_chain.Tip() != nullptr);
+    assert(m_view.GetBestBlock() == m_active_chainstate.m_chain.Tip()->GetBlockHash());
 
     // Only accept BIP68 sequence locked transactions that can be mined in the next
     // block; we don't want our mempool filled up with transactions that can't

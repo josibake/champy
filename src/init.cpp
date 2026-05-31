@@ -1810,7 +1810,7 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
     {
         LOCK(chainman.GetMutex());
         const auto& tip{*Assert(chainman.ActiveTip())};
-        LogInfo("block tree size = %u", chainman.BlockIndex().size());
+        LogInfo("block tree size = %u", chainman.BlockIndexSizeLocked());
         chain_active_height = tip.nHeight;
         best_block_time = tip.GetBlockTime();
         if (tip_info) {

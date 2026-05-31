@@ -114,11 +114,26 @@ endforeach()
 file(READ "${SOURCE_DIR}/src/CMakeLists.txt" src_cmake_contents)
 foreach(needle IN ITEMS
     "install(TARGETS bitcoin_consensus"
+    "configure_file(\${PROJECT_SOURCE_DIR}/libbitcoinconsensus.pc.in \${PROJECT_BINARY_DIR}/libbitcoinconsensus.pc @ONLY)"
+    "install(FILES \${PROJECT_BINARY_DIR}/libbitcoinconsensus.pc"
     "foreach(header IN LISTS BITCOIN_CONSENSUS_INSTALL_HEADERS)"
     "install(FILES \"\${CMAKE_CURRENT_SOURCE_DIR}/\${header}\"")
   string(FIND "${src_cmake_contents}" "${needle}" install_rule_index)
   if(install_rule_index EQUAL -1)
     message(FATAL_ERROR "bitcoin_consensus install rule is missing expected text: ${needle}")
+  endif()
+endforeach()
+
+foreach(needle IN ITEMS
+    "Name: @CLIENT_NAME@ consensus library"
+    "Description: Experimental library for the @CLIENT_NAME@ consensus engine."
+    "Version: @CLIENT_VERSION_STRING@"
+    "Libs: -L\${libdir} -lbitcoin_consensus"
+    "Cflags: -I\${includedir}")
+  file(READ "${SOURCE_DIR}/libbitcoinconsensus.pc.in" consensus_pkgconfig_contents)
+  string(FIND "${consensus_pkgconfig_contents}" "${needle}" pkgconfig_index)
+  if(pkgconfig_index EQUAL -1)
+    message(FATAL_ERROR "libbitcoinconsensus.pc.in is missing expected text: ${needle}")
   endif()
 endforeach()
 

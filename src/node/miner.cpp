@@ -69,11 +69,11 @@ int64_t UpdateTime(CBlockHeader* pblock, const Consensus::Params& consensusParam
     return nNewTime - nOldTime;
 }
 
-static void UpdateUncommittedBlockStructures(const ChainstateManager& chainman, CBlock& block, const CBlockIndex* pindexPrev)
+static void UpdateUncommittedBlockStructures(CBlock& block, bool segwit_active_after_previous_block)
 {
     const int commitpos{GetWitnessCommitmentIndex(block)};
     static const std::vector<unsigned char> nonce(32, 0x00);
-    if (commitpos != NO_WITNESS_COMMITMENT && DeploymentActiveAfter(pindexPrev, chainman, Consensus::DEPLOYMENT_SEGWIT) && !block.vtx[0]->HasWitness()) {
+    if (commitpos != NO_WITNESS_COMMITMENT && segwit_active_after_previous_block && !block.vtx[0]->HasWitness()) {
         CMutableTransaction tx{*block.vtx[0]};
         tx.vin[0].scriptWitness.stack.resize(1);
         tx.vin[0].scriptWitness.stack[0] = nonce;
@@ -81,7 +81,7 @@ static void UpdateUncommittedBlockStructures(const ChainstateManager& chainman, 
     }
 }
 
-void GenerateCoinbaseCommitment(const ChainstateManager& chainman, CBlock& block, const CBlockIndex* pindexPrev)
+static void GenerateCoinbaseCommitment(CBlock& block, bool segwit_active_after_previous_block)
 {
     const int commitpos{GetWitnessCommitmentIndex(block)};
     std::vector<unsigned char> ret(32, 0x00);
@@ -102,7 +102,12 @@ void GenerateCoinbaseCommitment(const ChainstateManager& chainman, CBlock& block
         tx.vout.push_back(out);
         block.vtx[0] = MakeTransactionRef(std::move(tx));
     }
-    UpdateUncommittedBlockStructures(chainman, block, pindexPrev);
+    UpdateUncommittedBlockStructures(block, segwit_active_after_previous_block);
+}
+
+void GenerateCoinbaseCommitment(const ChainstateManager& chainman, CBlock& block, const CBlockIndex* pindexPrev)
+{
+    GenerateCoinbaseCommitment(block, DeploymentActiveAfter(pindexPrev, chainman, Consensus::DEPLOYMENT_SEGWIT));
 }
 
 void RegenerateCommitments(CBlock& block, ChainstateManager& chainman)
@@ -111,8 +116,8 @@ void RegenerateCommitments(CBlock& block, ChainstateManager& chainman)
     tx.vout.erase(tx.vout.begin() + GetWitnessCommitmentIndex(block));
     block.vtx.at(0) = MakeTransactionRef(tx);
 
-    const CBlockIndex* prev_block = WITH_LOCK(::cs_main, return chainman.m_blockman.LookupBlockIndex(block.hashPrevBlock));
-    GenerateCoinbaseCommitment(chainman, block, prev_block);
+    const auto previous_context{chainman.FindKnownBlockContext(block.hashPrevBlock)};
+    GenerateCoinbaseCommitment(block, previous_context && previous_context->segwit_active_after);
 
     block.hashMerkleRoot = BlockMerkleRoot(block);
 }

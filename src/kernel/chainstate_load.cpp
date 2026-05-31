@@ -44,8 +44,8 @@ static ChainstateLoadResult CompleteChainstateInitialization(
         return {ChainstateLoadStatus::FAILURE, _("Error loading block database")};
     }
 
-    if (!chainman.BlockIndex().empty() &&
-        !chainman.m_blockman.LookupBlockIndex(chainman.GetConsensus().hashGenesisBlock)) {
+    if (chainman.HasAnyBlockIndexLocked() &&
+        !chainman.HasBlockIndexLocked(chainman.GetConsensus().hashGenesisBlock)) {
         // If the loaded chain has a wrong genesis, bail out immediately
         // (we're likely using a testnet datadir, or the other way around).
         return {ChainstateLoadStatus::FAILURE_INCOMPATIBLE_DB, _("Incorrect or no genesis block found. Wrong datadir for network?")};
@@ -72,8 +72,7 @@ static ChainstateLoadResult CompleteChainstateInitialization(
     assert(chainman.m_total_coinstip_cache > 0);
     assert(chainman.m_total_coinsdb_cache > 0);
 
-    // At this point we're either in reindex or we've loaded a useful
-    // block tree into BlockIndex()!
+    // At this point we're either in reindex or we've loaded a useful block tree.
 
     Chainstate& chainstate{*Assert(chainman.m_chainstate)};
     LogInfo("Initializing chainstate %s", chainstate.ToString());
