@@ -236,6 +236,7 @@ public:
     BlockConsensusPipeline(const CBlock& block, BlockConsensusContext context);
 
     [[nodiscard]] BlockSpendResult<BlockSpendEffects> ValidateAndStageSpend(BlockSpendWorkspace& workspace, BlockScriptChecker& script_checker, const BlockSpendConsensusOptions& options) const;
+    [[nodiscard]] BlockSpendResult<BlockSpendEffects> ValidateAndStageSpend(BlockSpendWorkspace& workspace, const BlockSpendJoiner& joiner, BlockScriptChecker& script_checker, const BlockSpendConsensusOptions& options) const;
     [[nodiscard]] BlockSpendResult<BlockSpendEffects> ValidateAndCompleteSpendStage(BlockSpendWorkspace& workspace, BlockScriptChecker& script_checker, const BlockSpendConsensusOptions& options) const;
     [[nodiscard]] BlockSpendResult<BlockSpendEffects> CompleteSpendStage(BlockSpendResult<BlockSpendEffects> spend_effects, BlockScriptChecker& script_checker) const;
     [[nodiscard]] BlockSpendResult<void> CheckCoinbaseReward(const BlockSpendEffects& effects) const;

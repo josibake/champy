@@ -449,6 +449,11 @@ BlockSpendResult<BlockSpendEffects> BlockConsensusPipeline::ValidateAndStageSpen
     return ValidateAndStageBlockTransactions(m_transactions, workspace, script_checker, m_context.spend, options);
 }
 
+BlockSpendResult<BlockSpendEffects> BlockConsensusPipeline::ValidateAndStageSpend(BlockSpendWorkspace& workspace, const BlockSpendJoiner& joiner, BlockScriptChecker& script_checker, const BlockSpendConsensusOptions& options) const
+{
+    return ValidateAndStageBlockTransactions(m_transactions, workspace, joiner, script_checker, m_context.spend, options);
+}
+
 BlockSpendResult<BlockSpendEffects> BlockConsensusPipeline::ValidateAndCompleteSpendStage(BlockSpendWorkspace& workspace, BlockScriptChecker& script_checker, const BlockSpendConsensusOptions& options) const
 {
     auto spend_effects{ValidateAndStageSpend(workspace, script_checker, options)};

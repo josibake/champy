@@ -111,10 +111,8 @@ private:
 
 static CoreBlockConnectionRuntimeInputs MakeCoreBlockConnectionRuntimeInputs(
     CoreChainValidationContext& context,
-    validation::ScriptCheckScheduler& script_check_scheduler) EXCLUSIVE_LOCKS_REQUIRED(cs_main)
+    validation::ScriptCheckScheduler& script_check_scheduler)
 {
-    AssertLockHeld(cs_main);
-
     return {
         .notifications = context.Notifications(),
         .script_check_scheduler = script_check_scheduler,
@@ -758,11 +756,15 @@ BlockValidationState TestBlockValidity(
         },
         .context = connection_context,
         .block = block,
-        .block_index = index_dummy,
+        .block_position = {
+            .hash = block_hash,
+            .parent_hash = tip->GetBlockHash(),
+            .height = index_dummy.nHeight,
+        },
         .connection_state = request.connection_state,
         .options = connect_options,
     };
-    const validation::BlockConnectionResult connected{validation::BlockConnectionEngine{}.Connect(connection_request, state)};
+    const validation::BlockConnectionResult connected{validation::BlockConnectionEngine{}.ConnectPrepared(connection_request, state)};
     if (!connected.Succeeded()) {
         if (state.IsValid()) NONFATAL_UNREACHABLE();
         return state;
@@ -957,18 +959,26 @@ VerifyDBResult CVerifyDB::VerifyDB(
                 return VerifyDBResult::CORRUPTED_BLOCK_DB;
             }
             BlockConnectionTrace trace{request.validation_context.TraceCounters()};
+            CoreBlockConnectionPlan connection_plan{PlanCoreBlockConnection(
+                SnapshotCoreBlockConnectionPolicy(request.validation_context, *pindex),
+                request.block_index_lookup,
+                *pindex)};
+            MaybeLogCoreBlockConnectionScriptPolicy(
+                request.last_script_check_reason_logged,
+                *pindex,
+                block.GetHash(),
+                connection_plan);
             CoreBlockConnectionSetup connection_setup{
                 runtime_inputs,
-                PlanCoreBlockConnection(SnapshotCoreBlockConnectionPolicy(request.validation_context, *pindex), request.block_index_lookup, *pindex),
-                *pindex,
+                std::move(connection_plan),
+                validation::SnapshotBlockConnectionPosition(*pindex),
                 trace,
                 /*cache_script_results=*/false};
-            connection_setup.MaybeLogScriptPolicy(request.last_script_check_reason_logged, block.GetHash());
             validation::CoreCoinsBlockConnectionState connection_state{coins};
             CoreBlockSpendEffectsCommitter spend_state_committer{coins};
             const validation::BlockConnectionRequest connection_request{connection_setup.Request(block, connection_state)};
             validation::BlockConnectionEngine engine;
-            auto connected{engine.Connect(connection_request, state)};
+            auto connected{engine.ConnectPrepared(connection_request, state)};
             if (!connected.Succeeded()) {
                 LogError("Verification error: found unconnectable block at %d, hash=%s (%s)", pindex->nHeight, pindex->GetBlockHash().ToString(), state.ToString());
                 return VerifyDBResult::CORRUPTED_BLOCK_DB;

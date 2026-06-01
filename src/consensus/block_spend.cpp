@@ -167,6 +167,11 @@ int64_t GetTransactionSigOpCostForBlock(const CTransaction& tx, std::span<const 
 
 } // namespace
 
+BlockSpentOutputJoin BatchViewBlockSpendJoiner::Join(std::span<const CTransactionRef> transactions, int block_height) const
+{
+    return JoinBlockSpentOutputs(transactions, block_height, m_spend_state);
+}
+
 BlockSpendResult<void> CheckBlockNoUnspentOutputOverwrite(std::span<const CTransactionRef> transactions, const SpendStateView& spend_state)
 {
     for (const auto& tx : transactions) {
@@ -367,6 +372,13 @@ BlockSpendResult<void> SubmitBlockScriptChecksForSpendStage(std::span<const Tran
 
 BlockSpendResult<BlockSpendStageResult> ValidateAndStageBlockTransactions(std::span<const CTransactionRef> transactions, BlockSpendWorkspace& workspace, const BlockSpendContext& spend_context, const BlockSpendConsensusOptions& options, ScriptCheckPlanCollection script_check_plans)
 {
+    const SpendStateBatchViewAdapter batch_view{workspace.StagedSpendView()};
+    const BatchViewBlockSpendJoiner joiner{batch_view};
+    return ValidateAndStageBlockTransactions(transactions, workspace, joiner, spend_context, options, script_check_plans);
+}
+
+BlockSpendResult<BlockSpendStageResult> ValidateAndStageBlockTransactions(std::span<const CTransactionRef> transactions, BlockSpendWorkspace& workspace, const BlockSpendJoiner& joiner, const BlockSpendContext& spend_context, const BlockSpendConsensusOptions& options, ScriptCheckPlanCollection script_check_plans)
+{
     assert(!transactions.empty());
     const bool collect_script_checks{script_check_plans == ScriptCheckPlanCollection::Collect};
 
@@ -384,8 +396,7 @@ BlockSpendResult<BlockSpendStageResult> ValidateAndStageBlockTransactions(std::s
         stage.script_checks.reserve(transactions.size() > 0 ? transactions.size() - 1 : 0);
     }
 
-    const SpendStateBatchViewAdapter batch_view{workspace.StagedSpendView()};
-    const BlockSpentOutputJoin joined_inputs{JoinBlockSpentOutputs(transactions, spend_context.block_height, batch_view)};
+    const BlockSpentOutputJoin joined_inputs{joiner.Join(transactions, spend_context.block_height)};
     if (joined_inputs.status != BlockSpentOutputJoinStatus::Complete) {
         assert(joined_inputs.failed_lookup.has_value());
         return Consensus::Unexpected<BlockSpendError>{MissingOrSpentInputForBlock(*transactions[joined_inputs.failed_lookup->transaction_index])};
@@ -426,8 +437,15 @@ BlockSpendResult<BlockSpendStageResult> ValidateAndStageBlockTransactions(std::s
 
 BlockSpendResult<BlockSpendEffects> ValidateAndStageBlockTransactions(std::span<const CTransactionRef> transactions, BlockSpendWorkspace& workspace, BlockScriptChecker& script_checker, const BlockSpendContext& spend_context, const BlockSpendConsensusOptions& options)
 {
+    const SpendStateBatchViewAdapter batch_view{workspace.StagedSpendView()};
+    const BatchViewBlockSpendJoiner joiner{batch_view};
+    return ValidateAndStageBlockTransactions(transactions, workspace, joiner, script_checker, spend_context, options);
+}
+
+BlockSpendResult<BlockSpendEffects> ValidateAndStageBlockTransactions(std::span<const CTransactionRef> transactions, BlockSpendWorkspace& workspace, const BlockSpendJoiner& joiner, BlockScriptChecker& script_checker, const BlockSpendContext& spend_context, const BlockSpendConsensusOptions& options)
+{
     const ScriptCheckPlanCollection script_check_plans{script_checker.WantsChecks() ? ScriptCheckPlanCollection::Collect : ScriptCheckPlanCollection::Skip};
-    auto stage{ValidateAndStageBlockTransactions(transactions, workspace, spend_context, options, script_check_plans)};
+    auto stage{ValidateAndStageBlockTransactions(transactions, workspace, joiner, spend_context, options, script_check_plans)};
     if (!stage) {
         return Consensus::Unexpected<BlockSpendError>{stage.error()};
     }

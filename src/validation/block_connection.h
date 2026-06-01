@@ -64,20 +64,30 @@ struct BlockConnectionRuntime {
     kernel::Notifications& notifications;
     Consensus::BlockScriptChecker& script_checker;
     BlockConnectionTrace& trace;
+    const Consensus::BlockSpendJoiner* spend_joiner{nullptr};
 };
+
+struct BlockConnectionBlockPosition {
+    uint256 hash{};
+    uint256 parent_hash{};
+    int height{-1};
+};
+
+[[nodiscard]] BlockConnectionBlockPosition SnapshotBlockConnectionPosition(const CBlockIndex& block_index)
+    EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
 
 /**
  * Block-connection request.
  *
- * This is still a Core validation request because it carries Core's current
- * block index. Spend-state reads and commits are behind BlockConnectionState so
+ * Execution receives copied block-position facts, not Core's mutable block
+ * index. Spend-state reads and commits are behind BlockConnectionState so
  * alternate state implementations can run through the same engine.
  */
 struct BlockConnectionRequest {
     BlockConnectionRuntime runtime;
     BlockConnectionContext context;
     const CBlock& block;
-    CBlockIndex& block_index;
+    BlockConnectionBlockPosition block_position;
     BlockConnectionState& connection_state;
     BlockConnectionOptions options{};
 };
@@ -124,8 +134,6 @@ struct BlockConnectionResult {
 class BlockConnectionEngine final {
 public:
     [[nodiscard]] BlockConnectionResult ConnectPrepared(const BlockConnectionRequest& request, BlockValidationState& state) const;
-    [[nodiscard]] BlockConnectionResult Connect(const BlockConnectionRequest& request, BlockValidationState& state) const
-        EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
     [[nodiscard]] BlockConnectionResult Commit(const BlockConnectionCommitRequest& request, BlockConnectionCommitPackage package, BlockValidationState& state) const
         EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
 };

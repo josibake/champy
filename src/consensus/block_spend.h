@@ -20,6 +20,9 @@
 
 namespace Consensus {
 
+class SpendStateBatchView;
+struct BlockSpentOutputJoin;
+
 struct TransactionSpendContext {
     int block_height;
     int64_t previous_median_time_past;
@@ -111,6 +114,23 @@ public:
     [[nodiscard]] virtual BlockSpendResult<void> StageTransactionEffectsForIntraBlockView(const TransactionCoinEffects& coin_effects, unsigned int transaction_index) = 0;
 };
 
+class BlockSpendJoiner {
+public:
+    virtual ~BlockSpendJoiner() = default;
+
+    [[nodiscard]] virtual BlockSpentOutputJoin Join(std::span<const CTransactionRef> transactions, int block_height) const = 0;
+};
+
+class BatchViewBlockSpendJoiner final : public BlockSpendJoiner {
+public:
+    explicit BatchViewBlockSpendJoiner(const SpendStateBatchView& spend_state) : m_spend_state{spend_state} {}
+
+    [[nodiscard]] BlockSpentOutputJoin Join(std::span<const CTransactionRef> transactions, int block_height) const override;
+
+private:
+    const SpendStateBatchView& m_spend_state;
+};
+
 class BlockSpendBackend {
 public:
     virtual ~BlockSpendBackend() = default;
@@ -138,7 +158,9 @@ public:
 // Validates each transaction against the current staged view and stages its
 // coin effects so later transactions in the same block can spend them.
 [[nodiscard]] BlockSpendResult<BlockSpendStageResult> ValidateAndStageBlockTransactions(std::span<const CTransactionRef> transactions, BlockSpendWorkspace& workspace, const BlockSpendContext& spend_context, const BlockSpendConsensusOptions& options, ScriptCheckPlanCollection script_check_plans);
+[[nodiscard]] BlockSpendResult<BlockSpendStageResult> ValidateAndStageBlockTransactions(std::span<const CTransactionRef> transactions, BlockSpendWorkspace& workspace, const BlockSpendJoiner& joiner, const BlockSpendContext& spend_context, const BlockSpendConsensusOptions& options, ScriptCheckPlanCollection script_check_plans);
 [[nodiscard]] BlockSpendResult<BlockSpendEffects> ValidateAndStageBlockTransactions(std::span<const CTransactionRef> transactions, BlockSpendWorkspace& workspace, BlockScriptChecker& script_checker, const BlockSpendContext& spend_context, const BlockSpendConsensusOptions& options);
+[[nodiscard]] BlockSpendResult<BlockSpendEffects> ValidateAndStageBlockTransactions(std::span<const CTransactionRef> transactions, BlockSpendWorkspace& workspace, const BlockSpendJoiner& joiner, BlockScriptChecker& script_checker, const BlockSpendContext& spend_context, const BlockSpendConsensusOptions& options);
 
 } // namespace Consensus
 

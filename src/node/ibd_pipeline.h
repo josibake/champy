@@ -7,12 +7,14 @@
 
 #include <node/block_download_types.h>
 
+#include <cassert>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <map>
 #include <memory>
 #include <optional>
+#include <utility>
 #include <vector>
 
 class CBlock;
@@ -97,6 +99,108 @@ struct IbdRetireChainPosition {
     std::optional<uint256> expected_parent_hash{};
 };
 
+template <typename Package>
+class IbdOrderedPackageRetireQueue
+{
+public:
+    explicit IbdOrderedPackageRetireQueue(int next_height)
+        : IbdOrderedPackageRetireQueue{IbdRetireChainPosition{.next_height = next_height}}
+    {
+    }
+
+    explicit IbdOrderedPackageRetireQueue(IbdRetireChainPosition position)
+        : m_next_height{position.next_height},
+          m_expected_parent_hash{position.expected_parent_hash}
+    {
+        assert(position.next_height >= 0);
+    }
+
+    [[nodiscard]] IbdRetireResult Add(Package package)
+    {
+        if (!package.ReadyForSerializedCommit()) {
+            return {.status = IbdRetireStatus::NotReady};
+        }
+        if (package.block.height < 0) {
+            return {.status = IbdRetireStatus::InvalidHeight};
+        }
+        if (package.block.height < m_next_height) {
+            return {.status = IbdRetireStatus::StaleHeight};
+        }
+        if (m_pending.contains(package.block.height)) {
+            return {.status = IbdRetireStatus::DuplicateHeight};
+        }
+        if (!ParentChainMatches(package)) {
+            return {.status = IbdRetireStatus::ParentMismatch};
+        }
+
+        const std::size_t previous_ready{m_ready.size()};
+        m_pending.emplace(package.block.height, std::move(package));
+        MoveContiguousToReady();
+        const std::size_t new_ready{m_ready.size() - previous_ready};
+
+        return {
+            .status = new_ready > 0 ? IbdRetireStatus::Ready : IbdRetireStatus::Queued,
+            .ready_count = new_ready,
+        };
+    }
+
+    [[nodiscard]] std::vector<Package> PopReady()
+    {
+        std::vector<Package> ready;
+        ready.swap(m_ready);
+        return ready;
+    }
+
+    [[nodiscard]] int NextHeight() const noexcept { return m_next_height; }
+    [[nodiscard]] const std::optional<uint256>& ExpectedParentHash() const noexcept { return m_expected_parent_hash; }
+    [[nodiscard]] std::size_t PendingCount() const noexcept { return m_pending.size(); }
+    [[nodiscard]] std::size_t ReadyCount() const noexcept { return m_ready.size(); }
+    [[nodiscard]] bool Empty() const noexcept { return m_pending.empty() && m_ready.empty(); }
+
+private:
+    [[nodiscard]] bool ParentChainMatches(const Package& package) const
+    {
+        if (!m_expected_parent_hash) return true;
+
+        if (package.block.height == m_next_height && package.parent_hash != *m_expected_parent_hash) {
+            return false;
+        }
+
+        const auto previous{m_pending.find(package.block.height - 1)};
+        if (previous != m_pending.end() && package.parent_hash != previous->second.block.hash) {
+            return false;
+        }
+
+        const auto next{m_pending.find(package.block.height + 1)};
+        if (next != m_pending.end() && next->second.parent_hash != package.block.hash) {
+            return false;
+        }
+
+        return true;
+    }
+
+    void MoveContiguousToReady()
+    {
+        while (true) {
+            auto it{m_pending.find(m_next_height)};
+            if (it == m_pending.end()) return;
+
+            if (m_expected_parent_hash) {
+                assert(it->second.parent_hash == *m_expected_parent_hash);
+                m_expected_parent_hash = it->second.block.hash;
+            }
+            m_ready.push_back(std::move(it->second));
+            m_pending.erase(it);
+            ++m_next_height;
+        }
+    }
+
+    int m_next_height;
+    std::optional<uint256> m_expected_parent_hash;
+    std::map<int, Package> m_pending;
+    std::vector<Package> m_ready;
+};
+
 /**
  * Orders validated IBD blocks before the serialized commit stage.
  *
@@ -114,20 +218,14 @@ public:
     [[nodiscard]] IbdRetireResult Add(IbdValidatedBlockPackage package);
     [[nodiscard]] std::vector<IbdValidatedBlockPackage> PopReady();
 
-    [[nodiscard]] int NextHeight() const noexcept { return m_next_height; }
-    [[nodiscard]] const std::optional<uint256>& ExpectedParentHash() const noexcept { return m_expected_parent_hash; }
-    [[nodiscard]] std::size_t PendingCount() const noexcept { return m_pending.size(); }
-    [[nodiscard]] std::size_t ReadyCount() const noexcept { return m_ready.size(); }
-    [[nodiscard]] bool Empty() const noexcept { return m_pending.empty() && m_ready.empty(); }
+    [[nodiscard]] int NextHeight() const noexcept { return m_queue.NextHeight(); }
+    [[nodiscard]] const std::optional<uint256>& ExpectedParentHash() const noexcept { return m_queue.ExpectedParentHash(); }
+    [[nodiscard]] std::size_t PendingCount() const noexcept { return m_queue.PendingCount(); }
+    [[nodiscard]] std::size_t ReadyCount() const noexcept { return m_queue.ReadyCount(); }
+    [[nodiscard]] bool Empty() const noexcept { return m_queue.Empty(); }
 
 private:
-    [[nodiscard]] bool ParentChainMatches(const IbdValidatedBlockPackage& package) const;
-    void MoveContiguousToReady();
-
-    int m_next_height;
-    std::optional<uint256> m_expected_parent_hash;
-    std::map<int, IbdValidatedBlockPackage> m_pending;
-    std::vector<IbdValidatedBlockPackage> m_ready;
+    IbdOrderedPackageRetireQueue<IbdValidatedBlockPackage> m_queue;
 };
 
 struct IbdPipelineLimits {

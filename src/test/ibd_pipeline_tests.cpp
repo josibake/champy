@@ -9,6 +9,7 @@
 #include <boost/test/unit_test.hpp>
 
 #include <chrono>
+#include <memory>
 #include <utility>
 #include <vector>
 
@@ -29,6 +30,27 @@ node::PeerBlockRef Block(int height)
 node::IbdValidatedBlockPackage ReadyPackage(int height)
 {
     return node::CommitReadyPackage(Block(height));
+}
+
+struct MoveOnlyPackage {
+    node::PeerBlockRef block;
+    uint256 parent_hash{};
+    std::unique_ptr<int> payload;
+    bool ready{true};
+
+    [[nodiscard]] bool ReadyForSerializedCommit() const noexcept { return ready; }
+};
+
+MoveOnlyPackage MoveOnlyReadyPackage(int height, int payload)
+{
+    node::PeerBlockRef block{Block(height)};
+    const uint256 parent_hash{block.parent_hash};
+    return {
+        .block = std::move(block),
+        .parent_hash = parent_hash,
+        .payload = std::make_unique<int>(payload),
+        .ready = true,
+    };
 }
 
 } // namespace
@@ -231,6 +253,24 @@ BOOST_AUTO_TEST_CASE(pipeline_retires_commit_ready_packages)
     BOOST_CHECK(ready[0].parent_hash == uint256::ZERO);
     BOOST_CHECK_EQUAL(ready[1].block.height, 102);
     BOOST_CHECK(ready[1].parent_hash == uint256::ONE);
+}
+
+BOOST_AUTO_TEST_CASE(retire_queue_moves_non_copyable_packages)
+{
+    node::IbdOrderedPackageRetireQueue<MoveOnlyPackage> queue{node::IbdRetireChainPosition{
+        .next_height = 101,
+        .expected_parent_hash = Block(100).hash,
+    }};
+
+    BOOST_CHECK(queue.Add(MoveOnlyReadyPackage(102, 2)).status == node::IbdRetireStatus::Queued);
+    BOOST_CHECK(queue.Add(MoveOnlyReadyPackage(101, 1)).status == node::IbdRetireStatus::Ready);
+
+    std::vector<MoveOnlyPackage> ready{queue.PopReady()};
+    BOOST_REQUIRE_EQUAL(ready.size(), 2U);
+    BOOST_REQUIRE(ready[0].payload);
+    BOOST_REQUIRE(ready[1].payload);
+    BOOST_CHECK_EQUAL(*ready[0].payload, 1);
+    BOOST_CHECK_EQUAL(*ready[1].payload, 2);
 }
 
 BOOST_AUTO_TEST_CASE(stage_metrics_are_recorded_by_explicit_stage)

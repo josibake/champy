@@ -24,6 +24,7 @@ public:
     CoreBlockConnectionAttempt& operator=(CoreBlockConnectionAttempt&&) = delete;
 
     [[nodiscard]] Consensus::BlockSpendResult<Consensus::BlockSpendEffects> ValidateAndStageSpend(Consensus::BlockScriptChecker& script_checker);
+    [[nodiscard]] Consensus::BlockSpendResult<Consensus::BlockSpendEffects> ValidateAndStageSpend(const Consensus::BlockSpendJoiner& joiner, Consensus::BlockScriptChecker& script_checker);
     [[nodiscard]] Consensus::BlockSpendResult<Consensus::BlockSpendEffects> CompleteSpendStage(
         Consensus::BlockSpendResult<Consensus::BlockSpendEffects> spend_effects,
         Consensus::BlockScriptChecker& script_checker);

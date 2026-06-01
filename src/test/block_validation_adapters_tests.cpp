@@ -23,6 +23,7 @@
 #include <consensus/merkle.h>
 #include <consensus/script_checker.h>
 #include <consensus/block_spend.h>
+#include <consensus/spend_state_batch.h>
 #include <validation/core_block_commit_adapters.h>
 #include <kernel/cs_main.h>
 #include <kernel/notifications_interface.h>
@@ -37,6 +38,7 @@
 #include <validation_state.h>
 
 #include <memory>
+#include <span>
 #include <string>
 #include <utility>
 #include <vector>
@@ -115,6 +117,26 @@ public:
             previous_index->GetBlockTime()};
     }
 };
+
+class FakeBlockSpendJoiner final : public Consensus::BlockSpendJoiner
+{
+public:
+    Consensus::BlockSpentOutputJoin joined_inputs;
+
+    Consensus::BlockSpentOutputJoin Join(std::span<const CTransactionRef>, int) const override
+    {
+        return joined_inputs;
+    }
+};
+
+validation::BlockConnectionBlockPosition BlockPositionFor(const CBlockIndex& block_index)
+{
+    return {
+        .hash = block_index.GetBlockHash(),
+        .parent_hash = block_index.pprev == nullptr ? uint256{} : block_index.pprev->GetBlockHash(),
+        .height = block_index.nHeight,
+    };
+}
 
 validation::BlockConnectionCommitRequest MakeBlockConnectionCommitRequest(
     BlockUndoWriter& undo_writer,
@@ -494,7 +516,7 @@ BOOST_AUTO_TEST_CASE(block_connection_engine_validates_snapshot_and_commits_to_c
             },
         },
         .block = block,
-        .block_index = block_index,
+        .block_position = BlockPositionFor(block_index),
         .connection_state = snapshot_state,
         .options = {
             .block_check_options = Consensus::BlockCheckOptions{
@@ -582,7 +604,7 @@ BOOST_AUTO_TEST_CASE(block_connection_engine_accepts_snapshot_state_backend)
             },
         },
         .block = block,
-        .block_index = block_index,
+        .block_position = BlockPositionFor(block_index),
         .connection_state = connection_state,
         .options = {
             .block_check_options = Consensus::BlockCheckOptions{
@@ -669,7 +691,7 @@ BOOST_AUTO_TEST_CASE(block_connection_engine_returns_commit_package_without_muta
             },
         },
         .block = block,
-        .block_index = block_index,
+        .block_position = BlockPositionFor(block_index),
         .connection_state = connection_state,
         .options = {
             .block_check_options = Consensus::BlockCheckOptions{
@@ -767,7 +789,7 @@ BOOST_AUTO_TEST_CASE(block_connection_commit_rejects_stale_parent)
             },
         },
         .block = block,
-        .block_index = block_index,
+        .block_position = BlockPositionFor(block_index),
         .connection_state = connection_state,
         .options = {
             .block_check_options = Consensus::BlockCheckOptions{
@@ -795,6 +817,94 @@ BOOST_AUTO_TEST_CASE(block_connection_commit_rejects_stale_parent)
     BOOST_CHECK_EQUAL(state.GetRejectReason(), "stale block connection");
     BOOST_CHECK(!undo_writer.wrote_undo);
     BOOST_CHECK_EQUAL(block_index_committer.dirty_index, nullptr);
+}
+
+BOOST_AUTO_TEST_CASE(block_connection_engine_uses_explicit_spend_joiner)
+{
+    AssertLockNotHeld(::cs_main);
+
+    const uint256 previous_hash{uint256::ONE};
+    const COutPoint prevout{Txid::FromUint256(uint256::ONE), 0};
+    const CTransactionRef spend_tx{MakeSpendTx(prevout, /*value=*/39)};
+    CBlock block{MakeBlock(previous_hash, /*coinbase_value=*/50, {spend_tx})};
+    const uint256 block_hash{block.GetHash()};
+    CBlockIndex previous_index;
+    previous_index.phashBlock = &previous_hash;
+    previous_index.nHeight = 1;
+
+    CBlockIndex block_index{block};
+    block_index.pprev = &previous_index;
+    block_index.nHeight = 2;
+    block_index.phashBlock = &block_hash;
+
+    SnapshotBlockConnectionState connection_state;
+    connection_state.SetBestBlock(previous_hash);
+    connection_state.AddCoin(
+        prevout,
+        Consensus::CoinSnapshot{
+            .output = CTxOut{40, CScript{} << OP_TRUE},
+            .height = 1,
+            .is_coinbase = false,
+        });
+
+    FakeBlockSpendJoiner joiner;
+    joiner.joined_inputs = Consensus::BlockSpentOutputJoin{
+        .status = Consensus::BlockSpentOutputJoinStatus::MissingOrSpent,
+        .failed_lookup = Consensus::BlockSpentOutputLookup{
+            .outpoint = prevout,
+            .transaction_index = 1,
+            .input_index = 0,
+        },
+        .input_coins_by_transaction = {},
+    };
+
+    kernel::Notifications notifications;
+    Consensus::DirectBlockScriptChecker script_checker;
+    BlockConnectionTrace trace;
+
+    const Consensus::BlockConsensusContext consensus_context{
+        .spend = Consensus::BlockSpendContext{
+            .block_height = 2,
+            .previous_median_time_past = 0,
+        },
+        .commit = Consensus::BlockCommitContext{
+            .new_best_block = block_hash,
+            .block_height = 2,
+            .previous_median_time_past = 0,
+        },
+        .block_subsidy = 50,
+    };
+    validation::BlockConnectionRequest request{
+        .runtime = {
+            .notifications = notifications,
+            .script_checker = script_checker,
+            .trace = trace,
+            .spend_joiner = &joiner,
+        },
+        .context = {
+            .consensus_params = Params().GetConsensus(),
+            .consensus_context = consensus_context,
+            .sequence_lock_times = FixedSequenceLockTimes(),
+            .spend_options = Consensus::BlockSpendConsensusOptions{
+                .check_no_unspent_output_overwrite = true,
+            },
+        },
+        .block = block,
+        .block_position = BlockPositionFor(block_index),
+        .connection_state = connection_state,
+        .options = {
+            .block_check_options = Consensus::BlockCheckOptions{
+                .check_pow = false,
+            },
+        },
+    };
+
+    BlockValidationState state;
+    const auto validated{validation::BlockConnectionEngine{}.ConnectPrepared(request, state)};
+
+    BOOST_CHECK(!validated.Succeeded());
+    BOOST_CHECK(state.IsInvalid());
+    BOOST_CHECK_EQUAL(state.GetRejectReason(), "bad-txns-inputs-missingorspent");
 }
 
 BOOST_AUTO_TEST_CASE(block_connection_engine_validates_spends_with_snapshot_state_backend)
@@ -858,7 +968,7 @@ BOOST_AUTO_TEST_CASE(block_connection_engine_validates_spends_with_snapshot_stat
             },
         },
         .block = block,
-        .block_index = block_index,
+        .block_position = BlockPositionFor(block_index),
         .connection_state = connection_state,
         .options = {
             .block_check_options = Consensus::BlockCheckOptions{

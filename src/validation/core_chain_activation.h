@@ -9,6 +9,7 @@
 #include <validation/block_connection.h>
 #include <validation/block_connection_state.h>
 #include <validation/block_connection_trace.h>
+#include <validation/block_index_snapshot.h>
 #include <validation/core_block_connection_context.h>
 #include <validation/snapshot_block_connection_state.h>
 #include <util/time.h>
@@ -124,12 +125,12 @@ struct CoreConnectTipRequest {
  *
  * These values keep block loading, spend/script execution, and commit separate
  * while the activation caller retains ownership of resources. They are only
- * valid while the referenced CoreConnectTipResources and block index remain
- * live under the documented cs_main contract.
+ * valid while the referenced CoreConnectTipResources remain live under the
+ * documented activation contract.
  */
 struct PreparedCoreConnectTip {
     CoreConnectTipResources* resources{nullptr};
-    CBlockIndex* block_index{nullptr};
+    ChainWorkBlockSnapshot block_position;
     std::shared_ptr<const CBlock> block;
     CoreBlockConnectionPlan connection_plan;
     validation::SnapshotBlockConnectionState snapshot_state;
@@ -138,9 +139,11 @@ struct PreparedCoreConnectTip {
 };
 
 struct ExecutedCoreConnectTip {
-    PreparedCoreConnectTip prepared;
+    ChainWorkBlockSnapshot block_position;
+    std::shared_ptr<const CBlock> block;
     validation::BlockConnectionCommitPackage commit_package;
     BlockConnectionTrace trace;
+    SteadyClock::time_point time_start;
     SteadyClock::time_point time_block_connected;
 };
 
@@ -155,7 +158,7 @@ struct CoreConnectTipExecutionResult {
 [[nodiscard]] CoreConnectTipExecutionResult ExecuteCoreConnectTip(PreparedCoreConnectTip prepared, BlockValidationState& state)
     EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
 
-[[nodiscard]] CoreConnectTipResult CommitCoreConnectTip(ExecutedCoreConnectTip execution, BlockValidationState& state)
+[[nodiscard]] CoreConnectTipResult CommitCoreConnectTip(CoreConnectTipResources& resources, ExecutedCoreConnectTip execution, BlockValidationState& state)
     EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
 
 [[nodiscard]] CoreConnectTipResult ConnectCoreChainTip(CoreConnectTipRequest request, BlockValidationState& state)

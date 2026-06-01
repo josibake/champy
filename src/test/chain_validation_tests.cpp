@@ -7,6 +7,7 @@
 #include <chainparams.h>
 #include <chainstate.h>
 #include <node/ibd_block_processor.h>
+#include <node/ibd_validated_block.h>
 #include <test/util/mining.h>
 #include <test/util/setup_common.h>
 #include <util/check.h>
@@ -22,6 +23,7 @@
 
 #include <chrono>
 #include <optional>
+#include <vector>
 
 BOOST_FIXTURE_TEST_SUITE(chain_validation_tests, RegTestingSetup)
 
@@ -244,9 +246,22 @@ BOOST_AUTO_TEST_CASE(core_connect_tip_can_run_as_explicit_stages)
 
     auto executed{ExecuteCoreConnectTip(std::move(*prepared), state)};
     BOOST_REQUIRE(executed.execution);
+    BOOST_CHECK(executed.execution->block_position.hash == block->GetHash());
+    BOOST_CHECK(executed.execution->block_position.parent_hash == Params().GenesisBlock().GetHash());
+    BOOST_CHECK_EQUAL(executed.execution->block_position.height, 1);
     BOOST_CHECK(executed.execution->commit_package.expected_previous_block == Params().GenesisBlock().GetHash());
 
-    const CoreConnectTipResult committed{CommitCoreConnectTip(std::move(*executed.execution), state)};
+    node::IbdOrderedPackageRetireQueue<node::IbdValidatedTipPackage> retire_queue{node::IbdRetireChainPosition{
+        .next_height = 1,
+        .expected_parent_hash = Params().GenesisBlock().GetHash(),
+    }};
+    const node::IbdRetireResult retire_result{retire_queue.Add(node::MakeIbdValidatedTipPackage(std::move(*executed.execution)))};
+    BOOST_CHECK(retire_result.status == node::IbdRetireStatus::Ready);
+
+    std::vector<node::IbdValidatedTipPackage> ready{retire_queue.PopReady()};
+    BOOST_REQUIRE_EQUAL(ready.size(), 1U);
+
+    const CoreConnectTipResult committed{CommitCoreConnectTip(resources, std::move(ready[0].execution), state)};
     BOOST_REQUIRE(committed.Succeeded());
     BOOST_CHECK_EQUAL(activation_connected_blocks, 1U);
     BOOST_CHECK_EQUAL(chainstate.m_chain.Height(), 1);

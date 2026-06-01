@@ -10,6 +10,7 @@
 #include <validation/coins_view_spend_state.h>
 #include <consensus/consensus.h>
 #include <consensus/snapshot_spend_state.h>
+#include <consensus/spend_state_batch.h>
 #include <consensus/validation.h>
 #include <primitives/block.h>
 #include <primitives/transaction.h>
@@ -189,6 +190,18 @@ public:
             BOOST_CHECK(coin_effects.spends.empty());
         }
         return {};
+    }
+};
+
+class FakeBlockSpendJoiner final : public Consensus::BlockSpendJoiner {
+public:
+    mutable int joins{0};
+    Consensus::BlockSpentOutputJoin joined_inputs;
+
+    Consensus::BlockSpentOutputJoin Join(std::span<const CTransactionRef>, int) const override
+    {
+        ++joins;
+        return joined_inputs;
     }
 };
 
@@ -631,6 +644,46 @@ BOOST_AUTO_TEST_CASE(block_spend_stage_collects_script_plans_without_executing_t
     BOOST_CHECK(stage->script_checks[0].tx == spend_tx);
     BOOST_REQUIRE_EQUAL(stage->script_checks[0].spent_outputs.size(), 1U);
     BOOST_CHECK_EQUAL(stage->script_checks[0].spent_outputs[0].nValue, 50);
+    BOOST_CHECK_EQUAL(spend_state.stages, 2);
+}
+
+BOOST_AUTO_TEST_CASE(block_spend_stage_accepts_explicit_joiner)
+{
+    const COutPoint prevout{Txid::FromUint256(uint256::ONE), 0};
+    const CTransactionRef spend_tx{MakeSpendTx(prevout, /*value=*/40)};
+    CBlock block;
+    block.vtx = {MakeCoinbase(/*value=*/50), spend_tx};
+
+    FakeBlockSpendWorkspace spend_state;
+    FakeBlockSpendJoiner joiner;
+    joiner.joined_inputs = Consensus::BlockSpentOutputJoin{
+        .status = Consensus::BlockSpentOutputJoinStatus::Complete,
+        .failed_lookup = std::nullopt,
+        .input_coins_by_transaction = {
+            {},
+            {
+                Consensus::CoinSnapshot{
+                    .output = CTxOut{50, CScript{} << OP_TRUE},
+                    .height = 1,
+                    .is_coinbase = false,
+                },
+            },
+        },
+    };
+
+    const auto stage{Consensus::ValidateAndStageBlockTransactions(
+        block.vtx,
+        spend_state,
+        joiner,
+        BlockSpendContext(),
+        Consensus::BlockSpendConsensusOptions{},
+        Consensus::ScriptCheckPlanCollection::Collect)};
+
+    BOOST_REQUIRE(stage);
+    BOOST_CHECK_EQUAL(joiner.joins, 1);
+    BOOST_CHECK_EQUAL(stage->effects.fees, 10);
+    BOOST_REQUIRE_EQUAL(stage->script_checks.size(), 1U);
+    BOOST_CHECK(stage->script_checks[0].tx == spend_tx);
     BOOST_CHECK_EQUAL(spend_state.stages, 2);
 }
 

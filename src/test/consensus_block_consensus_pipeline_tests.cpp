@@ -4,6 +4,7 @@
 
 #include <consensus/block_consensus_pipeline.h>
 #include <consensus/merkle.h>
+#include <consensus/spend_state_batch.h>
 #include <primitives/block.h>
 #include <primitives/transaction.h>
 #include <script/interpreter.h>
@@ -109,6 +110,18 @@ public:
         ++completions;
         if (complete_error) return Consensus::Unexpected<Consensus::BlockSpendError>{*complete_error};
         return {};
+    }
+};
+
+class FakeBlockSpendJoiner final : public Consensus::BlockSpendJoiner {
+public:
+    mutable int joins{0};
+    Consensus::BlockSpentOutputJoin joined_inputs;
+
+    Consensus::BlockSpentOutputJoin Join(std::span<const CTransactionRef>, int) const override
+    {
+        ++joins;
+        return joined_inputs;
     }
 };
 
@@ -549,6 +562,50 @@ BOOST_AUTO_TEST_CASE(pipeline_validates_spend_with_explicit_context)
     BOOST_CHECK_EQUAL(spend_state.stages, 1);
     BOOST_CHECK_EQUAL(script_checker.checks, 0);
     BOOST_CHECK(pipeline.CheckCoinbaseReward(*effects));
+}
+
+BOOST_AUTO_TEST_CASE(pipeline_validates_spend_with_explicit_joiner)
+{
+    const Consensus::BlockConsensusContext context{
+        .spend = Consensus::BlockSpendContext{
+            .block_height = 2,
+            .previous_median_time_past = 0,
+        },
+        .commit = Consensus::BlockCommitContext{.new_best_block = uint256::ONE},
+        .block_subsidy = 50,
+    };
+
+    const COutPoint spent_outpoint{Txid::FromUint256(uint256::ONE), 0};
+    CBlock block;
+    block.vtx = {MakeCoinbase(50), MakeSpend(spent_outpoint, 40)};
+
+    Consensus::BlockConsensusPipeline pipeline{block, context};
+    FakeBlockSpendWorkspace spend_state;
+    FakeBlockSpendJoiner joiner;
+    joiner.joined_inputs = Consensus::BlockSpentOutputJoin{
+        .status = Consensus::BlockSpentOutputJoinStatus::Complete,
+        .failed_lookup = std::nullopt,
+        .input_coins_by_transaction = {
+            {},
+            {
+                Consensus::CoinSnapshot{
+                    .output = CTxOut{50, CScript{} << OP_TRUE},
+                    .height = 1,
+                    .is_coinbase = false,
+                },
+            },
+        },
+    };
+    NoopScriptChecker script_checker;
+
+    const auto effects{pipeline.ValidateAndStageSpend(spend_state, joiner, script_checker, Consensus::BlockSpendConsensusOptions{})};
+
+    BOOST_REQUIRE(effects);
+    BOOST_CHECK_EQUAL(joiner.joins, 1);
+    BOOST_CHECK_EQUAL(effects->fees, 10);
+    BOOST_CHECK_EQUAL(effects->inputs, 2);
+    BOOST_CHECK_EQUAL(spend_state.stages, 2);
+    BOOST_CHECK_EQUAL(script_checker.checks, 1);
 }
 
 BOOST_AUTO_TEST_CASE(pipeline_returns_coinbase_reward_diagnostics)

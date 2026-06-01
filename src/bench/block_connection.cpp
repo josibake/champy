@@ -13,6 +13,7 @@
 #include <validation/block_data_adapters.h>
 #include <validation/block_index_adapters.h>
 #include <validation/block_connection.h>
+#include <validation/core_block_commit_adapters.h>
 #include <validation/core_coins_block_connection_state.h>
 #include <validation/core_chain_validation_context.h>
 #include <validation/core_block_connection_setup.h>
@@ -114,29 +115,37 @@ void BenchmarkBlockConnectionEngine(benchmark::Bench& bench, std::vector<CKey>& 
         CoreChainValidationContext validation_context{chainstate.m_chainman, validation_runtime};
         const CoreBlockConnectionRuntimeInputs runtime_inputs{
             .notifications = validation_context.Notifications(),
-            .undo_writer = block_store,
-            .block_index_committer = block_index_store,
             .script_check_scheduler = validation_context.ScriptCheckScheduler(),
             .validation_cache = validation_context.ScriptValidationCache(),
         };
         BlockConnectionTrace trace{validation_context.TraceCounters()};
+        CoreBlockConnectionPlan connection_plan{PlanCoreBlockConnection(
+            SnapshotCoreBlockConnectionPolicy(validation_context, *pindex),
+            block_index_store,
+            *pindex)};
+        MaybeLogCoreBlockConnectionScriptPolicy(
+            chainstate.LastScriptCheckReasonLogged(),
+            *pindex,
+            test_block.GetHash(),
+            connection_plan);
         CoreBlockConnectionSetup connection_setup{
             runtime_inputs,
-            PlanCoreBlockConnection(SnapshotCoreBlockConnectionPolicy(validation_context, *pindex), block_index_store, *pindex),
-            *pindex,
+            std::move(connection_plan),
+            validation::SnapshotBlockConnectionPosition(*pindex),
             trace,
             /*cache_script_results=*/false};
-        connection_setup.MaybeLogScriptPolicy(chainstate.LastScriptCheckReasonLogged(), test_block.GetHash());
         validation::CoreCoinsBlockConnectionState connection_state{viewNew};
+        CoreBlockSpendEffectsCommitter spend_state_committer{viewNew};
         const validation::BlockConnectionRequest request{connection_setup.Request(test_block, connection_state)};
         validation::BlockConnectionEngine engine;
-        auto connected{engine.Connect(request, test_block_state)};
+        auto connected{engine.ConnectPrepared(request, test_block_state)};
         assert(connected.Succeeded());
         assert(connected.commit_package);
         const validation::BlockConnectionCommitRequest commit_request{
             .runtime = {
                 .undo_writer = block_store,
                 .block_index_committer = block_index_store,
+                .spend_state_committer = spend_state_committer,
                 .trace = trace,
             },
             .context = {

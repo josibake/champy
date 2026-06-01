@@ -6,13 +6,12 @@
 
 #include <kernel/notifications_interface.h>
 #include <primitives/block.h>
-#include <uint256.h>
 
 #include <utility>
 
-CoreBlockConnectionSetup::CoreBlockConnectionSetup(CoreBlockConnectionRuntimeInputs runtime, CoreBlockConnectionPlan connection_plan, CBlockIndex& block_index, BlockConnectionTrace& trace, bool cache_script_results)
+CoreBlockConnectionSetup::CoreBlockConnectionSetup(CoreBlockConnectionRuntimeInputs runtime, CoreBlockConnectionPlan connection_plan, validation::BlockConnectionBlockPosition block_position, BlockConnectionTrace& trace, bool cache_script_results)
     : m_notifications{runtime.notifications},
-      m_block_index{block_index},
+      m_block_position{block_position},
       m_connection_plan{std::move(connection_plan)},
       m_script_checks{
           runtime.script_check_scheduler,
@@ -22,11 +21,6 @@ CoreBlockConnectionSetup::CoreBlockConnectionSetup(CoreBlockConnectionRuntimeInp
           runtime.chain_lock},
       m_trace{trace}
 {
-}
-
-void CoreBlockConnectionSetup::MaybeLogScriptPolicy(std::optional<const char*>& last_reason_logged, const uint256& block_hash) const
-{
-    MaybeLogCoreBlockConnectionScriptPolicy(last_reason_logged, m_block_index, block_hash, m_connection_plan);
 }
 
 validation::BlockConnectionRequest CoreBlockConnectionSetup::Request(const CBlock& block, validation::BlockConnectionState& connection_state, BlockConnectionOptions options)
@@ -39,7 +33,7 @@ validation::BlockConnectionRequest CoreBlockConnectionSetup::Request(const CBloc
         },
         .context = m_connection_plan.context,
         .block = block,
-        .block_index = m_block_index,
+        .block_position = m_block_position,
         .connection_state = connection_state,
         .options = options,
     };

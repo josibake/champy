@@ -22,6 +22,11 @@ Consensus::BlockSpendResult<Consensus::BlockSpendEffects> CoreBlockConnectionAtt
     return m_pipeline.ValidateAndStageSpend(m_spend_workspace, script_checker, m_spend_options);
 }
 
+Consensus::BlockSpendResult<Consensus::BlockSpendEffects> CoreBlockConnectionAttempt::ValidateAndStageSpend(const Consensus::BlockSpendJoiner& joiner, Consensus::BlockScriptChecker& script_checker)
+{
+    return m_pipeline.ValidateAndStageSpend(m_spend_workspace, joiner, script_checker, m_spend_options);
+}
+
 Consensus::BlockSpendResult<Consensus::BlockSpendEffects> CoreBlockConnectionAttempt::CompleteSpendStage(
     Consensus::BlockSpendResult<Consensus::BlockSpendEffects> spend_effects,
     Consensus::BlockScriptChecker& script_checker)

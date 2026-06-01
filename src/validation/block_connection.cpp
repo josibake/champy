@@ -30,6 +30,16 @@ TRACEPOINT_SEMAPHORE(validation, block_connected);
 
 namespace validation {
 
+BlockConnectionBlockPosition SnapshotBlockConnectionPosition(const CBlockIndex& block_index)
+{
+    AssertLockHeld(cs_main);
+    return {
+        .hash = block_index.GetBlockHash(),
+        .parent_hash = block_index.pprev == nullptr ? uint256{} : block_index.pprev->GetBlockHash(),
+        .height = block_index.nHeight,
+    };
+}
+
 namespace {
 
 [[nodiscard]] BlockConnectionResult CommitBlockConnectionEffects(const BlockConnectionCommitRequest& request, BlockConnectionCommitPackage package, BlockValidationState& state)
@@ -87,23 +97,18 @@ namespace {
 
 } // namespace
 
-BlockConnectionResult BlockConnectionEngine::Connect(const BlockConnectionRequest& request, BlockValidationState& state) const
-{
-    AssertLockHeld(cs_main);
-    return ConnectPrepared(request, state);
-}
-
 BlockConnectionResult BlockConnectionEngine::ConnectPrepared(const BlockConnectionRequest& request, BlockValidationState& state) const
 {
     const BlockConnectionRuntime& runtime{request.runtime};
     const BlockConnectionContext& context{request.context};
     const CBlock& block{request.block};
-    CBlockIndex& block_index{request.block_index};
+    const BlockConnectionBlockPosition& block_position{request.block_position};
     BlockConnectionState& connection_state{request.connection_state};
     const BlockConnectionOptions& options{request.options};
 
     const uint256 block_hash{block.GetHash()};
-    assert(*block_index.phashBlock == block_hash);
+    assert(block_position.hash == block_hash);
+    assert(context.consensus_context.commit.block_height == block_position.height);
 
     BlockConnectionTrace& trace{runtime.trace};
     const Consensus::Params& consensus_params{context.consensus_params};
@@ -124,7 +129,7 @@ BlockConnectionResult BlockConnectionEngine::ConnectPrepared(const BlockConnecti
     }
 
     // Verify that the view's current state corresponds to the previous block.
-    const uint256 hashPrevBlock{block_index.pprev == nullptr ? uint256{} : block_index.pprev->GetBlockHash()};
+    const uint256 hashPrevBlock{block_position.parent_hash};
     assert(hashPrevBlock == connection_state.BestBlock());
 
     trace.CountBlock();
@@ -155,7 +160,9 @@ BlockConnectionResult BlockConnectionEngine::ConnectPrepared(const BlockConnecti
         block_spend.Workspace(),
         context.consensus_context,
         context.spend_options};
-    auto spend_effects{connection_attempt.ValidateAndStageSpend(runtime.script_checker)};
+    auto spend_effects{runtime.spend_joiner == nullptr ?
+        connection_attempt.ValidateAndStageSpend(runtime.script_checker) :
+        connection_attempt.ValidateAndStageSpend(*runtime.spend_joiner, runtime.script_checker)};
     const int spend_inputs{spend_effects ? spend_effects->inputs : 0};
     trace.SpendStageValidated(block.vtx.size(), spend_inputs);
 

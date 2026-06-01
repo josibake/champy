@@ -76,10 +76,8 @@ std::shared_ptr<const CBlock> LoadBlockForConnection(
 CoreBlockConnectionRuntimeInputs MakeCoreBlockConnectionRuntimeInputs(
     CoreChainValidationContext& context,
     validation::ScriptCheckScheduler& script_check_scheduler,
-    CoreChainLock* chain_lock) EXCLUSIVE_LOCKS_REQUIRED(cs_main)
+    CoreChainLock* chain_lock)
 {
-    AssertLockHeld(cs_main);
-
     return {
         .notifications = context.Notifications(),
         .script_check_scheduler = script_check_scheduler,
@@ -90,12 +88,12 @@ CoreBlockConnectionRuntimeInputs MakeCoreBlockConnectionRuntimeInputs(
 
 std::optional<validation::BlockConnectionCommitPackage> RunPreparedBlockConnection(
     BlockValidationState& state,
-    CBlockIndex& block_index,
+    const uint256& block_hash,
     const validation::BlockConnectionRequest& request)
 {
     validation::BlockConnectionResult connection_result{validation::BlockConnectionEngine{}.ConnectPrepared(request, state)};
     if (!connection_result.Succeeded()) {
-        LogError("%s: Block connection %s failed, %s\n", "ConnectTip", block_index.GetBlockHash().ToString(), state.ToString());
+        LogError("%s: Block connection %s failed, %s\n", "ConnectTip", block_hash.ToString(), state.ToString());
         return std::nullopt;
     }
     assert(connection_result.commit_package);
@@ -207,6 +205,40 @@ CoreChainFork LocateCoreChainFork(CoreChainActivationState& active_chain, CBlock
     };
 }
 
+ChainWorkBlockSnapshot SnapshotCoreConnectTipPosition(const CBlockIndex& block_index)
+    EXCLUSIVE_LOCKS_REQUIRED(cs_main)
+{
+    return {
+        .hash = block_index.GetBlockHash(),
+        .parent_hash = block_index.pprev ? block_index.pprev->GetBlockHash() : uint256{},
+        .height = block_index.nHeight,
+        .chain_work = block_index.nChainWork,
+    };
+}
+
+validation::BlockConnectionBlockPosition BlockConnectionPositionFor(const ChainWorkBlockSnapshot& block)
+{
+    return {
+        .hash = block.hash,
+        .parent_hash = block.parent_hash,
+        .height = block.height,
+    };
+}
+
+bool ExecutedTipMatchesCommitTarget(
+    const ExecutedCoreConnectTip& execution,
+    const CBlock& block,
+    const CBlockIndex& block_index,
+    const CBlockIndex* active_tip) EXCLUSIVE_LOCKS_REQUIRED(cs_main)
+{
+    const uint256 block_parent{block_index.pprev ? block_index.pprev->GetBlockHash() : uint256{}};
+    return execution.block_position.hash == block.GetHash() &&
+           execution.block_position.hash == block_index.GetBlockHash() &&
+           execution.block_position.height == block_index.nHeight &&
+           execution.block_position.parent_hash == block_parent &&
+           active_tip == block_index.pprev;
+}
+
 enum class DisconnectToForkStatus {
     Unchanged,
     Disconnected,
@@ -294,7 +326,7 @@ std::optional<PreparedCoreConnectTip> PrepareCoreConnectTipInternal(CoreConnectT
 
     return PreparedCoreConnectTip{
         .resources = &resources,
-        .block_index = &request.block_index,
+        .block_position = SnapshotCoreConnectTipPosition(request.block_index),
         .block = std::move(block_to_connect),
         .connection_plan = std::move(connection_plan),
         .snapshot_state = std::move(snapshot_state),
@@ -308,7 +340,6 @@ CoreConnectTipExecutionResult ExecuteCoreConnectTipInternal(PreparedCoreConnectT
 {
     AssertLockHeld(cs_main);
     CoreConnectTipResources& resources{*Assert(prepared.resources)};
-    CBlockIndex& block_index{*Assert(prepared.block_index)};
 
     BlockConnectionTrace trace{resources.context.TraceCounters()};
     CoreBlockConnectionSetup connection_setup{
@@ -317,7 +348,7 @@ CoreConnectTipExecutionResult ExecuteCoreConnectTipInternal(PreparedCoreConnectT
             resources.context.ScriptCheckScheduler(),
             /*chain_lock=*/nullptr),
         std::move(prepared.connection_plan),
-        block_index,
+        BlockConnectionPositionFor(prepared.block_position),
         trace,
         /*cache_script_results=*/false};
     const validation::BlockConnectionRequest request{connection_setup.Request(
@@ -325,13 +356,15 @@ CoreConnectTipExecutionResult ExecuteCoreConnectTipInternal(PreparedCoreConnectT
         prepared.snapshot_state)};
 
     const auto run_connection = [&]() {
-        return RunPreparedBlockConnection(state, block_index, request);
+        return RunPreparedBlockConnection(state, prepared.block_position.hash, request);
     };
     auto commit_package{resources.chain_lock ? resources.chain_lock->RunUnlocked(run_connection) : run_connection()};
     resources.validation_events.BlockChecked(prepared.block, state);
     if (!commit_package) {
         if (state.IsInvalid()) {
-            resources.context.MarkInvalidBlockFound(block_index, state);
+            if (CBlockIndex* block_index{resources.block_index_lookup.LookupBlockIndex(prepared.block_position.hash)}) {
+                resources.context.MarkInvalidBlockFound(*block_index, state);
+            }
         }
         return {
             .status = CoreConnectTipStatus::BlockConnectionFailed,
@@ -349,20 +382,31 @@ CoreConnectTipExecutionResult ExecuteCoreConnectTipInternal(PreparedCoreConnectT
     return {
         .status = CoreConnectTipStatus::Connected,
         .execution = ExecutedCoreConnectTip{
-            .prepared = std::move(prepared),
+            .block_position = prepared.block_position,
+            .block = std::move(prepared.block),
             .commit_package = std::move(*commit_package),
             .trace = std::move(trace),
+            .time_start = prepared.time_start,
             .time_block_connected = time_block_connected,
         },
     };
 }
 
-CoreConnectTipResult CommitCoreConnectTipInternal(ExecutedCoreConnectTip execution, BlockValidationState& state)
+CoreConnectTipResult CommitCoreConnectTipInternal(CoreConnectTipResources& resources, ExecutedCoreConnectTip execution, BlockValidationState& state)
     EXCLUSIVE_LOCKS_REQUIRED(cs_main)
 {
     AssertLockHeld(cs_main);
-    CoreConnectTipResources& resources{*Assert(execution.prepared.resources)};
-    CBlockIndex& block_index{*Assert(execution.prepared.block_index)};
+    const CBlock& block{*Assert(execution.block)};
+    CBlockIndex* index{resources.block_index_lookup.LookupBlockIndex(execution.block_position.hash)};
+    if (index == nullptr) {
+        state.Error("stale block connection");
+        return CoreConnectTipResult::BlockConnectionFailed();
+    }
+    CBlockIndex& block_index{*index};
+    if (!ExecutedTipMatchesCommitTarget(execution, block, block_index, resources.context.ActiveTip())) {
+        state.Error("stale block connection");
+        return CoreConnectTipResult::BlockConnectionFailed();
+    }
 
     auto connection_attempt{resources.connection_state.BeginConnectionAttempt()};
     const validation::BlockConnectionCommitRequest commit_request{
@@ -373,7 +417,7 @@ CoreConnectTipResult CommitCoreConnectTipInternal(ExecutedCoreConnectTip executi
             .trace = execution.trace,
         },
         .context = {
-            .block = *execution.prepared.block,
+            .block = block,
             .block_index = block_index,
             .connection_state = resources.connection_state,
         },
@@ -407,7 +451,7 @@ CoreConnectTipResult CommitCoreConnectTipInternal(ExecutedCoreConnectTip executi
         resources.timing.time_chainstate,
         resources.timing.blocks_total);
 
-    PublishConnectedBlock(resources.chain_events, *execution.prepared.block, block_index.nHeight);
+    PublishConnectedBlock(resources.chain_events, block, block_index.nHeight);
     resources.context.AdvanceActiveChainTip(block_index, resources.chain_events);
 
     const auto time_tip_advanced{SteadyClock::now()};
@@ -417,11 +461,11 @@ CoreConnectTipResult CommitCoreConnectTipInternal(ExecutedCoreConnectTip executi
         resources.timing.time_post_connect,
         resources.timing.blocks_total);
     AccumulateAndLogConnectTipTotal(
-        time_tip_advanced - execution.prepared.time_start,
+        time_tip_advanced - execution.time_start,
         resources.timing.time_total,
         resources.timing.blocks_total);
 
-    resources.connected_blocks.emplace_back(&block_index, std::move(execution.prepared.block));
+    resources.connected_blocks.emplace_back(&block_index, std::move(execution.block));
     return CoreConnectTipResult::Connected();
 }
 
@@ -503,9 +547,9 @@ CoreConnectTipExecutionResult ExecuteCoreConnectTip(PreparedCoreConnectTip prepa
     return ExecuteCoreConnectTipInternal(std::move(prepared), state);
 }
 
-CoreConnectTipResult CommitCoreConnectTip(ExecutedCoreConnectTip execution, BlockValidationState& state)
+CoreConnectTipResult CommitCoreConnectTip(CoreConnectTipResources& resources, ExecutedCoreConnectTip execution, BlockValidationState& state)
 {
-    return CommitCoreConnectTipInternal(std::move(execution), state);
+    return CommitCoreConnectTipInternal(resources, std::move(execution), state);
 }
 
 const CBlockIndex* CoreChainActivationState::Tip() const
@@ -564,7 +608,7 @@ CoreConnectTipResult ConnectCoreChainTip(CoreConnectTipRequest request, BlockVal
     auto execution{ExecuteCoreConnectTip(std::move(*prepared), state)};
     if (!execution.execution) return {execution.status};
 
-    return CommitCoreConnectTip(std::move(*execution.execution), state);
+    return CommitCoreConnectTip(request.resources, std::move(*execution.execution), state);
 }
 
 CoreActivateBestChainStepResult ActivateCoreBestChainStep(CoreActivateBestChainStepRequest request, BlockValidationState& state)

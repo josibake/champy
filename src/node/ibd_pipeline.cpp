@@ -66,10 +66,8 @@ IbdOrderedRetireQueue::IbdOrderedRetireQueue(int next_height)
 }
 
 IbdOrderedRetireQueue::IbdOrderedRetireQueue(IbdRetireChainPosition position)
-    : m_next_height{position.next_height},
-      m_expected_parent_hash{position.expected_parent_hash}
+    : m_queue{std::move(position)}
 {
-    assert(position.next_height >= 0);
 }
 
 IbdRetireResult IbdOrderedRetireQueue::Add(PeerBlockRef block)
@@ -79,75 +77,12 @@ IbdRetireResult IbdOrderedRetireQueue::Add(PeerBlockRef block)
 
 IbdRetireResult IbdOrderedRetireQueue::Add(IbdValidatedBlockPackage package)
 {
-    if (!package.ReadyForSerializedCommit()) {
-        return {.status = IbdRetireStatus::NotReady};
-    }
-    if (package.block.height < 0) {
-        return {.status = IbdRetireStatus::InvalidHeight};
-    }
-    if (package.block.height < m_next_height) {
-        return {.status = IbdRetireStatus::StaleHeight};
-    }
-    if (m_pending.contains(package.block.height)) {
-        return {.status = IbdRetireStatus::DuplicateHeight};
-    }
-    if (!ParentChainMatches(package)) {
-        return {.status = IbdRetireStatus::ParentMismatch};
-    }
-
-    const std::size_t previous_ready{m_ready.size()};
-    m_pending.emplace(package.block.height, std::move(package));
-    MoveContiguousToReady();
-    const std::size_t new_ready{m_ready.size() - previous_ready};
-
-    return {
-        .status = new_ready > 0 ? IbdRetireStatus::Ready : IbdRetireStatus::Queued,
-        .ready_count = new_ready,
-    };
+    return m_queue.Add(std::move(package));
 }
 
 std::vector<IbdValidatedBlockPackage> IbdOrderedRetireQueue::PopReady()
 {
-    std::vector<IbdValidatedBlockPackage> ready;
-    ready.swap(m_ready);
-    return ready;
-}
-
-bool IbdOrderedRetireQueue::ParentChainMatches(const IbdValidatedBlockPackage& package) const
-{
-    if (!m_expected_parent_hash) return true;
-
-    if (package.block.height == m_next_height && package.parent_hash != *m_expected_parent_hash) {
-        return false;
-    }
-
-    const auto previous{m_pending.find(package.block.height - 1)};
-    if (previous != m_pending.end() && package.parent_hash != previous->second.block.hash) {
-        return false;
-    }
-
-    const auto next{m_pending.find(package.block.height + 1)};
-    if (next != m_pending.end() && next->second.parent_hash != package.block.hash) {
-        return false;
-    }
-
-    return true;
-}
-
-void IbdOrderedRetireQueue::MoveContiguousToReady()
-{
-    while (true) {
-        auto it{m_pending.find(m_next_height)};
-        if (it == m_pending.end()) return;
-
-        if (m_expected_parent_hash) {
-            assert(it->second.parent_hash == *m_expected_parent_hash);
-            m_expected_parent_hash = it->second.block.hash;
-        }
-        m_ready.push_back(std::move(it->second));
-        m_pending.erase(it);
-        ++m_next_height;
-    }
+    return m_queue.PopReady();
 }
 
 IbdPipeline::IbdPipeline(int next_commit_height, IbdPipelineLimits limits)
