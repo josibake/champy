@@ -936,7 +936,7 @@ private:
             CoreBlockSpendEffectsCommitter spend_state_committer{*m_chainstate.m_coins_views->m_block_connection_view};
             CoreChainActivationState activation_state{m_chainstate};
             CoreChainValidationContext validation_context{m_chainstate.m_chainman, validation_runtime};
-            CoreConnectTipResources connection_resources{
+            CoreChainActivationResources activation_resources{
                 .context = validation_context,
                 .block_reader = block_store,
                 .undo_writer = block_store,
@@ -964,7 +964,7 @@ private:
             const auto step_result{ActivateCoreBestChainStep(
                 {
                     .active_chain = activation_state,
-                    .connection = connection_resources,
+                    .resources = activation_resources,
                     .index_most_work = *m_progress.most_work,
                     .cached_best_block = CachedBlockForMostWork(),
                 },

@@ -207,44 +207,39 @@ BOOST_AUTO_TEST_CASE(core_connect_tip_can_run_as_explicit_stages)
     validation::CoreCoinsBlockConnectionState connection_state{chainstate.CoinsTip()};
     validation::CoreCoinsBlockConnectionSnapshotter connection_snapshotter{chainstate.CoinsTip()};
     CoreBlockSpendEffectsCommitter spend_state_committer{chainstate.CoinsTip()};
-    CoreChainActivationState active_chain{chainstate};
     std::vector<ConnectedBlock> connected_blocks;
     BlockActivationTimings activation_timings;
     uint64_t activation_connected_blocks{0};
-    CoreConnectTipResources resources{
-        .context = context,
-        .block_reader = block_store,
-        .undo_writer = block_store,
-        .block_index_lookup = block_index_store,
-        .block_index_committer = block_index_store,
-        .connection_state = connection_state,
-        .connection_snapshotter = connection_snapshotter,
-        .spend_state_committer = spend_state_committer,
-        .last_script_check_reason_logged = chainstate.LastScriptCheckReasonLogged(),
-        .connected_blocks = connected_blocks,
-        .chain_events = nullptr,
-        .validation_events = runtime.ValidationEvents(),
-        .timing = {
-            .time_connect_total = chainman.TimeConnectTotal(),
-            .time_flush = chainman.TimeFlush(),
-            .time_chainstate = chainman.TimeChainstate(),
-            .time_post_connect = chainman.TimePostConnect(),
-            .time_total = chainman.TimeTotal(),
-            .blocks_total = chainman.NumBlocksTotal(),
-        },
-        .activation_timings = activation_timings,
-        .activation_connected_blocks = activation_connected_blocks,
-        .chain_lock = nullptr,
-    };
     CBlockIndex* block_index{Assert(block_index_store.LookupBlockIndex(block->GetHash()))};
 
     auto prepared{PrepareCoreConnectTip(
-        {.resources = resources, .block_index = *block_index, .cached_block = block},
+        {
+            .resources = {
+                .context = context,
+                .block_reader = block_store,
+                .block_index_lookup = block_index_store,
+                .connection_snapshotter = connection_snapshotter,
+                .last_script_check_reason_logged = chainstate.LastScriptCheckReasonLogged(),
+                .chain_lock = nullptr,
+            },
+            .block_index = *block_index,
+            .cached_block = block,
+        },
         state)};
     BOOST_REQUIRE(prepared);
     BOOST_CHECK(prepared->block == block);
 
-    auto executed{ExecuteCoreConnectTip(std::move(*prepared), state)};
+    auto executed{ExecutePreparedCoreConnectTip({.context = context, .chain_lock = nullptr}, std::move(*prepared), state)};
+    ReportCoreConnectTipExecution(
+        {
+            .context = context,
+            .block_index_lookup = block_index_store,
+            .validation_events = runtime.ValidationEvents(),
+            .time_connect_total = chainman.TimeConnectTotal(),
+            .blocks_total = chainman.NumBlocksTotal(),
+        },
+        executed,
+        state);
     BOOST_REQUIRE(executed.execution);
     BOOST_CHECK(executed.execution->block_position.hash == block->GetHash());
     BOOST_CHECK(executed.execution->block_position.parent_hash == Params().GenesisBlock().GetHash());
@@ -261,7 +256,29 @@ BOOST_AUTO_TEST_CASE(core_connect_tip_can_run_as_explicit_stages)
     std::vector<node::IbdValidatedTipPackage> ready{retire_queue.PopReady()};
     BOOST_REQUIRE_EQUAL(ready.size(), 1U);
 
-    const CoreConnectTipResult committed{CommitCoreConnectTip(resources, std::move(ready[0].execution), state)};
+    const CoreConnectTipResult committed{CommitCoreConnectTip(
+        {
+            .context = context,
+            .undo_writer = block_store,
+            .block_index_lookup = block_index_store,
+            .block_index_committer = block_index_store,
+            .connection_state = connection_state,
+            .spend_state_committer = spend_state_committer,
+            .connected_blocks = connected_blocks,
+            .chain_events = nullptr,
+            .timing = {
+                .time_connect_total = chainman.TimeConnectTotal(),
+                .time_flush = chainman.TimeFlush(),
+                .time_chainstate = chainman.TimeChainstate(),
+                .time_post_connect = chainman.TimePostConnect(),
+                .time_total = chainman.TimeTotal(),
+                .blocks_total = chainman.NumBlocksTotal(),
+            },
+            .activation_timings = activation_timings,
+            .activation_connected_blocks = activation_connected_blocks,
+        },
+        std::move(ready[0].execution),
+        state)};
     BOOST_REQUIRE(committed.Succeeded());
     BOOST_CHECK_EQUAL(activation_connected_blocks, 1U);
     BOOST_CHECK_EQUAL(chainstate.m_chain.Height(), 1);

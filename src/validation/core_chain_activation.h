@@ -95,7 +95,7 @@ struct CoreConnectTipTiming {
     int64_t& blocks_total;
 };
 
-struct CoreConnectTipResources {
+struct CoreChainActivationResources {
     CoreChainValidationContext& context;
     BlockDataReader& block_reader;
     BlockUndoWriter& undo_writer;
@@ -114,8 +114,44 @@ struct CoreConnectTipResources {
     CoreChainLock* chain_lock{nullptr};
 };
 
+struct CoreConnectTipPrepareResources {
+    CoreChainValidationContext& context;
+    BlockDataReader& block_reader;
+    BlockIndexLookup& block_index_lookup;
+    validation::CoreCoinsBlockConnectionSnapshotter& connection_snapshotter;
+    std::optional<const char*>& last_script_check_reason_logged;
+    CoreChainLock* chain_lock{nullptr};
+};
+
+struct CoreConnectTipExecutionResources {
+    CoreChainValidationContext& context;
+    CoreChainLock* chain_lock{nullptr};
+};
+
+struct CoreConnectTipReportResources {
+    CoreChainValidationContext& context;
+    BlockIndexLookup& block_index_lookup;
+    validation::ValidationEventQueue& validation_events;
+    SteadyClock::duration& time_connect_total;
+    int64_t& blocks_total;
+};
+
+struct CoreConnectTipCommitResources {
+    CoreChainValidationContext& context;
+    BlockUndoWriter& undo_writer;
+    BlockIndexLookup& block_index_lookup;
+    BlockIndexValidityCommitter& block_index_committer;
+    validation::BlockConnectionState& connection_state;
+    Consensus::BlockSpendStateCommitter& spend_state_committer;
+    std::vector<ConnectedBlock>& connected_blocks;
+    ChainstateEventSink* chain_events{nullptr};
+    CoreConnectTipTiming timing;
+    BlockActivationTimings& activation_timings;
+    uint64_t& activation_connected_blocks;
+};
+
 struct CoreConnectTipRequest {
-    CoreConnectTipResources& resources;
+    CoreConnectTipPrepareResources resources;
     CBlockIndex& block_index;
     std::shared_ptr<const CBlock> cached_block;
 };
@@ -123,14 +159,12 @@ struct CoreConnectTipRequest {
 /**
  * Staged Core connection values for one active-chain tip.
  *
- * These values keep block loading, spend/script execution, and commit separate
- * while the activation caller retains ownership of resources. They are only
- * valid while the referenced CoreConnectTipResources remain live under the
- * documented activation contract.
+ * These values keep block loading, spend/script execution, and commit separate.
+ * Runtime resources are supplied explicitly to execution and commit.
  */
 struct PreparedCoreConnectTip {
-    CoreConnectTipResources* resources{nullptr};
     ChainWorkBlockSnapshot block_position;
+    BlockConnectionTraceCounters trace_counters;
     std::shared_ptr<const CBlock> block;
     CoreBlockConnectionPlan connection_plan;
     validation::SnapshotBlockConnectionState snapshot_state;
@@ -144,24 +178,27 @@ struct ExecutedCoreConnectTip {
     validation::BlockConnectionCommitPackage commit_package;
     BlockConnectionTrace trace;
     SteadyClock::time_point time_start;
+    SteadyClock::time_point time_block_loaded;
     SteadyClock::time_point time_block_connected;
 };
 
 struct CoreConnectTipExecutionResult {
     CoreConnectTipStatus status{CoreConnectTipStatus::BlockConnectionFailed};
+    std::shared_ptr<const CBlock> checked_block;
     std::optional<ExecutedCoreConnectTip> execution;
 };
 
 [[nodiscard]] std::optional<PreparedCoreConnectTip> PrepareCoreConnectTip(CoreConnectTipRequest request, BlockValidationState& state)
     EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
 
-[[nodiscard]] CoreConnectTipExecutionResult ExecuteCoreConnectTip(PreparedCoreConnectTip prepared, BlockValidationState& state)
-    EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
+[[nodiscard]] CoreConnectTipExecutionResult ExecutePreparedCoreConnectTip(CoreConnectTipExecutionResources resources, PreparedCoreConnectTip prepared, BlockValidationState& state);
 
-[[nodiscard]] CoreConnectTipResult CommitCoreConnectTip(CoreConnectTipResources& resources, ExecutedCoreConnectTip execution, BlockValidationState& state)
-    EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
+void ReportCoreConnectTipExecution(
+    CoreConnectTipReportResources resources,
+    const CoreConnectTipExecutionResult& result,
+    BlockValidationState& state) EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
 
-[[nodiscard]] CoreConnectTipResult ConnectCoreChainTip(CoreConnectTipRequest request, BlockValidationState& state)
+[[nodiscard]] CoreConnectTipResult CommitCoreConnectTip(CoreConnectTipCommitResources resources, ExecutedCoreConnectTip execution, BlockValidationState& state)
     EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
 
 enum class CoreActivateBestChainStepStatus {
@@ -183,7 +220,7 @@ struct CoreActivateBestChainStepResult {
 
 struct CoreActivateBestChainStepRequest {
     CoreChainActivationState& active_chain;
-    CoreConnectTipResources& connection;
+    CoreChainActivationResources& resources;
     CBlockIndex& index_most_work;
     std::shared_ptr<const CBlock> cached_best_block;
 };
