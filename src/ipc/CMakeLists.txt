@@ -21,6 +21,7 @@ add_library(bitcoin_ipc STATIC EXCLUDE_FROM_ALL
 
 target_link_libraries(bitcoin_ipc
   PRIVATE
+    bitcoin_common
     core_interface
     univalue
     CapnProto::capnp-rpc
