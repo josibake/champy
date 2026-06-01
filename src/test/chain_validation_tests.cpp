@@ -79,9 +79,7 @@ BOOST_AUTO_TEST_CASE(service_test_block_validity_uses_explicit_time)
     ChainValidationService validation{chainman};
     const auto block{CreateBlockChain(/*total_height=*/1, Params()).front()};
 
-    LOCK(cs_main);
-    const BlockValidationState state{validation.TestBlockValidity(
-        chainman.ActiveChainstate(),
+    const BlockValidationState state{validation.TestActiveBlockValidity(
         *block,
         {},
         {.current_time_seconds = 0, .max_future_block_time = static_cast<int64_t>(block->nTime) - 1})};

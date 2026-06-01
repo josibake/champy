@@ -68,7 +68,9 @@ foreach(relative_path IN ITEMS
     src/validation/core_block_connection_context.h
     src/validation/core_block_connection_setup.cpp
     src/validation/core_block_connection_setup.h
+    src/validation/verify_db.h
     src/validation/block_validation_internal.h
+    src/validation/test_block_validity.h
     src/validation/chain_validation.cpp
     src/validation/chain_validation.h)
   require_file("${relative_path}")
@@ -177,11 +179,14 @@ forbid_text("src/validation/block_connection.h" "ValidationCache")
 forbid_text("src/validation/block_connection_trace.h" "ChainstateManager& m_chainman")
 require_text("src/validation/chain_validation.cpp" "#include <validation/block_validation_internal.h>")
 require_text("src/validation/chain_validation.h" "class ChainValidationService")
+require_text("src/validation/chain_validation.h" "TestActiveBlockValidity(")
+require_text("src/validation/chain_validation.h" "TestActiveBlockValidityLocked(")
+forbid_text("src/validation/chain_validation.h" "Chainstate&")
 require_text("src/validation/block_validation_internal.h" "ProcessNewBlockHeaders(")
 require_text("src/validation/block_validation_internal.h" "AcceptBlock(")
 require_text("src/validation/block_validation_internal.h" "ProcessNewBlock(")
-require_text("src/validation/block_validation_internal.h" "struct TestBlockValidityRequest")
-require_text("src/validation/block_validation_internal.h" "TestBlockValidity(")
+require_text("src/validation/test_block_validity.h" "struct TestBlockValidityRequest")
+require_text("src/validation/test_block_validity.h" "TestBlockValidity(")
 require_text("src/validation/block_validation_internal.h" "CoreChainValidationContext& context")
 require_text("src/validation/active_chain.h" "class ActiveChainView")
 forbid_text("src/validation/block_validation_internal.h" "ChainstateManager&")
@@ -248,7 +253,9 @@ forbid_text("src/validation/block_validation.h" "ReplayBlocks")
 forbid_text("src/validation/block_validation.h" "GenerateCoinbaseCommitment")
 require_text("src/validation/block_replay.h" "DisconnectBlock")
 require_text("src/validation/block_replay.h" "ReplayBlocks")
-require_text("src/chainstate.h" "struct VerifyDBRequest")
+require_text("src/validation/verify_db.h" "struct VerifyDBRequest")
+require_text("src/validation/verify_db.h" "class CVerifyDB")
+forbid_text("src/chainstate.h" "struct VerifyDBRequest")
 require_text("src/chainstate.h" "enum class RawBlockDataReadError")
 forbid_text("src/chainstate.h" "kernel::ReadRawError")
 require_text("src/validation/block_validation.cpp" "CVerifyDB::VerifyDB(\n    VerifyDBRequest request")

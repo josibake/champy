@@ -4,12 +4,15 @@
 
 #include <boost/test/unit_test.hpp>
 
+#include <arith_uint256.h>
 #include <validation/block_data_adapters.h>
+#include <validation/block_header_context_adapters.h>
 #include <validation/block_index_adapters.h>
 #include <validation/block_connection.h>
 #include <validation/block_connection_trace.h>
 #include <validation/block_script_check_adapters.h>
 #include <validation/core_coins_block_connection_state.h>
+#include <validation/test_block_validity.h>
 #include <chain.h>
 #include <chainstate.h>
 #include <chainparams.h>
@@ -21,6 +24,7 @@
 #include <validation/core_block_commit_adapters.h>
 #include <kernel/cs_main.h>
 #include <kernel/notifications_interface.h>
+#include <pow.h>
 #include <primitives/transaction.h>
 #include <script/script.h>
 #include <script/script_error.h>
@@ -76,6 +80,32 @@ public:
     void MarkBlockIndexDirty(CBlockIndex& block_index) override EXCLUSIVE_LOCKS_REQUIRED(::cs_main) { dirty_index = &block_index; }
 
     CBlockIndex* dirty_index{nullptr};
+};
+
+class FixedActiveChainView final : public validation::ActiveChainView
+{
+public:
+    explicit FixedActiveChainView(CBlockIndex& tip) : m_tip{tip} {}
+
+    [[nodiscard]] CBlockIndex* Tip() const override EXCLUSIVE_LOCKS_REQUIRED(::cs_main) { return &m_tip; }
+    [[nodiscard]] int Height() const override EXCLUSIVE_LOCKS_REQUIRED(::cs_main) { return m_tip.nHeight; }
+    [[nodiscard]] CBlockIndex* Next(const CBlockIndex&) const override EXCLUSIVE_LOCKS_REQUIRED(::cs_main) { return nullptr; }
+
+private:
+    CBlockIndex& m_tip;
+};
+
+class FixedBlockHeaderContextProvider final : public BlockHeaderContextProvider
+{
+public:
+    [[nodiscard]] Consensus::BlockHeaderContext BuildContext(const CBlockIndex* previous_index) const override
+    {
+        if (!previous_index) return {};
+        return Consensus::BlockHeaderContext{
+            previous_index->nHeight + 1,
+            previous_index->GetMedianTimePast(),
+            previous_index->GetBlockTime()};
+    }
 };
 
 class NoopBlockConnectionAttemptGuard final : public validation::BlockConnectionAttemptGuard
@@ -500,6 +530,77 @@ BOOST_AUTO_TEST_CASE(block_connection_engine_validates_spends_with_snapshot_stat
     BOOST_CHECK(!spend_coin->is_coinbase);
     BOOST_CHECK_EQUAL(spend_coin->output.nValue, 39);
     BOOST_CHECK(undo_writer.wrote_undo);
+}
+
+BOOST_AUTO_TEST_CASE(test_block_validity_accepts_snapshot_state_backend)
+{
+    LOCK(::cs_main);
+
+    const Consensus::Params& consensus_params{Params().GetConsensus()};
+    const uint256 previous_hash{uint256::ONE};
+    CBlockIndex tip;
+    tip.phashBlock = &previous_hash;
+    tip.nHeight = 0;
+    tip.nTime = 1;
+    tip.nBits = UintToArith256(consensus_params.powLimit).GetCompact();
+
+    CBlock block{MakeBlock(previous_hash, /*coinbase_value=*/50)};
+    block.nVersion = 1;
+    block.nTime = tip.nTime + 1;
+    block.nBits = GetNextWorkRequired(&tip, &block, consensus_params);
+    block.hashMerkleRoot = BlockMerkleRoot(block);
+
+    FixedActiveChainView active_chain{tip};
+    FixedBlockHeaderContextProvider header_context;
+    SnapshotBlockConnectionState connection_state;
+    connection_state.SetBestBlock(previous_hash);
+    kernel::Notifications notifications;
+    FakeBlockUndoWriter undo_writer;
+    FakeBlockIndexCommitter block_index_committer;
+    Consensus::DirectBlockScriptChecker script_checker;
+    int64_t blocks_total{0};
+    SteadyClock::duration time_check{};
+    SteadyClock::duration time_forks{};
+    SteadyClock::duration time_connect{};
+    SteadyClock::duration time_verify{};
+    SteadyClock::duration time_undo{};
+    SteadyClock::duration time_index{};
+    BlockConnectionTrace trace{
+        BlockConnectionTraceCounters{
+            .num_blocks_total = blocks_total,
+            .time_check = time_check,
+            .time_forks = time_forks,
+            .time_connect = time_connect,
+            .time_verify = time_verify,
+            .time_undo = time_undo,
+            .time_index = time_index,
+        }};
+
+    TestBlockValidityRequest request{
+        .active_chain = active_chain,
+        .consensus_params = consensus_params,
+        .header_context = header_context,
+        .connection_state = connection_state,
+        .undo_writer = undo_writer,
+        .block_index_committer = block_index_committer,
+        .notifications = notifications,
+        .script_checker = script_checker,
+        .trace = trace,
+        .sequence_lock_times = FixedSequenceLockTimes(),
+    };
+
+    const BlockValidationState state{TestBlockValidity(
+        request,
+        block,
+        Consensus::BlockCheckOptions{.check_pow = false},
+        BlockValidationTime{
+            .current_time_seconds = block.nTime,
+            .max_future_block_time = block.nTime + 1,
+        })};
+    BOOST_CHECK(state.IsValid());
+    BOOST_CHECK(connection_state.BestBlock() == previous_hash);
+    BOOST_CHECK(!undo_writer.wrote_undo);
+    BOOST_CHECK_EQUAL(block_index_committer.dirty_index, nullptr);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

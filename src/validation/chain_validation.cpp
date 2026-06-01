@@ -51,20 +51,19 @@ NewBlockProcessingResult ChainValidationService::ProcessNewBlock(
     return ::ProcessNewBlock(context, block, options, time);
 }
 
-BlockValidationState ChainValidationService::TestBlockValidity(
-    Chainstate& chainstate,
-    const CBlock& block,
-    const Consensus::BlockCheckOptions& options,
-    BlockValidationTime time)
-{
-    return ::TestBlockValidity(chainstate, block, options, time);
-}
-
 BlockValidationState ChainValidationService::TestActiveBlockValidity(
     const CBlock& block,
     const Consensus::BlockCheckOptions& options,
     BlockValidationTime time)
 {
     LOCK(::cs_main);
-    return TestBlockValidity(m_chainman.ActiveChainstate(), block, options, time);
+    return TestActiveBlockValidityLocked(block, options, time);
+}
+
+BlockValidationState ChainValidationService::TestActiveBlockValidityLocked(
+    const CBlock& block,
+    const Consensus::BlockCheckOptions& options,
+    BlockValidationTime time)
+{
+    return ::TestBlockValidity(m_chainman.ActiveChainstate(), block, options, time);
 }

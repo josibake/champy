@@ -11,7 +11,6 @@
 #include <memory>
 #include <span>
 
-class Chainstate;
 class ChainstateEventSink;
 class ChainstateManager;
 
@@ -43,16 +42,15 @@ public:
         NewBlockProcessingOptions options,
         BlockValidationTime time) LOCKS_EXCLUDED(cs_main);
 
-    [[nodiscard]] BlockValidationState TestBlockValidity(
-        Chainstate& chainstate,
-        const CBlock& block,
-        const Consensus::BlockCheckOptions& options,
-        BlockValidationTime time) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
-
     [[nodiscard]] BlockValidationState TestActiveBlockValidity(
         const CBlock& block,
         const Consensus::BlockCheckOptions& options,
         BlockValidationTime time) LOCKS_EXCLUDED(cs_main);
+
+    [[nodiscard]] BlockValidationState TestActiveBlockValidityLocked(
+        const CBlock& block,
+        const Consensus::BlockCheckOptions& options,
+        BlockValidationTime time) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
 
 private:
     ChainstateManager& m_chainman;

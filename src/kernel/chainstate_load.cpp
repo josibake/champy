@@ -21,6 +21,7 @@
 #include <util/signalinterrupt.h>
 #include <util/time.h>
 #include <util/translation.h>
+#include <validation/verify_db.h>
 
 #include <algorithm>
 #include <cassert>

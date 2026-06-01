@@ -120,6 +120,27 @@ BOOST_AUTO_TEST_CASE(snapshot_spend_state_rejects_missing_staged_spend)
     CheckRejectReason(workspace.StageTransactionEffectsForIntraBlockView(effects, /*transaction_index=*/1), "bad-txns-inputs-missingorspent");
 }
 
+BOOST_AUTO_TEST_CASE(snapshot_spend_workspace_staging_is_atomic_on_error)
+{
+    Consensus::SnapshotSpendState state;
+    state.AddCoin(OutPoint(0), Coin(5));
+    auto workspace{state.MakeWorkspace()};
+
+    Consensus::TransactionCoinEffects effects;
+    effects.spends.push_back({
+        .outpoint = OutPoint(0),
+        .coin = Coin(5),
+    });
+    effects.spends.push_back({
+        .outpoint = OutPoint(1),
+        .coin = Coin(8),
+    });
+
+    CheckRejectReason(workspace.StageTransactionEffectsForIntraBlockView(effects, /*transaction_index=*/1), "bad-txns-inputs-missingorspent");
+    BOOST_CHECK(workspace.HaveCoin(OutPoint(0)));
+    BOOST_CHECK(!workspace.HaveCoin(OutPoint(1)));
+}
+
 BOOST_AUTO_TEST_CASE(snapshot_spend_state_rejects_duplicate_create)
 {
     Consensus::SnapshotSpendState state;

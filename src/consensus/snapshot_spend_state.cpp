@@ -78,19 +78,22 @@ std::optional<CoinSnapshot> SnapshotSpendWorkspace::GetCoin(const COutPoint& out
 
 BlockSpendResult<void> SnapshotSpendWorkspace::StageTransactionEffectsForIntraBlockView(const TransactionCoinEffects& effects, unsigned int)
 {
+    auto staged_coins{m_coins};
+    auto staged_sequence_lock_times{m_sequence_lock_times};
+
     for (const SpentCoinEffect& spend : effects.spends) {
-        const auto coin{m_coins.find(spend.outpoint)};
-        if (coin == m_coins.end()) {
+        const auto coin{staged_coins.find(spend.outpoint)};
+        if (coin == staged_coins.end()) {
             return Consensus::Unexpected<BlockSpendError>{SnapshotSpendStateError(
                 "bad-txns-inputs-missingorspent",
                 "SnapshotSpendWorkspace: staged spend missing coin")};
         }
-        m_coins.erase(coin);
-        m_sequence_lock_times.Erase(spend.outpoint);
+        staged_coins.erase(coin);
+        staged_sequence_lock_times.Erase(spend.outpoint);
     }
 
     for (const CreatedCoinEffect& create : effects.creates) {
-        const auto [_, inserted]{m_coins.emplace(create.outpoint, create.coin)};
+        const auto [_, inserted]{staged_coins.emplace(create.outpoint, create.coin)};
         if (!inserted) {
             return Consensus::Unexpected<BlockSpendError>{SnapshotSpendStateError(
                 "bad-txns-BIP30",
@@ -98,6 +101,8 @@ BlockSpendResult<void> SnapshotSpendWorkspace::StageTransactionEffectsForIntraBl
         }
     }
 
+    m_coins = std::move(staged_coins);
+    m_sequence_lock_times = std::move(staged_sequence_lock_times);
     return {};
 }
 

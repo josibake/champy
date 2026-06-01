@@ -214,8 +214,8 @@ block storage, block index, script scheduler, validation context, and interrupt
 source. The `Chainstate` overload is the Core adapter that builds this request.
 
 Test-only block validation uses `TestBlockValidityRequest` for the same reason:
-the check path names the active-chain view, header context, coins view, block
-index, script scheduler, and validation context it uses.
+the check path names the active-chain view, header context, block-local
+connection state, script checker, undo writer, and metadata committer it uses.
 
 ## Execution Contract
 

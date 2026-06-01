@@ -39,10 +39,13 @@
 #include <validation/block_validation_error.h>
 #include <validation/block_validation_internal.h>
 #include <validation/block_validation_policy.h>
+#include <validation/coins_view_spend_state.h>
 #include <validation/core_block_connection_setup.h>
+#include <validation/core_block_policy.h>
 #include <validation/core_chain_validation_context.h>
 #include <validation/core_coins_block_connection_state.h>
 #include <validation/script_check_scheduler.h>
+#include <validation/verify_db.h>
 #include <validation/validation_event_queue.h>
 #include <validation_state.h>
 
@@ -616,19 +619,18 @@ BlockValidationState TestBlockValidity(
         return state;
     }
 
-    // We don't want test validation to update the actual chainstate, so create
-    // a cache on top of it, along with a dummy block index.
+    // Test validation uses a dummy block index. The caller supplies the
+    // block-local connection state so this path is not tied to Core's coins
+    // cache implementation.
     CBlockIndex index_dummy{block};
     uint256 block_hash(block.GetHash());
     index_dummy.pprev = tip;
     index_dummy.nHeight = tip->nHeight + 1;
     index_dummy.phashBlock = &block_hash;
-    CCoinsViewCache view_dummy(&request.coins_tip);
-    validation::CoreCoinsBlockConnectionState connection_state{view_dummy};
 
     // Test validation uses the normal connection path with commit disabled. It
     // may update reusable script caches, but staged coin effects stay local to
-    // view_dummy.
+    // the caller-supplied connection attempt.
     const BlockConnectionOptions connect_options{
         .block_check_options = Consensus::BlockCheckOptions{
             .check_pow = false,
@@ -636,15 +638,31 @@ BlockValidationState TestBlockValidity(
         },
         .commit = false,
     };
-    const CoreBlockConnectionRuntimeInputs runtime_inputs{
-        MakeCoreBlockConnectionRuntimeInputs(request.validation_context, request.undo_writer, request.block_index_committer, request.script_check_scheduler)};
-    CoreBlockConnectionSetup connection_setup{
-        runtime_inputs,
-        PlanCoreBlockConnection(SnapshotCoreBlockConnectionPolicy(request.validation_context, index_dummy), request.block_index_lookup, index_dummy),
-        index_dummy,
-        /*cache_script_results=*/true};
-    connection_setup.MaybeLogScriptPolicy(request.last_script_check_reason_logged, block_hash);
-    const validation::BlockConnectionRequest connection_request{connection_setup.Request(block, connection_state, connect_options)};
+
+    const Consensus::BlockHeaderContext headers{request.header_context.BuildContext(tip)};
+    const validation::BlockConnectionContext connection_context{
+        .consensus_params = request.consensus_params,
+        .consensus_context = Consensus::BuildBlockConsensusContext(
+            headers,
+            block_hash,
+            Consensus::CalculateBlockSubsidy(index_dummy.nHeight, request.consensus_params)),
+        .sequence_lock_times = request.sequence_lock_times ? request.sequence_lock_times : std::make_shared<validation::CoinsViewSequenceLockTimeView>(index_dummy),
+        .spend_options = BuildCoreBlockSpendConsensusOptions(index_dummy, request.consensus_params, headers.Deployments()),
+    };
+    const validation::BlockConnectionRequest connection_request{
+        .runtime = {
+            .notifications = request.notifications,
+            .undo_writer = request.undo_writer,
+            .block_index_committer = request.block_index_committer,
+            .script_checker = request.script_checker,
+            .trace = request.trace,
+        },
+        .context = connection_context,
+        .block = block,
+        .block_index = index_dummy,
+        .connection_state = request.connection_state,
+        .options = connect_options,
+    };
     if (!validation::BlockConnectionEngine{}.Connect(connection_request, state).Succeeded()) {
         if (state.IsValid()) NONFATAL_UNREACHABLE();
         return state;
@@ -671,17 +689,42 @@ BlockValidationState TestBlockValidity(
     CoreChainValidationRuntime runtime{chainstate.m_chainman};
     CoreChainValidationContext context{chainstate.m_chainman, runtime};
     CoreActiveChainView active_chain{chainstate.m_chain};
+    bool run_script_checks{true};
+    CBlockIndex* tip{Assert(active_chain.Tip())};
+    if (block.hashPrevBlock == *Assert(tip->phashBlock)) {
+        uint256 block_hash{block.GetHash()};
+        CBlockIndex script_policy_index{block};
+        script_policy_index.pprev = tip;
+        script_policy_index.nHeight = tip->nHeight + 1;
+        script_policy_index.phashBlock = &block_hash;
+        run_script_checks = DetermineCoreBlockScriptChecks(
+            {
+                .assumed_valid_block = context.AssumedValidBlock(),
+                .best_header = context.BestHeader(),
+                .minimum_chain_work = context.MinimumChainWork(),
+            },
+            block_index_store,
+            script_policy_index,
+            chainstate.m_chainman.GetConsensus()).run_script_checks;
+    }
+    CCoinsViewCache view_dummy(&chainstate.CoinsTip());
+    validation::CoreCoinsBlockConnectionState connection_state{view_dummy};
+    CoreBlockScriptChecks script_checks{
+        context.ScriptCheckScheduler(),
+        run_script_checks,
+        /*cache_results=*/true,
+        context.ScriptValidationCache()};
+    BlockConnectionTrace trace{context.TraceCounters()};
     TestBlockValidityRequest request{
         .active_chain = active_chain,
         .consensus_params = chainstate.m_chainman.GetConsensus(),
         .header_context = header_context,
-        .coins_tip = chainstate.CoinsTip(),
+        .connection_state = connection_state,
         .undo_writer = block_store,
-        .block_index_lookup = block_index_store,
         .block_index_committer = block_index_store,
-        .validation_context = context,
-        .script_check_scheduler = context.ScriptCheckScheduler(),
-        .last_script_check_reason_logged = chainstate.LastScriptCheckReasonLogged(),
+        .notifications = context.Notifications(),
+        .script_checker = script_checks.Checker(),
+        .trace = trace,
     };
     return TestBlockValidity(request, block, options, time);
 }

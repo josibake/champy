@@ -32,6 +32,9 @@ It also receives block-local spend state through `BlockConnectionState` instead
 of a raw `CCoinsViewCache`.
 Other validation paths still use broader adapters while admission, replay, and
 verification are being kept behavior-compatible.
+`VerifyDBRequest` lives in `validation/verify_db.h` because database
+verification still carries Core coins views for replay checks; do not treat
+that request as a general chainstate API.
 
 Validation-interface notifications are emitted through `ValidationEventQueue`.
 The remaining direct `ValidationSignals` use in chainstate is queue backpressure
