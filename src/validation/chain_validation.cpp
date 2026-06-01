@@ -19,6 +19,15 @@ NewBlockHeadersResult ChainValidationService::ProcessNewBlockHeaders(
     return ::ProcessNewBlockHeaders(context, headers, options, time, state);
 }
 
+NewBlockStructuralCheckResult ChainValidationService::CheckNewBlockStructural(
+    const std::shared_ptr<const CBlock>& block,
+    BlockValidationState& state)
+{
+    CoreChainValidationRuntime runtime{m_chainman};
+    CoreChainValidationContext context{m_chainman, runtime};
+    return ::CheckNewBlockStructural(context, block, state);
+}
+
 BlockAcceptanceResult ChainValidationService::AcceptBlock(
     const std::shared_ptr<const CBlock>& block,
     BlockValidationState& state,
@@ -28,6 +37,35 @@ BlockAcceptanceResult ChainValidationService::AcceptBlock(
     CoreChainValidationRuntime runtime{m_chainman};
     CoreChainValidationContext context{m_chainman, runtime};
     return ::AcceptBlock(context, block, state, options, time);
+}
+
+BlockAcceptanceResult ChainValidationService::AcceptNewBlockData(
+    const std::shared_ptr<const CBlock>& block,
+    BlockValidationState& state,
+    BlockAcceptanceOptions options,
+    BlockValidationTime time)
+{
+    CoreChainValidationRuntime runtime{m_chainman};
+    CoreChainValidationContext context{m_chainman, runtime};
+    return ::AcceptNewBlockData(context, block, state, options, time);
+}
+
+std::optional<NewBlockCandidateContextSnapshot> ChainValidationService::SnapshotAcceptedBlockContext(
+    const uint256& block_hash)
+{
+    CoreChainValidationRuntime runtime{m_chainman};
+    CoreChainValidationContext context{m_chainman, runtime};
+    return ::SnapshotAcceptedBlockContext(context, block_hash);
+}
+
+bool ChainValidationService::ActivateAcceptedBlock(
+    ChainstateEventSink* chain_events,
+    const std::shared_ptr<const CBlock>& block,
+    BlockValidationState& state)
+{
+    CoreChainValidationRuntime runtime{m_chainman};
+    CoreChainValidationContext context{m_chainman, runtime};
+    return ::ActivateAcceptedBlock(context, chain_events, block, state);
 }
 
 NewBlockProcessingResult ChainValidationService::ProcessNewBlock(

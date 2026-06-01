@@ -242,4 +242,21 @@ BOOST_AUTO_TEST_CASE(snapshot_spend_state_commit_is_atomic_on_error)
     BOOST_CHECK_EQUAL(unchanged->output.nValue, 8);
 }
 
+BOOST_AUTO_TEST_CASE(snapshot_spend_state_rejects_wrong_create_height)
+{
+    Consensus::SnapshotSpendState state;
+
+    Consensus::BlockSpendEffects effects;
+    effects.transaction_effects.push_back({
+        .spends = {},
+        .creates = {{
+            .outpoint = OutPoint(0),
+            .coin = Coin(4, /*height=*/3),
+        }},
+    });
+
+    CheckCommitRejectReason(state.CommitSpendState(CommitContext(/*block_height=*/2), effects), "snapshot-commit-create-height-mismatch");
+    BOOST_CHECK(!state.HaveCoin(OutPoint(0)));
+}
+
 BOOST_AUTO_TEST_SUITE_END()

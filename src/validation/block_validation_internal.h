@@ -19,7 +19,11 @@ class ChainstateEventSink;
 class CoreChainValidationContext;
 
 [[nodiscard]] NewBlockHeadersResult ProcessNewBlockHeaders(CoreChainValidationContext& context, std::span<const CBlockHeader> headers, BlockHeaderAcceptanceOptions options, BlockValidationTime time, BlockValidationState& state) LOCKS_EXCLUDED(cs_main);
+[[nodiscard]] NewBlockStructuralCheckResult CheckNewBlockStructural(CoreChainValidationContext& context, const std::shared_ptr<const CBlock>& block, BlockValidationState& state) LOCKS_EXCLUDED(cs_main);
 [[nodiscard]] BlockAcceptanceResult AcceptBlock(CoreChainValidationContext& context, const std::shared_ptr<const CBlock>& pblock, BlockValidationState& state, BlockAcceptanceOptions options, BlockValidationTime time) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
+[[nodiscard]] BlockAcceptanceResult AcceptNewBlockData(CoreChainValidationContext& context, const std::shared_ptr<const CBlock>& block, BlockValidationState& state, BlockAcceptanceOptions options, BlockValidationTime time) LOCKS_EXCLUDED(cs_main);
+[[nodiscard]] std::optional<NewBlockCandidateContextSnapshot> SnapshotAcceptedBlockContext(CoreChainValidationContext& context, const uint256& block_hash) LOCKS_EXCLUDED(cs_main);
+[[nodiscard]] bool ActivateAcceptedBlock(CoreChainValidationContext& context, ChainstateEventSink* chain_events, const std::shared_ptr<const CBlock>& block, BlockValidationState& state) LOCKS_EXCLUDED(cs_main);
 [[nodiscard]] NewBlockProcessingResult ProcessNewBlock(CoreChainValidationContext& context, ChainstateEventSink* chain_events, const std::shared_ptr<const CBlock>& block, NewBlockProcessingOptions options, BlockValidationTime time) LOCKS_EXCLUDED(cs_main);
 [[nodiscard]] NewBlockProcessingResult ProcessNewBlock(CoreChainValidationContext& context, const std::shared_ptr<const CBlock>& block, NewBlockProcessingOptions options, BlockValidationTime time) LOCKS_EXCLUDED(cs_main);
 

@@ -25,11 +25,29 @@ public:
         BlockValidationTime time,
         BlockValidationState& state) LOCKS_EXCLUDED(cs_main);
 
+    [[nodiscard]] NewBlockStructuralCheckResult CheckNewBlockStructural(
+        const std::shared_ptr<const CBlock>& block,
+        BlockValidationState& state) LOCKS_EXCLUDED(cs_main);
+
     [[nodiscard]] BlockAcceptanceResult AcceptBlock(
         const std::shared_ptr<const CBlock>& block,
         BlockValidationState& state,
         BlockAcceptanceOptions options,
         BlockValidationTime time) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
+
+    [[nodiscard]] BlockAcceptanceResult AcceptNewBlockData(
+        const std::shared_ptr<const CBlock>& block,
+        BlockValidationState& state,
+        BlockAcceptanceOptions options,
+        BlockValidationTime time) LOCKS_EXCLUDED(cs_main);
+
+    [[nodiscard]] std::optional<NewBlockCandidateContextSnapshot> SnapshotAcceptedBlockContext(
+        const uint256& block_hash) LOCKS_EXCLUDED(cs_main);
+
+    [[nodiscard]] bool ActivateAcceptedBlock(
+        ChainstateEventSink* chain_events,
+        const std::shared_ptr<const CBlock>& block,
+        BlockValidationState& state) LOCKS_EXCLUDED(cs_main);
 
     [[nodiscard]] NewBlockProcessingResult ProcessNewBlock(
         ChainstateEventSink* chain_events,

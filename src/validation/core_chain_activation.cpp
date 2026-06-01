@@ -47,7 +47,8 @@ std::shared_ptr<const CBlock> LoadBlockForConnection(
     BlockValidationState& state,
     CBlockIndex& block_index,
     std::shared_ptr<const CBlock> cached_block,
-    BlockDataReader& block_reader) EXCLUSIVE_LOCKS_REQUIRED(cs_main)
+    BlockDataReader& block_reader,
+    CoreChainLock* chain_lock) EXCLUSIVE_LOCKS_REQUIRED(cs_main)
 {
     AssertLockHeld(cs_main);
 
@@ -56,8 +57,14 @@ std::shared_ptr<const CBlock> LoadBlockForConnection(
         return cached_block;
     }
 
+    const FlatFilePos block_pos{block_index.GetBlockPos()};
+    const uint256 expected_hash{block_index.GetBlockHash()};
     std::shared_ptr<CBlock> block{std::make_shared<CBlock>()};
-    if (!block_reader.ReadBlock(*block, block_index)) {
+    const auto read_block{[&]() {
+        return block_reader.ReadBlockFromPosition(*block, block_pos, expected_hash);
+    }};
+    const bool read_ok{chain_lock ? chain_lock->RunUnlocked(read_block) : read_block()};
+    if (!read_ok) {
         FatalError(notifications, state, _("Failed to read block."));
         return nullptr;
     }
@@ -301,7 +308,8 @@ std::optional<PreparedCoreConnectTip> PrepareCoreConnectTip(CoreConnectTipReques
         state,
         request.block_index,
         std::move(request.cached_block),
-        resources.block_reader)};
+        resources.block_reader,
+        resources.chain_lock)};
     if (!block_to_connect) return std::nullopt;
 
     const auto time_block_loaded{SteadyClock::now()};

@@ -134,9 +134,10 @@ not use `cs_main` only to access the cache.
 
 `CoreChainLock` is the only validation capability that may temporarily release
 `cs_main`. It must only be used when `cs_main` is the most recently acquired
-lock. The current use is queued script completion during straight block
-connection; activation reorg repair disables this release and buffers node
-events until the chain transition reaches a stable point.
+lock. Current uses are queued script completion during straight block
+connection and connect-tip block file reads after the block position/hash have
+been copied under lock. Activation reorg repair disables lock release and
+buffers node events until the chain transition reaches a stable point.
 
 The mempool lock protects:
 
@@ -166,6 +167,11 @@ gather Core state under required locks
 
 Only the commit section should mutate active chainstate. Consensus-facing
 validation stages should not rely on hidden global state.
+
+New block processing runs context-independent `CheckBlock` before acquiring
+`cs_main`. `AcceptBlock` may skip the repeated structural check only when given
+a `BlockStructuralCheckProof` bound to the same block hash; otherwise it checks
+the block itself.
 
 Connecting a block to the active chain tip is represented by
 `CoreConnectTipRequest` plus shared `CoreConnectTipResources`. These name block

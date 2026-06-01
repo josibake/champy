@@ -442,6 +442,17 @@ static bool StoreBlockData(
     return true;
 }
 
+NewBlockStructuralCheckResult CheckNewBlockStructural(CoreChainValidationContext& context, const std::shared_ptr<const CBlock>& block, BlockValidationState& state)
+{
+    AssertLockNotHeld(cs_main);
+    assert(block);
+
+    if (!CheckBlock(*block, state, context.ConsensusParams())) {
+        return {};
+    }
+    return {.proof = BlockStructuralCheckProof{.block_hash = block->GetHash()}};
+}
+
 BlockAcceptanceResult AcceptBlock(CoreChainValidationContext& context, const std::shared_ptr<const CBlock>& pblock, BlockValidationState& state, BlockAcceptanceOptions options, BlockValidationTime time)
 {
     const CBlock& block = *pblock;
@@ -480,7 +491,8 @@ BlockAcceptanceResult AcceptBlock(CoreChainValidationContext& context, const std
         return {.status = BlockAcceptanceStatusFromDataAdmission(block_data_admission), .block = accepted_block};
     }
 
-    if (!CheckBlock(block, state, consensus_params) ||
+    const bool structural_check_required{!options.structural_check || !options.structural_check->Matches(block)};
+    if ((structural_check_required && !CheckBlock(block, state, consensus_params)) ||
         !ContextualCheckBlock(block, state, header_context, block_index_entry.pprev)) {
         if (Assume(state.IsInvalid())) {
             context.MarkInvalidBlockFound(block_index_entry, state);
@@ -514,53 +526,125 @@ BlockAcceptanceResult AcceptBlock(CoreChainValidationContext& context, const std
     return {.status = BlockAcceptanceStatus::BlockDataStored, .block = accepted_block};
 }
 
+BlockAcceptanceResult AcceptNewBlockData(CoreChainValidationContext& context, const std::shared_ptr<const CBlock>& block, BlockValidationState& state, BlockAcceptanceOptions options, BlockValidationTime time)
+{
+    AssertLockNotHeld(cs_main);
+    assert(block);
+    LOCK(cs_main);
+    return AcceptBlock(context, block, state, options, time);
+}
+
+std::optional<NewBlockCandidateContextSnapshot> SnapshotAcceptedBlockContext(CoreChainValidationContext& context, const uint256& block_hash)
+{
+    AssertLockNotHeld(cs_main);
+    LOCK(cs_main);
+
+    CoreBlockIndexStore block_index{context.MakeBlockIndexStore()};
+    const CBlockIndex* block_index_entry{block_index.LookupBlockIndex(block_hash)};
+    if (!block_index_entry) return std::nullopt;
+
+    const CoreBlockHeaderContextProvider header_context{context.MakeHeaderContextProvider()};
+    const Consensus::BlockHeaderContext headers{header_context.BuildContext(block_index_entry->pprev)};
+    const bool has_spend_stage{block_index_entry->pprev != nullptr};
+    return NewBlockCandidateContextSnapshot{
+        .block = MakeChainWorkBlockSnapshot(*block_index_entry),
+        .previous_block_hash = block_index_entry->pprev ? block_index_entry->pprev->GetBlockHash() : uint256{},
+        .previous_block_height = block_index_entry->pprev ? block_index_entry->pprev->nHeight : -1,
+        .previous_median_time_past = headers.PreviousMedianTimePast(),
+        .previous_block_time = headers.PreviousBlockTime(),
+        .deployments = headers.Deployments(),
+        .spend_options = has_spend_stage ? BuildCoreBlockSpendConsensusOptions(*block_index_entry, context.ConsensusParams(), headers.Deployments()) : Consensus::BlockSpendConsensusOptions{},
+        .block_subsidy = Consensus::CalculateBlockSubsidy(block_index_entry->nHeight, context.ConsensusParams()),
+        .has_spend_stage = has_spend_stage,
+    };
+}
+
+bool ActivateAcceptedBlock(CoreChainValidationContext& context, ChainstateEventSink* chain_events, const std::shared_ptr<const CBlock>& block, BlockValidationState& state)
+{
+    AssertLockNotHeld(cs_main);
+    assert(block);
+
+    context.NotifyHeaderTip();
+    return context.ActivateBestChain(state, block, chain_events);
+}
+
+static void NotifyBlockChecked(CoreChainValidationContext& context, const std::shared_ptr<const CBlock>& block, const BlockValidationState& state)
+{
+    LOCK(cs_main);
+    auto& validation_events{context.ValidationEvents()};
+    validation_events.BlockChecked(block, state);
+}
+
+static void FinishNewBlockProcessingTiming(NewBlockProcessingResult& result, std::chrono::steady_clock::time_point start) noexcept
+{
+    result.timings.total = std::chrono::steady_clock::now() - start;
+}
+
 NewBlockProcessingResult ProcessNewBlock(CoreChainValidationContext& context, ChainstateEventSink* chain_events, const std::shared_ptr<const CBlock>& block, NewBlockProcessingOptions options, BlockValidationTime time)
 {
     AssertLockNotHeld(cs_main);
 
+    const auto total_start{std::chrono::steady_clock::now()};
     NewBlockProcessingResult result{};
-    {
-        BlockValidationState state;
-        LOCK(cs_main);
-
-        // Skipping AcceptBlock() for CheckBlock() failures means that we will never mark a block as invalid if
-        // CheckBlock() fails.  This is protective against consensus failure if there are any unknown forms of block
-        // malleability that cause CheckBlock() to fail; see e.g. CVE-2012-2459 and
-        // https://lists.linuxfoundation.org/pipermail/bitcoin-dev/2019-February/016697.html.  Because CheckBlock() is
-        // not very expensive, the anti-DoS benefits of caching failure (of a definitely-invalid block) are not substantial.
-        bool ret = CheckBlock(*block, state, context.ConsensusParams());
-        if (ret) {
-            // Store to disk
-            const BlockAcceptanceResult acceptance{AcceptBlock(
-                context,
-                block,
-                state,
-                {.block_data_storage = options.block_data_storage, .header = options.header},
-                time)};
-            result.block_acceptance_status = acceptance.status;
-            ret = acceptance.accepted_for_processing();
-            if (!ret) {
-                result.status = NewBlockProcessingStatus::BlockNotAccepted;
-            }
-        }
-        if (!ret) {
-            auto& validation_events{context.ValidationEvents()};
-            validation_events.BlockChecked(block, state);
-            LogError("%s: AcceptBlock FAILED (%s)\n", __func__, state.ToString());
-            return result;
-        }
-        result.status = NewBlockProcessingStatus::ActivationFailed;
+    BlockValidationState state;
+    // Skipping AcceptBlock() for CheckBlock() failures means that we will never mark a block as invalid if
+    // CheckBlock() fails.  This is protective against consensus failure if there are any unknown forms of block
+    // malleability that cause CheckBlock() to fail; see e.g. CVE-2012-2459 and
+    // https://lists.linuxfoundation.org/pipermail/bitcoin-dev/2019-February/016697.html.  Because CheckBlock() is
+    // not very expensive, the anti-DoS benefits of caching failure (of a definitely-invalid block) are not substantial.
+    const bool has_structural_proof{options.structural_check && options.structural_check->Matches(*block)};
+    const auto structural_start{std::chrono::steady_clock::now()};
+    const NewBlockStructuralCheckResult structural_check{
+        has_structural_proof ? NewBlockStructuralCheckResult{.proof = options.structural_check} :
+                               CheckNewBlockStructural(context, block, state)};
+    result.timings.structural_check = has_structural_proof ? std::chrono::nanoseconds{0} :
+                                                             std::chrono::steady_clock::now() - structural_start;
+    if (!structural_check.passed()) {
+        NotifyBlockChecked(context, block, state);
+        LogError("%s: AcceptBlock FAILED (%s)\n", __func__, state.ToString());
+        FinishNewBlockProcessingTiming(result, total_start);
+        return result;
     }
 
-    context.NotifyHeaderTip();
+    const auto accept_start{std::chrono::steady_clock::now()};
+    const BlockAcceptanceResult acceptance{AcceptNewBlockData(
+        context,
+        block,
+        state,
+        {
+            .block_data_storage = options.block_data_storage,
+            .header = options.header,
+            .structural_check = structural_check.proof,
+        },
+        time)};
+    result.timings.block_acceptance = std::chrono::steady_clock::now() - accept_start;
+    result.block_acceptance_status = acceptance.status;
+    const bool accepted_for_processing{acceptance.accepted_for_processing()};
+    if (!accepted_for_processing) {
+        result.status = NewBlockProcessingStatus::BlockNotAccepted;
+        NotifyBlockChecked(context, block, state);
+        LogError("%s: AcceptBlock FAILED (%s)\n", __func__, state.ToString());
+        FinishNewBlockProcessingTiming(result, total_start);
+        return result;
+    }
+    result.status = NewBlockProcessingStatus::ActivationFailed;
 
-    BlockValidationState state; // Only used to report errors, not invalidity - ignore it
-    if (!context.ActivateBestChain(state, block, chain_events)) {
-        LogError("%s: ActivateBestChain failed (%s)\n", __func__, state.ToString());
+    const auto snapshot_start{std::chrono::steady_clock::now()};
+    result.candidate_context = SnapshotAcceptedBlockContext(context, block->GetHash());
+    result.timings.context_snapshot = std::chrono::steady_clock::now() - snapshot_start;
+
+    BlockValidationState activate_state; // Only used to report errors, not invalidity - ignore it
+    const auto activation_start{std::chrono::steady_clock::now()};
+    const bool activated{ActivateAcceptedBlock(context, chain_events, block, activate_state)};
+    result.timings.activation = std::chrono::steady_clock::now() - activation_start;
+    if (!activated) {
+        LogError("%s: ActivateBestChain failed (%s)\n", __func__, activate_state.ToString());
+        FinishNewBlockProcessingTiming(result, total_start);
         return result;
     }
 
     result.status = NewBlockProcessingStatus::Processed;
+    FinishNewBlockProcessingTiming(result, total_start);
     return result;
 }
 

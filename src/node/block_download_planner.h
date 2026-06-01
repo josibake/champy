@@ -6,6 +6,7 @@
 #define BITCOIN_NODE_BLOCK_DOWNLOAD_PLANNER_H
 
 #include <node/block_download_types.h>
+#include <node/ibd_pipeline.h>
 
 #include <cstdint>
 #include <optional>
@@ -42,6 +43,7 @@ struct BlockDownloadPlannerRequest {
     int limited_peer_min_blocks{0};
     BlockDownloadChainFacts chain{};
     std::span<const BlockInFlight> blocks_in_flight{};
+    std::optional<IbdPipelineAdmissionWindow> ibd_pipeline{};
 };
 
 struct BlockDownloadPlannerResult {

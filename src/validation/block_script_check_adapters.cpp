@@ -176,7 +176,13 @@ CoreBlockScriptChecker::CoreBlockScriptChecker(bool run_checks, bool cache_resul
 Consensus::BlockSpendResult<void> CoreBlockScriptChecker::Check(const Consensus::TransactionScriptCheckPlan& check)
 {
     if (!m_run_checks) return {};
-    return CheckTransactionScriptsForBlock(check, m_cache_results, m_validation_cache, m_batch.get());
+
+    const auto check_scripts = [&]() {
+        return CheckTransactionScriptsForBlock(check, m_cache_results, m_validation_cache, m_batch.get());
+    };
+    if (!m_chain_lock) return check_scripts();
+
+    return m_chain_lock->RunUnlocked(check_scripts);
 }
 
 Consensus::BlockSpendResult<void> CoreBlockScriptChecker::Complete()

@@ -21,6 +21,13 @@ static std::optional<int64_t> FindInFlightPeer(std::span<const BlockInFlight> bl
     return it->peer;
 }
 
+static bool IbdPipelineAccepts(const std::optional<IbdPipelineAdmissionWindow>& window, const PeerBlockRef& block)
+{
+    if (!window) return true;
+    const IbdPipeline pipeline{window->next_commit_height, window->limits};
+    return pipeline.Admit(block).status == IbdAdmissionStatus::Accepted;
+}
+
 BlockDownloadPlannerResult PlanNextBlocksToDownload(const BlockDownloadPlannerRequest& request)
 {
     BlockDownloadPlannerResult result;
@@ -57,6 +64,10 @@ BlockDownloadPlannerResult PlanNextBlocksToDownload(const BlockDownloadPlannerRe
             if (result.blocks.empty() && waiting_for && *waiting_for != request.peer) {
                 result.staller = *waiting_for;
             }
+            return result;
+        }
+
+        if (!IbdPipelineAccepts(request.ibd_pipeline, candidate.block)) {
             return result;
         }
 

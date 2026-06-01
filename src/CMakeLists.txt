@@ -83,6 +83,7 @@ add_library(bitcoin_consensus STATIC EXCLUDE_FROM_ALL
   consensus/script_checker.cpp
   consensus/sigops.cpp
   consensus/snapshot_spend_state.cpp
+  consensus/spend_state_batch.cpp
   consensus/tx_check.cpp
   consensus/block_consensus_pipeline.cpp
   hash.cpp
@@ -322,6 +323,8 @@ add_library(bitcoin_node STATIC EXCLUDE_FROM_ALL
   node/block_download_tracker.cpp
   node/block_inflight_index.cpp
   node/block_download_planner.cpp
+  node/ibd_block_processor.cpp
+  node/ibd_pipeline.cpp
   node/blockmanager_args.cpp
   node/caches.cpp
   node/chainstatemanager_args.cpp

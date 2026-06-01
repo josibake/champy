@@ -8,6 +8,7 @@
 #include <consensus/predicates.h>
 #include <consensus/sequence_locks.h>
 #include <consensus/sigops.h>
+#include <consensus/spend_state_batch.h>
 #include <primitives/transaction.h>
 #include <script/interpreter.h>
 
@@ -61,7 +62,12 @@ BlockSpendError InvalidTransactionForBlock(const CTransaction& tx, const std::st
     return InvalidBlockForSpend(reject_reason, debug_message + " in transaction " + tx.GetHash().ToString());
 }
 
-std::vector<SequenceLockInputContext> BuildSequenceLockInputContext(const CTransaction& tx, const std::vector<CoinSnapshot>& coins, const TransactionSpendContext& context, int locktime_flags)
+BlockSpendError MissingOrSpentInputForBlock(const CTransaction& tx)
+{
+    return InvalidTransactionForBlock(tx, "bad-txns-inputs-missingorspent", "CheckTxInputs: inputs missing/spent");
+}
+
+std::vector<SequenceLockInputContext> BuildSequenceLockInputContext(const CTransaction& tx, std::span<const CoinSnapshot> coins, const TransactionSpendContext& context, int locktime_flags)
 {
     const bool enforce_sequence_locks{tx.version >= 2 && locktime_flags & LOCKTIME_VERIFY_SEQUENCE};
     std::vector<SequenceLockInputContext> input_contexts;
@@ -86,7 +92,7 @@ std::vector<SequenceLockInputContext> BuildSequenceLockInputContext(const CTrans
     return input_contexts;
 }
 
-BlockSpendResult<CAmount> CheckTransactionInputValuesForBlock(const CTransaction& tx, const std::vector<CoinSnapshot>& coins, int spend_height)
+BlockSpendResult<CAmount> CheckTransactionInputValuesForBlock(const CTransaction& tx, std::span<const CoinSnapshot> coins, int spend_height)
 {
     assert(coins.size() == tx.vin.size());
 
@@ -129,7 +135,7 @@ BlockSpendResult<std::vector<CoinSnapshot>> GetTransactionInputCoinsForBlock(con
     for (const CTxIn& txin : tx.vin) {
         const auto coin{spend_state.GetCoin(txin.prevout)};
         if (!coin) {
-            return Consensus::Unexpected<BlockSpendError>{InvalidTransactionForBlock(tx, "bad-txns-inputs-missingorspent", "CheckTxInputs: inputs missing/spent")};
+            return Consensus::Unexpected<BlockSpendError>{MissingOrSpentInputForBlock(tx)};
         }
         coins.push_back(*coin);
     }
@@ -189,17 +195,15 @@ BlockSpendResult<void> CheckCoinbasePaysNoMoreThan(const CTransaction& coinbase,
     return {};
 }
 
-BlockSpendResult<TransactionInputCheck> CheckTransactionInputsForBlock(const CTransaction& tx, const SpendStateView& spend_state, const TransactionSpendContext& context, int locktime_flags)
+BlockSpendResult<CAmount> CheckTransactionInputCoinsForBlock(const CTransaction& tx, std::span<const CoinSnapshot> input_coins, const TransactionSpendContext& context, int locktime_flags)
 {
     assert(!IsCoinbase(tx));
+    assert(input_coins.size() == tx.vin.size());
 
-    auto coins{GetTransactionInputCoinsForBlock(tx, spend_state)};
-    if (!coins) return Consensus::Unexpected<BlockSpendError>{std::move(coins).error()};
-
-    const auto tx_fee{CheckTransactionInputValuesForBlock(tx, *coins, context.block_height)};
+    const auto tx_fee{CheckTransactionInputValuesForBlock(tx, input_coins, context.block_height)};
     if (!tx_fee) return Consensus::Unexpected<BlockSpendError>{tx_fee.error()};
 
-    const std::vector<SequenceLockInputContext> sequence_lock_inputs{BuildSequenceLockInputContext(tx, *coins, context, locktime_flags)};
+    const std::vector<SequenceLockInputContext> sequence_lock_inputs{BuildSequenceLockInputContext(tx, input_coins, context, locktime_flags)};
     const Consensus::SequenceLockContext sequence_context{
         .block_height = context.block_height,
         .previous_median_time_past = context.previous_median_time_past,
@@ -212,6 +216,19 @@ BlockSpendResult<TransactionInputCheck> CheckTransactionInputsForBlock(const CTr
             "bad-txns-nonfinal",
             "contains a non-BIP68-final transaction " + tx.GetHash().ToString())};
     }
+
+    return *tx_fee;
+}
+
+BlockSpendResult<TransactionInputCheck> CheckTransactionInputsForBlock(const CTransaction& tx, const SpendStateView& spend_state, const TransactionSpendContext& context, int locktime_flags)
+{
+    assert(!IsCoinbase(tx));
+
+    auto coins{GetTransactionInputCoinsForBlock(tx, spend_state)};
+    if (!coins) return Consensus::Unexpected<BlockSpendError>{std::move(coins).error()};
+
+    const auto tx_fee{CheckTransactionInputCoinsForBlock(tx, *coins, context, locktime_flags)};
+    if (!tx_fee) return Consensus::Unexpected<BlockSpendError>{tx_fee.error()};
 
     return TransactionInputCheck{
         .fee = *tx_fee,
@@ -260,24 +277,24 @@ TransactionScriptCheckPlan BuildTransactionScriptCheckPlan(const CTransactionRef
     };
 }
 
-BlockSpendResult<TransactionSpendResult> ValidateTransactionSpendForBlock(const CTransactionRef& tx_ref, const SpendStateView& spend_state, BlockScriptChecker& script_checker, const TransactionSpendContext& spend_context, const BlockSpendConsensusOptions& options, const BlockSpendAccounting& accounting)
+BlockSpendResult<TransactionSpendResult> EvaluateTransactionSpendForBlock(const CTransactionRef& tx_ref, std::span<const CoinSnapshot> input_coins, const TransactionSpendContext& spend_context, const BlockSpendConsensusOptions& options, const BlockSpendAccounting& accounting)
 {
     const CTransaction& tx{*tx_ref};
     BlockSpendAccounting result{accounting};
-    std::vector<CoinSnapshot> input_coins;
 
     if (!IsCoinbase(tx)) {
-        auto input_check{CheckTransactionInputsForBlock(tx, spend_state, spend_context, options.locktime_flags)};
-        if (!input_check) {
-            return Consensus::Unexpected<BlockSpendError>{std::move(input_check).error()};
+        auto tx_fee{CheckTransactionInputCoinsForBlock(tx, input_coins, spend_context, options.locktime_flags)};
+        if (!tx_fee) {
+            return Consensus::Unexpected<BlockSpendError>{std::move(tx_fee).error()};
         }
 
-        const auto fees{AddTransactionFeeForBlock(result.fees, input_check->fee)};
+        const auto fees{AddTransactionFeeForBlock(result.fees, *tx_fee)};
         if (!fees) {
             return Consensus::Unexpected<BlockSpendError>{fees.error()};
         }
         result.fees = *fees;
-        input_coins = std::move(input_check->input_coins);
+    } else {
+        assert(input_coins.empty());
     }
 
     const auto sigop_cost{AddTransactionSigOpCostForBlock(tx, input_coins, options.script_flags, result.sigop_cost)};
@@ -285,14 +302,6 @@ BlockSpendResult<TransactionSpendResult> ValidateTransactionSpendForBlock(const 
         return Consensus::Unexpected<BlockSpendError>{sigop_cost.error()};
     }
     result.sigop_cost = *sigop_cost;
-
-    if (!IsCoinbase(tx) && script_checker.WantsChecks()) {
-        const TransactionScriptCheckPlan script_check_plan{BuildTransactionScriptCheckPlan(tx_ref, input_coins, options.script_flags)};
-        const auto script_check{script_checker.Check(script_check_plan)};
-        if (!script_check) {
-            return Consensus::Unexpected<BlockSpendError>{script_check.error()};
-        }
-    }
 
     TransactionCoinEffects coin_effects{BuildTransactionCoinEffectsForBlock(tx, input_coins, spend_context.block_height)};
 
@@ -302,9 +311,64 @@ BlockSpendResult<TransactionSpendResult> ValidateTransactionSpendForBlock(const 
     };
 }
 
-BlockSpendResult<BlockSpendEffects> ValidateAndStageBlockTransactions(std::span<const CTransactionRef> transactions, BlockSpendWorkspace& workspace, BlockScriptChecker& script_checker, const BlockSpendContext& spend_context, const BlockSpendConsensusOptions& options)
+BlockSpendResult<void> SubmitTransactionScriptCheckForBlock(const CTransactionRef& tx_ref, std::span<const CoinSnapshot> input_coins, BlockScriptChecker& script_checker, script_verify_flags flags)
+{
+    const CTransaction& tx{*tx_ref};
+    if (IsCoinbase(tx) || !script_checker.WantsChecks()) return {};
+
+    const TransactionScriptCheckPlan script_check_plan{BuildTransactionScriptCheckPlan(tx_ref, input_coins, flags)};
+    const auto script_check{script_checker.Check(script_check_plan)};
+    if (!script_check) {
+        return Consensus::Unexpected<BlockSpendError>{script_check.error()};
+    }
+    return {};
+}
+
+BlockSpendResult<TransactionSpendResult> ValidateTransactionSpendForBlock(const CTransactionRef& tx_ref, std::span<const CoinSnapshot> input_coins, BlockScriptChecker& script_checker, const TransactionSpendContext& spend_context, const BlockSpendConsensusOptions& options, const BlockSpendAccounting& accounting)
+{
+    auto spend_result{EvaluateTransactionSpendForBlock(tx_ref, input_coins, spend_context, options, accounting)};
+    if (!spend_result) {
+        return Consensus::Unexpected<BlockSpendError>{spend_result.error()};
+    }
+
+    const auto script_check{SubmitTransactionScriptCheckForBlock(tx_ref, input_coins, script_checker, options.script_flags)};
+    if (!script_check) {
+        return Consensus::Unexpected<BlockSpendError>{script_check.error()};
+    }
+
+    return spend_result;
+}
+
+BlockSpendResult<TransactionSpendResult> ValidateTransactionSpendForBlock(const CTransactionRef& tx_ref, const SpendStateView& spend_state, BlockScriptChecker& script_checker, const TransactionSpendContext& spend_context, const BlockSpendConsensusOptions& options, const BlockSpendAccounting& accounting)
+{
+    const CTransaction& tx{*tx_ref};
+    std::vector<CoinSnapshot> input_coins;
+    if (!IsCoinbase(tx)) {
+        auto coins{GetTransactionInputCoinsForBlock(tx, spend_state)};
+        if (!coins) return Consensus::Unexpected<BlockSpendError>{std::move(coins).error()};
+        input_coins = std::move(*coins);
+    }
+
+    return ValidateTransactionSpendForBlock(tx_ref, input_coins, script_checker, spend_context, options, accounting);
+}
+
+BlockSpendResult<void> SubmitBlockScriptChecksForSpendStage(std::span<const TransactionScriptCheckPlan> script_checks, BlockScriptChecker& script_checker)
+{
+    if (!script_checker.WantsChecks()) return {};
+
+    for (const TransactionScriptCheckPlan& script_check_plan : script_checks) {
+        const auto script_check{script_checker.Check(script_check_plan)};
+        if (!script_check) {
+            return Consensus::Unexpected<BlockSpendError>{script_check.error()};
+        }
+    }
+    return {};
+}
+
+BlockSpendResult<BlockSpendStageResult> ValidateAndStageBlockTransactions(std::span<const CTransactionRef> transactions, BlockSpendWorkspace& workspace, const BlockSpendContext& spend_context, const BlockSpendConsensusOptions& options, ScriptCheckPlanCollection script_check_plans)
 {
     assert(!transactions.empty());
+    const bool collect_script_checks{script_check_plans == ScriptCheckPlanCollection::Collect};
 
     if (options.check_no_unspent_output_overwrite) {
         const auto overwrite_check{CheckBlockNoUnspentOutputOverwrite(transactions, workspace.StagedSpendView())};
@@ -313,8 +377,20 @@ BlockSpendResult<BlockSpendEffects> ValidateAndStageBlockTransactions(std::span<
         }
     }
 
-    BlockSpendEffects effects;
+    BlockSpendStageResult stage;
+    BlockSpendEffects& effects{stage.effects};
     effects.transaction_effects.reserve(transactions.size());
+    if (collect_script_checks) {
+        stage.script_checks.reserve(transactions.size() > 0 ? transactions.size() - 1 : 0);
+    }
+
+    const SpendStateBatchViewAdapter batch_view{workspace.StagedSpendView()};
+    const BlockSpentOutputJoin joined_inputs{JoinBlockSpentOutputs(transactions, spend_context.block_height, batch_view)};
+    if (joined_inputs.status != BlockSpentOutputJoinStatus::Complete) {
+        assert(joined_inputs.failed_lookup.has_value());
+        return Consensus::Unexpected<BlockSpendError>{MissingOrSpentInputForBlock(*transactions[joined_inputs.failed_lookup->transaction_index])};
+    }
+
     const TransactionSpendContext transaction_context{
         .block_height = spend_context.block_height,
         .previous_median_time_past = spend_context.previous_median_time_past,
@@ -325,10 +401,16 @@ BlockSpendResult<BlockSpendEffects> ValidateAndStageBlockTransactions(std::span<
 
         effects.inputs += tx->vin.size();
 
-        auto spend_result{ValidateTransactionSpendForBlock(tx, workspace.StagedSpendView(), script_checker, transaction_context, options, BlockSpendAccounting{.fees = effects.fees, .sigop_cost = effects.sigop_cost})};
+        const std::vector<CoinSnapshot>& input_coins{joined_inputs.input_coins_by_transaction[i]};
+        auto spend_result{EvaluateTransactionSpendForBlock(tx, input_coins, transaction_context, options, BlockSpendAccounting{.fees = effects.fees, .sigop_cost = effects.sigop_cost})};
         if (!spend_result) {
             return Consensus::Unexpected<BlockSpendError>{spend_result.error()};
         }
+
+        if (collect_script_checks && !IsCoinbase(*tx)) {
+            stage.script_checks.push_back(BuildTransactionScriptCheckPlan(tx, input_coins, options.script_flags));
+        }
+
         effects.fees = spend_result->accounting.fees;
         effects.sigop_cost = spend_result->accounting.sigop_cost;
 
@@ -339,6 +421,23 @@ BlockSpendResult<BlockSpendEffects> ValidateAndStageBlockTransactions(std::span<
         }
     }
 
+    return stage;
+}
+
+BlockSpendResult<BlockSpendEffects> ValidateAndStageBlockTransactions(std::span<const CTransactionRef> transactions, BlockSpendWorkspace& workspace, BlockScriptChecker& script_checker, const BlockSpendContext& spend_context, const BlockSpendConsensusOptions& options)
+{
+    const ScriptCheckPlanCollection script_check_plans{script_checker.WantsChecks() ? ScriptCheckPlanCollection::Collect : ScriptCheckPlanCollection::Skip};
+    auto stage{ValidateAndStageBlockTransactions(transactions, workspace, spend_context, options, script_check_plans)};
+    if (!stage) {
+        return Consensus::Unexpected<BlockSpendError>{stage.error()};
+    }
+
+    const auto script_checks{SubmitBlockScriptChecksForSpendStage(stage->script_checks, script_checker)};
+    if (!script_checks) {
+        return Consensus::Unexpected<BlockSpendError>{script_checks.error()};
+    }
+
+    BlockSpendEffects effects{std::move(stage->effects)};
     return effects;
 }
 

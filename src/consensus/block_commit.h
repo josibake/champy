@@ -18,6 +18,9 @@ struct BlockCommitError {
 };
 
 struct BlockCommitContext {
+    // Commit adapters use these facts to bind effects to a specific ordered
+    // block transition. They must not infer block identity or height from
+    // backend state.
     uint256 new_best_block;
     int block_height{0};
     int64_t previous_median_time_past{0};
@@ -30,6 +33,7 @@ class BlockRevertDataWriter {
 public:
     virtual ~BlockRevertDataWriter() = default;
 
+    // Persist enough ordered spent-coin data to disconnect this block later.
     [[nodiscard]] virtual BlockCommitResult<void> WriteBlockRevertData(const BlockCommitContext& context, const BlockSpendEffects& effects) = 0;
 };
 
@@ -37,6 +41,7 @@ class BlockMetadataCommitter {
 public:
     virtual ~BlockMetadataCommitter() = default;
 
+    // Publish block metadata after revert data and spend state are durable.
     [[nodiscard]] virtual BlockCommitResult<void> CommitBlockMetadata(const BlockCommitContext& context, const BlockSpendEffects& effects) = 0;
 };
 
@@ -44,6 +49,7 @@ class BlockSpendStateCommitter {
 public:
     virtual ~BlockSpendStateCommitter() = default;
 
+    // Apply the ordered spend/create effects to the backend's committed state.
     [[nodiscard]] virtual BlockCommitResult<void> CommitSpendState(const BlockCommitContext& context, const BlockSpendEffects& effects) = 0;
 };
 

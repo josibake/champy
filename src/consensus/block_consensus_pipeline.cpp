@@ -36,13 +36,6 @@ BlockSpendContext BuildBlockSpendContext(const BlockHeaderContext& headers)
     };
 }
 
-BlockCommitContext BuildBlockCommitContext(const uint256& new_best_block)
-{
-    return BlockCommitContext{
-        .new_best_block = new_best_block,
-    };
-}
-
 BlockCommitContext BuildBlockCommitContext(const BlockHeaderContext& headers, const uint256& new_best_block)
 {
     return BlockCommitContext{

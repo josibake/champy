@@ -160,6 +160,9 @@ BlockCommitResult<void> SnapshotSpendState::CommitSpendState(const BlockCommitCo
         }
 
         for (const CreatedCoinEffect& create : transaction_effects.creates) {
+            if (create.coin.height != context.block_height) {
+                return Consensus::Unexpected<BlockCommitError>{SnapshotSpendCommitError("snapshot-commit-create-height-mismatch")};
+            }
             const auto [_, inserted]{committed_coins.emplace(create.outpoint, create.coin)};
             if (!inserted) {
                 return Consensus::Unexpected<BlockCommitError>{SnapshotSpendCommitError("snapshot-commit-duplicate-create")};

@@ -49,6 +49,7 @@ add_executable(test_bitcoin
   consensus_script_checker_tests.cpp
   consensus_serialization_tests.cpp
   consensus_snapshot_spend_state_tests.cpp
+  consensus_spend_state_batch_tests.cpp
   consensus_tx_verify_tests.cpp
   consensus_block_consensus_pipeline_tests.cpp
   core_block_policy_tests.cpp
@@ -68,6 +69,7 @@ add_executable(test_bitcoin
   hash_tests.cpp
   headers_sync_chainwork_tests.cpp
   i2p_tests.cpp
+  ibd_pipeline_tests.cpp
   interfaces_tests.cpp
   key_io_tests.cpp
   key_tests.cpp

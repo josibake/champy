@@ -12,6 +12,7 @@
 #include <validation/block_connection_trace.h>
 #include <validation/block_script_check_adapters.h>
 #include <validation/core_coins_block_connection_state.h>
+#include <validation/core_chain_lock.h>
 #include <validation/test_block_validity.h>
 #include <chain.h>
 #include <chainstate.h>
@@ -239,6 +240,33 @@ BOOST_AUTO_TEST_CASE(core_block_script_checker_runs_from_prepared_outputs_withou
 
     BOOST_REQUIRE(script_checks.Checker().Check(plan));
     BOOST_REQUIRE(script_checks.Checker().Complete());
+}
+
+BOOST_AUTO_TEST_CASE(core_block_script_checker_can_submit_while_cs_main_is_held)
+{
+    WAIT_LOCK(::cs_main, chain_lock_handle);
+    CoreChainLock chain_lock{chain_lock_handle};
+
+    ValidationCache validation_cache{/*script_execution_cache_bytes=*/1024 * 1024, /*signature_cache_bytes=*/1024 * 1024};
+    CCheckQueue<CScriptCheck> script_check_queue{/*batch_size=*/128, /*worker_threads_num=*/0};
+    validation::CCheckQueueScriptCheckScheduler script_check_scheduler{script_check_queue};
+    CoreBlockScriptChecks script_checks{
+        script_check_scheduler,
+        /*run_checks=*/true,
+        /*cache_results=*/true,
+        validation_cache,
+        &chain_lock};
+
+    const CTransactionRef tx{MakeSpendTx(COutPoint{Txid::FromUint256(uint256::ONE), 0}, /*value=*/39)};
+    Consensus::TransactionScriptCheckPlan plan{
+        .tx = tx,
+        .flags = script_verify_flags{},
+        .spent_outputs = {CTxOut{40, CScript{} << OP_TRUE}},
+    };
+
+    BOOST_REQUIRE(script_checks.Checker().Check(plan));
+    BOOST_REQUIRE(script_checks.Checker().Complete());
+    AssertLockHeld(::cs_main);
 }
 
 BOOST_AUTO_TEST_CASE(core_block_script_checker_preserves_failure_reason_without_cs_main)

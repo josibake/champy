@@ -88,6 +88,11 @@ mempool, P2P, RPC, relay-policy, or process-lifecycle concepts.
 Mempool code builds separately as `bitcoin_mempool_policy`. Chain validation
 does not own mempool behavior.
 
+IBD download selection uses `node::IbdPipelineAdmissionWindow` to keep future
+pipeline backpressure in node. Validated IBD work can be retired through
+`node::IbdOrderedRetireQueue`, which only releases contiguous heights to the
+serialized commit stage.
+
 ## Validation Pattern
 
 Block validation is organized as:
@@ -132,6 +137,13 @@ Consensus reads coins through:
 
 Production code reaches this through `BlockConnectionState`. Tests and
 experiments can provide alternate backends without changing consensus rules.
+
+Bulk state experiments use `spend_state_batch.h`:
+
+- extract spent-output lookups from a block
+- separate external lookups from intra-block dependencies
+- sort external lookups by outpoint for batch-oriented backends
+- adapt existing `SpendStateView` implementations to the batch interface
 
 ### Script Checks
 

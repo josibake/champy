@@ -724,7 +724,7 @@ BOOST_AUTO_TEST_CASE(pipeline_completes_scripts_after_full_spend_stage_failure)
     const auto effects{pipeline.ValidateAndCompleteSpendStage(spend_state, script_checker, Consensus::BlockSpendConsensusOptions{})};
 
     CheckRejectReason(effects, "fake-stage-error");
-    BOOST_CHECK_EQUAL(script_checker.checks, 1);
+    BOOST_CHECK_EQUAL(script_checker.checks, 0);
     BOOST_CHECK_EQUAL(script_checker.completions, 1);
 }
 

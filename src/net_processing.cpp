@@ -25,6 +25,7 @@
 #include <logging.h>
 #include <node/block_download_planner.h>
 #include <node/block_download_tracker.h>
+#include <node/ibd_block_processor.h>
 #include <node/mempool_validation.h>
 #include <merkleblock.h>
 #include <net.h>
@@ -752,6 +753,7 @@ private:
     BanMan* const m_banman;
     ChainstateManager& m_chainman;
     CTxMemPool& m_mempool;
+    node::IbdBlockProcessor m_ibd_block_processor;
 
     /** Synchronizes tx download including TxRequestTracker, rejection filters, and TxOrphanage.
      * Lock invariants:
@@ -1326,6 +1328,10 @@ void PeerManagerImpl::FindNextBlocksToDownload(const Peer& peer, unsigned int co
             .candidates = candidates,
         },
         .blocks_in_flight = blocks_in_flight,
+        .ibd_pipeline = node::IbdPipelineAdmissionWindow{
+            .next_commit_height = m_chainman.ActiveHeight() + 1,
+            .limits = node::IbdPipelineLimits{.max_blocks_ahead = BLOCK_DOWNLOAD_WINDOW},
+        },
     })};
 
     if (plan.last_common) {
@@ -1750,6 +1756,7 @@ PeerManagerImpl::PeerManagerImpl(CConnman& connman, AddrMan& addrman,
       m_banman(banman),
       m_chainman(chainman),
       m_mempool(pool),
+      m_ibd_block_processor(chainman),
       m_txdownloadman(node::TxDownloadOptions{pool, m_rng, opts.deterministic_rng}),
       m_warnings{warnings},
       m_opts{opts}
@@ -2972,11 +2979,14 @@ bool PeerManagerImpl::ProcessOrphanTx(Peer& peer)
 void PeerManagerImpl::ProcessBlock(CNode& node, const std::shared_ptr<const CBlock>& block, BlockDataStorageMode block_data_storage, bool min_pow_checked)
 {
     node::MempoolChainSync chain_events{m_chainman.ActiveChainstate(), m_mempool};
-    const NewBlockProcessingResult result{ChainValidationService{m_chainman}.ProcessNewBlock(
-        &chain_events,
-        block,
-        {.block_data_storage = block_data_storage, .header = {.min_pow_checked = min_pow_checked}},
-        CurrentBlockValidationTime())};
+    const node::IbdBlockProcessResult process_result{m_ibd_block_processor.ProcessDownloadedBlock({
+        .chain_events = &chain_events,
+        .block = block,
+        .block_data_storage = block_data_storage,
+        .min_pow_checked = min_pow_checked,
+        .time = CurrentBlockValidationTime(),
+    })};
+    const NewBlockProcessingResult& result{process_result.validation};
     if (result.new_block()) {
         node.m_last_block_time = GetTime<std::chrono::seconds>();
         // In case this block came from a different peer than we requested

@@ -23,6 +23,7 @@ set(BITCOIN_CONSENSUS_PUBLIC_API_HEADERS
   "consensus/script_checker.h"
   "consensus/script_view.h"
   "consensus/snapshot_spend_state.h"
+  "consensus/spend_state_batch.h"
   "consensus/spend_state.h"
   "consensus/tx_check.h"
 )

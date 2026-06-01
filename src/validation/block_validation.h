@@ -8,6 +8,7 @@
 #include <arith_uint256.h>
 #include <consensus/amount.h>
 #include <consensus/block_check.h>
+#include <consensus/block_spend.h>
 #include <consensus/params.h>
 #include <validation/block_index_snapshot.h>
 #include <validation/block_data_admission.h>
@@ -15,6 +16,7 @@
 #include <primitives/block.h>
 
 #include <cstdint>
+#include <chrono>
 #include <memory>
 #include <optional>
 #include <span>
@@ -23,6 +25,32 @@ struct FlatFilePos;
 
 struct BlockHeaderAcceptanceOptions {
     bool min_pow_checked{false};
+};
+
+struct BlockStructuralCheckProof {
+    uint256 block_hash;
+
+    [[nodiscard]] bool Matches(const CBlock& block) const { return block_hash == block.GetHash(); }
+};
+
+struct NewBlockStructuralCheckResult {
+    std::optional<BlockStructuralCheckProof> proof{};
+
+    [[nodiscard]] bool passed() const noexcept { return proof.has_value(); }
+};
+
+struct NewBlockCandidateContextSnapshot {
+    ChainWorkBlockSnapshot block{};
+    uint256 previous_block_hash{};
+    int previous_block_height{-1};
+    int64_t previous_median_time_past{0};
+    int64_t previous_block_time{0};
+    Consensus::BlockDeploymentContext deployments{};
+    Consensus::BlockSpendConsensusOptions spend_options{};
+    CAmount block_subsidy{0};
+    bool has_spend_stage{false};
+
+    [[nodiscard]] bool Matches(const CBlock& candidate) const { return block.hash == candidate.GetHash(); }
 };
 
 /**
@@ -43,11 +71,13 @@ struct BlockAcceptanceOptions {
     BlockDataStorageMode block_data_storage{BlockDataStorageMode::ApplyAdmissionChecks};
     const FlatFilePos* existing_block_pos{nullptr};
     BlockHeaderAcceptanceOptions header{};
+    std::optional<BlockStructuralCheckProof> structural_check{};
 };
 
 struct NewBlockProcessingOptions {
     BlockDataStorageMode block_data_storage{BlockDataStorageMode::ApplyAdmissionChecks};
     BlockHeaderAcceptanceOptions header{};
+    std::optional<BlockStructuralCheckProof> structural_check{};
 };
 
 struct NewBlockHeadersResult {
@@ -94,9 +124,19 @@ enum class NewBlockProcessingStatus {
     Processed,
 };
 
+struct NewBlockProcessingTimings {
+    std::chrono::nanoseconds structural_check{0};
+    std::chrono::nanoseconds block_acceptance{0};
+    std::chrono::nanoseconds context_snapshot{0};
+    std::chrono::nanoseconds activation{0};
+    std::chrono::nanoseconds total{0};
+};
+
 struct NewBlockProcessingResult {
     NewBlockProcessingStatus status{NewBlockProcessingStatus::BlockCheckFailed};
     BlockAcceptanceStatus block_acceptance_status{BlockAcceptanceStatus::HeaderRejected};
+    NewBlockProcessingTimings timings{};
+    std::optional<NewBlockCandidateContextSnapshot> candidate_context{};
 
     [[nodiscard]] bool processed() const noexcept
     {

@@ -146,4 +146,25 @@ BOOST_AUTO_TEST_CASE(planner_respects_pruned_peer_service_window)
     BOOST_CHECK_EQUAL(plan.blocks[1].height, 103);
 }
 
+BOOST_AUTO_TEST_CASE(planner_respects_ibd_pipeline_admission_window)
+{
+    const std::vector candidates{Candidate(101), Candidate(102), Candidate(103), Candidate(104)};
+
+    const auto plan{node::PlanNextBlocksToDownload({
+        .peer = 7,
+        .max_blocks = 4,
+        .can_serve_witnesses = true,
+        .limited_peer_min_blocks = 288,
+        .chain = Chain(candidates),
+        .ibd_pipeline = node::IbdPipelineAdmissionWindow{
+            .next_commit_height = 101,
+            .limits = node::IbdPipelineLimits{.max_blocks_ahead = 2},
+        },
+    })};
+
+    BOOST_REQUIRE_EQUAL(plan.blocks.size(), 2);
+    BOOST_CHECK_EQUAL(plan.blocks[0].height, 101);
+    BOOST_CHECK_EQUAL(plan.blocks[1].height, 102);
+}
+
 BOOST_AUTO_TEST_SUITE_END()
