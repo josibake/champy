@@ -12,6 +12,7 @@
 
 #include <cassert>
 #include <chrono>
+#include <cstddef>
 #include <optional>
 #include <utility>
 
@@ -164,6 +165,109 @@ IbdBlockProcessResult FinishBlockProcessResult(
 }
 
 } // namespace
+
+bool IbdCandidateMatchesContext(const IbdAcceptedBlockCandidate& candidate)
+{
+    return candidate.block_data &&
+           candidate.context.Matches(*candidate.block_data) &&
+           candidate.block.hash == candidate.context.block.hash &&
+           candidate.block.parent_hash == candidate.context.block.parent_hash &&
+           candidate.block.height == candidate.context.block.height &&
+           candidate.block.chain_work == candidate.context.block.chain_work;
+}
+
+Consensus::SegmentBlockContext BuildIbdSegmentBlockContext(const NewBlockCandidateContextSnapshot& context)
+{
+    return {
+        .hash = context.block.hash,
+        .parent_hash = context.block.parent_hash,
+        .height = context.block.height,
+        .previous_median_time_past = context.previous_median_time_past,
+        .spend_options = context.spend_options,
+        .block_subsidy = context.block_subsidy,
+    };
+}
+
+Consensus::SegmentBlockView BuildIbdSegmentBlockView(const IbdAcceptedBlockCandidate& candidate)
+{
+    assert(IbdCandidateMatchesContext(candidate));
+    return {
+        .context = BuildIbdSegmentBlockContext(candidate.context),
+        .transactions = candidate.block_data->vtx,
+    };
+}
+
+Consensus::BlockCommitContext BuildIbdBlockCommitContext(const NewBlockCandidateContextSnapshot& context)
+{
+    return {
+        .new_best_block = context.block.hash,
+        .block_height = context.block.height,
+        .previous_median_time_past = context.previous_median_time_past,
+    };
+}
+
+IbdValidatedBlockPackage MakeIbdValidatedBlockPackage(
+    IbdAcceptedBlockCandidate candidate,
+    Consensus::BlockSpendEffects spend_effects,
+    IbdScriptValidationStatus script_status)
+{
+    assert(IbdCandidateMatchesContext(candidate));
+    return {
+        .block = std::move(candidate.block),
+        .parent_hash = candidate.context.block.parent_hash,
+        .commit_work = IbdBlockCommitWork{
+            .block_data = std::move(candidate.block_data),
+            .commit_context = BuildIbdBlockCommitContext(candidate.context),
+            .spend_effects = std::move(spend_effects),
+        },
+        .script_status = script_status,
+    };
+}
+
+Consensus::BlockSpendResult<IbdCandidateSegmentValidation> ValidateIbdCandidateSegment(
+    std::vector<IbdAcceptedBlockCandidate> candidates,
+    const Consensus::SegmentSpendBatchView& spend_state,
+    Consensus::ScriptCheckPlanCollection script_check_plans)
+{
+    std::vector<Consensus::SegmentBlockView> block_views;
+    block_views.reserve(candidates.size());
+    for (const IbdAcceptedBlockCandidate& candidate : candidates) {
+        if (!IbdCandidateMatchesContext(candidate)) {
+            return Consensus::Unexpected<Consensus::BlockSpendError>{Consensus::BlockSpendError{
+                .issue = Consensus::BlockConsensusIssue::Consensus,
+                .reject_reason = "ibd-candidate-context-mismatch",
+                .debug_message = "IBD candidate block data does not match accepted context",
+            }};
+        }
+        block_views.push_back(BuildIbdSegmentBlockView(candidate));
+    }
+
+    auto validation{Consensus::ValidateSegmentSpend(block_views, spend_state, script_check_plans)};
+    if (!validation) {
+        return Consensus::Unexpected<Consensus::BlockSpendError>{std::move(validation).error()};
+    }
+
+    IbdCandidateSegmentValidation result{
+        .blocks = {},
+        .spend_summary = std::move(validation->summary),
+    };
+    result.blocks.reserve(candidates.size());
+
+    for (std::size_t block_index{0}; block_index < candidates.size(); ++block_index) {
+        Consensus::BlockSpendStageResult& block_stage{validation->block_stages[block_index]};
+        const IbdScriptValidationStatus script_status{
+            block_stage.script_checks.empty() ? IbdScriptValidationStatus::Valid : IbdScriptValidationStatus::Pending};
+        result.blocks.push_back({
+            .package = MakeIbdValidatedBlockPackage(
+                std::move(candidates[block_index]),
+                std::move(block_stage.effects),
+                script_status),
+            .script_checks = std::move(block_stage.script_checks),
+        });
+    }
+
+    return result;
+}
 
 IbdPipelineAdmissionWindow IbdBlockProcessor::AdmissionWindow(IbdPipelineLimits limits) const
 {

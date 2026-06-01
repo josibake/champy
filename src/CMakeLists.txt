@@ -79,6 +79,7 @@ add_library(bitcoin_consensus STATIC EXCLUDE_FROM_ALL
   consensus/predicates.cpp
   consensus/pow.cpp
   consensus/sequence_locks.cpp
+  consensus/segment_spend.cpp
   consensus/script_view.cpp
   consensus/script_checker.cpp
   consensus/sigops.cpp

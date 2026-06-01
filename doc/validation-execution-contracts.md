@@ -240,6 +240,9 @@ choose how to run them.
 Current runtime capabilities:
 
 - `ScriptCheckScheduler` starts a per-block script-check batch.
+- `node::ValidateIbdCandidateSegment` adapts accepted block snapshots into
+  segment spend work. It returns per-block commit packages and script plans, but
+  it does not mutate active chainstate.
 - `CoreChainValidationRuntime` adapts Core's current script scheduler and
   validation-event queue into explicit validation capabilities.
 - `CoreValidationCommitExecutor` serializes Core chainstate activation and

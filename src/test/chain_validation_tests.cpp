@@ -338,6 +338,57 @@ BOOST_AUTO_TEST_CASE(ibd_block_processor_records_stage_metrics)
     }
 }
 
+BOOST_AUTO_TEST_CASE(ibd_candidate_builds_segment_view_and_commit_package)
+{
+    auto& chainman{*Assert(m_node.chainman)};
+    ChainValidationService validation{chainman};
+    const auto block{CreateBlockChain(/*total_height=*/1, Params()).front()};
+
+    BlockValidationState state;
+    const BlockAcceptanceResult accepted{validation.AcceptNewBlockData(
+        block,
+        state,
+        {.block_data_storage = BlockDataStorageMode::ForceStore, .header = {.min_pow_checked = true}},
+        CurrentBlockValidationTime())};
+    BOOST_REQUIRE(accepted.accepted_for_processing());
+
+    const std::optional<NewBlockCandidateContextSnapshot> snapshot{validation.SnapshotAcceptedBlockContext(block->GetHash())};
+    BOOST_REQUIRE(snapshot);
+    node::IbdAcceptedBlockCandidate candidate{
+        .block = {
+            .hash = snapshot->block.hash,
+            .parent_hash = snapshot->block.parent_hash,
+            .height = snapshot->block.height,
+            .chain_work = snapshot->block.chain_work,
+        },
+        .block_data = block,
+        .context = *snapshot,
+    };
+
+    const Consensus::SegmentBlockView segment_view{node::BuildIbdSegmentBlockView(candidate)};
+    BOOST_CHECK(segment_view.context.hash == block->GetHash());
+    BOOST_CHECK(segment_view.context.parent_hash == Params().GenesisBlock().GetHash());
+    BOOST_CHECK_EQUAL(segment_view.context.height, 1);
+    BOOST_CHECK_EQUAL(segment_view.context.block_subsidy, snapshot->block_subsidy);
+    BOOST_CHECK_EQUAL(segment_view.transactions.size(), block->vtx.size());
+
+    Consensus::BlockSpendEffects effects;
+    effects.fees = 7;
+    node::IbdValidatedBlockPackage package{node::MakeIbdValidatedBlockPackage(
+        std::move(candidate),
+        effects,
+        node::IbdScriptValidationStatus::Valid)};
+
+    BOOST_CHECK(package.ReadyForSerializedCommit());
+    BOOST_CHECK(package.block.hash == block->GetHash());
+    BOOST_CHECK(package.parent_hash == Params().GenesisBlock().GetHash());
+    BOOST_REQUIRE(package.commit_work);
+    BOOST_CHECK(package.commit_work->block_data == block);
+    BOOST_CHECK(package.commit_work->commit_context.new_best_block == block->GetHash());
+    BOOST_CHECK_EQUAL(package.commit_work->commit_context.block_height, 1);
+    BOOST_CHECK_EQUAL(package.commit_work->spend_effects.fees, 7);
+}
+
 BOOST_AUTO_TEST_CASE(ibd_block_processor_records_only_reached_stages)
 {
     auto& chainman{*Assert(m_node.chainman)};

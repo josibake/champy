@@ -93,6 +93,11 @@ pipeline backpressure in node. Validated IBD work can be retired through
 `node::IbdOrderedRetireQueue`, which only releases contiguous heights to the
 serialized commit stage.
 
+Accepted IBD candidates can be adapted into `SegmentBlockView` values and
+validated as a segment with `node::ValidateIbdCandidateSegment`. The result is
+per-block: an ordered-retire package, detached script plans, and spend effects
+bound to an explicit commit context.
+
 ## Validation Pattern
 
 Block validation is organized as:
@@ -145,6 +150,17 @@ Bulk state experiments use `spend_state_batch.h`:
 - separate external lookups from intra-block dependencies
 - sort external lookups by outpoint for batch-oriented backends
 - adapt existing `SpendStateView` implementations to the batch interface
+
+Out-of-order IBD and accumulator experiments use `segment_spend.h`:
+
+- `SegmentSpendBatchView` resolves external prevouts plus sequence-lock time
+  facts for a block window
+- `ValidateSegmentSpend` validates joined inputs into per-block spend effects
+  and detached script-check plans
+- `SegmentSpendSummary` records created and spent coins for accumulator-style
+  state models
+- `SegmentSpendAccumulator` is the hook for SwiftSync or Utreexo-style
+  experiments
 
 ### Script Checks
 

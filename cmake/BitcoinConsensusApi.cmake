@@ -31,6 +31,7 @@ set(BITCOIN_CONSENSUS_PUBLIC_API_HEADERS
 set(BITCOIN_CONSENSUS_SUPPORT_HEADERS
   "consensus/locktime.h"
   "consensus/pow.h"
+  "consensus/segment_spend.h"
   "consensus/sequence_locks.h"
   "consensus/sigops.h"
   "consensus/validation.h"

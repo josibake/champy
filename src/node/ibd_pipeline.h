@@ -5,6 +5,8 @@
 #ifndef BITCOIN_NODE_IBD_PIPELINE_H
 #define BITCOIN_NODE_IBD_PIPELINE_H
 
+#include <consensus/block_commit.h>
+#include <consensus/block_spend.h>
 #include <node/block_download_types.h>
 
 #include <cassert>
@@ -79,16 +81,21 @@ enum class IbdScriptValidationStatus {
     Failed,
 };
 
+struct IbdBlockCommitWork {
+    std::shared_ptr<const CBlock> block_data;
+    Consensus::BlockCommitContext commit_context;
+    Consensus::BlockSpendEffects spend_effects;
+};
+
 struct IbdValidatedBlockPackage {
     PeerBlockRef block;
     uint256 parent_hash{};
-    std::shared_ptr<const CBlock> block_data;
-    bool spend_effects_ready{false};
+    std::optional<IbdBlockCommitWork> commit_work{};
     IbdScriptValidationStatus script_status{IbdScriptValidationStatus::NotSubmitted};
 
     [[nodiscard]] bool ReadyForSerializedCommit() const noexcept
     {
-        return spend_effects_ready && script_status == IbdScriptValidationStatus::Valid;
+        return commit_work.has_value() && script_status == IbdScriptValidationStatus::Valid;
     }
 };
 

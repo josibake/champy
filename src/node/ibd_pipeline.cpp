@@ -54,8 +54,7 @@ IbdValidatedBlockPackage CommitReadyPackage(PeerBlockRef block)
     return IbdValidatedBlockPackage{
         .block = std::move(block),
         .parent_hash = parent_hash,
-        .block_data = nullptr,
-        .spend_effects_ready = true,
+        .commit_work = IbdBlockCommitWork{},
         .script_status = IbdScriptValidationStatus::Valid,
     };
 }

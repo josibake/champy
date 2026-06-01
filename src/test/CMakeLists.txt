@@ -48,6 +48,7 @@ add_executable(test_bitcoin
   consensus_predicates_tests.cpp
   consensus_script_checker_tests.cpp
   consensus_serialization_tests.cpp
+  consensus_segment_spend_tests.cpp
   consensus_snapshot_spend_state_tests.cpp
   consensus_spend_state_batch_tests.cpp
   consensus_tx_verify_tests.cpp
