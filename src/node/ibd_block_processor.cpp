@@ -54,6 +54,74 @@ void FinishNewBlockTiming(NewBlockProcessingResult& result, std::chrono::steady_
     result.timings.total = std::chrono::steady_clock::now() - start;
 }
 
+NewBlockStructuralCheckResult RunStructuralValidationStage(
+    ChainValidationService& chain_validation,
+    const std::shared_ptr<const CBlock>& block,
+    NewBlockProcessingResult& validation,
+    BlockValidationState& state)
+{
+    const auto start{std::chrono::steady_clock::now()};
+    NewBlockStructuralCheckResult structural_check{chain_validation.CheckNewBlockStructural(block, state)};
+    validation.timings.structural_check = std::chrono::steady_clock::now() - start;
+    return structural_check;
+}
+
+BlockAcceptanceResult RunBlockAdmissionStage(
+    ChainValidationService& chain_validation,
+    const IbdBlockProcessRequest& request,
+    const NewBlockStructuralCheckResult& structural_check,
+    NewBlockProcessingResult& validation,
+    BlockValidationState& state)
+{
+    const auto start{std::chrono::steady_clock::now()};
+    BlockAcceptanceResult acceptance{chain_validation.AcceptNewBlockData(
+        request.block,
+        state,
+        {
+            .block_data_storage = request.block_data_storage,
+            .header = {.min_pow_checked = request.min_pow_checked},
+            .structural_check = structural_check.proof,
+        },
+        request.time)};
+    validation.timings.block_acceptance = std::chrono::steady_clock::now() - start;
+    validation.block_acceptance_status = acceptance.status;
+    return acceptance;
+}
+
+std::optional<IbdAcceptedBlockCandidate> RunContextSnapshotStage(
+    ChainValidationService& chain_validation,
+    const std::shared_ptr<const CBlock>& block,
+    NewBlockProcessingResult& validation)
+{
+    const auto start{std::chrono::steady_clock::now()};
+    validation.candidate_context = chain_validation.SnapshotAcceptedBlockContext(block->GetHash());
+    validation.timings.context_snapshot = std::chrono::steady_clock::now() - start;
+    if (!validation.candidate_context) return std::nullopt;
+
+    return MakeAcceptedBlockCandidate(*validation.candidate_context, block);
+}
+
+BlockActivationResult RunActivationStage(
+    ChainValidationService& chain_validation,
+    const IbdBlockProcessRequest& request,
+    NewBlockProcessingResult& validation,
+    BlockValidationState& state)
+{
+    const auto start{std::chrono::steady_clock::now()};
+    BlockActivationResult activation{chain_validation.ActivateAcceptedTipCandidate(request.chain_events, request.block, state)};
+    if (activation.Succeeded() && activation.connected_blocks == 0) {
+        // The exact-tip path is only valid when it preserves best-chain
+        // selection. Fall back to full activation for stale, fork, or reorg
+        // cases.
+        activation = chain_validation.ActivateAcceptedBlock(request.chain_events, request.block, state);
+    }
+    validation.timings.activation = std::chrono::steady_clock::now() - start;
+    validation.timings.spend_join = activation.timings.spend_join;
+    validation.timings.script_validation = activation.timings.script_validation;
+    validation.activated_blocks = activation.connected_blocks;
+    return activation;
+}
+
 IbdBlockProcessResult FinishBlockProcessResult(
     NewBlockProcessingResult validation,
     IbdPipelineMetrics& metrics,
@@ -122,27 +190,14 @@ IbdBlockProcessResult IbdBlockProcessor::ProcessDownloadedBlock(IbdBlockProcessR
     NewBlockProcessingResult validation;
     const auto total_start{std::chrono::steady_clock::now()};
 
-    const auto structural_start{std::chrono::steady_clock::now()};
-    const NewBlockStructuralCheckResult structural_check{chain_validation.CheckNewBlockStructural(request.block, state)};
-    validation.timings.structural_check = std::chrono::steady_clock::now() - structural_start;
+    const NewBlockStructuralCheckResult structural_check{RunStructuralValidationStage(chain_validation, request.block, validation, state)};
     if (!structural_check.passed()) {
         chain_validation.ReportBlockChecked(request.block, state);
         LogError("%s: AcceptBlock FAILED (%s)\n", __func__, state.ToString());
         return FinishBlockProcessResult(std::move(validation), m_metrics, total_start, *request.block, block_bytes);
     }
 
-    const auto accept_start{std::chrono::steady_clock::now()};
-    const BlockAcceptanceResult acceptance{chain_validation.AcceptNewBlockData(
-        request.block,
-        state,
-        {
-            .block_data_storage = request.block_data_storage,
-            .header = {.min_pow_checked = request.min_pow_checked},
-            .structural_check = structural_check.proof,
-        },
-        request.time)};
-    validation.timings.block_acceptance = std::chrono::steady_clock::now() - accept_start;
-    validation.block_acceptance_status = acceptance.status;
+    const BlockAcceptanceResult acceptance{RunBlockAdmissionStage(chain_validation, request, structural_check, validation, state)};
     if (!acceptance.accepted_for_processing()) {
         validation.status = NewBlockProcessingStatus::BlockNotAccepted;
         chain_validation.ReportBlockChecked(request.block, state);
@@ -151,27 +206,10 @@ IbdBlockProcessResult IbdBlockProcessor::ProcessDownloadedBlock(IbdBlockProcessR
     }
 
     validation.status = NewBlockProcessingStatus::ActivationFailed;
-    const auto snapshot_start{std::chrono::steady_clock::now()};
-    validation.candidate_context = chain_validation.SnapshotAcceptedBlockContext(request.block->GetHash());
-    validation.timings.context_snapshot = std::chrono::steady_clock::now() - snapshot_start;
-    std::optional<IbdAcceptedBlockCandidate> accepted_candidate;
-    if (validation.candidate_context) {
-        accepted_candidate = MakeAcceptedBlockCandidate(*validation.candidate_context, request.block);
-    }
+    std::optional<IbdAcceptedBlockCandidate> accepted_candidate{RunContextSnapshotStage(chain_validation, request.block, validation)};
 
     BlockValidationState activate_state;
-    const auto activation_start{std::chrono::steady_clock::now()};
-    BlockActivationResult activation{chain_validation.ActivateAcceptedTipCandidate(request.chain_events, request.block, activate_state)};
-    if (activation.Succeeded() && activation.connected_blocks == 0) {
-        // The exact-tip path is only valid when it preserves best-chain
-        // selection. Fall back to full activation for stale, fork, or reorg
-        // cases.
-        activation = chain_validation.ActivateAcceptedBlock(request.chain_events, request.block, activate_state);
-    }
-    validation.timings.activation = std::chrono::steady_clock::now() - activation_start;
-    validation.timings.spend_join = activation.timings.spend_join;
-    validation.timings.script_validation = activation.timings.script_validation;
-    validation.activated_blocks = activation.connected_blocks;
+    const BlockActivationResult activation{RunActivationStage(chain_validation, request, validation, activate_state)};
     if (!activation.Succeeded()) {
         LogError("%s: ActivateBestChain failed (%s)\n", __func__, activate_state.ToString());
         return FinishBlockProcessResult(std::move(validation), m_metrics, total_start, *request.block, block_bytes, std::move(accepted_candidate));

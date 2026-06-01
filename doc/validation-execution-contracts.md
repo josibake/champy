@@ -173,20 +173,19 @@ New block processing runs context-independent `CheckBlock` before acquiring
 a `BlockStructuralCheckProof` bound to the same block hash; otherwise it checks
 the block itself.
 
-Connecting a block to the active chain tip is represented by
-`CoreConnectTipRequest` plus shared `CoreConnectTipResources`. These name block
-loading, block index lookup, undo writing, connection view, script-policy
-logging state, event sink, signal sink, and timing counters explicitly.
-The implementation is split into prepare, execute, and commit helpers: prepare
-loads the block and snapshots the request, execute runs block connection, and
-commit flushes the connection attempt, persists if needed, advances the tip, and
-publishes the connected-block event.
+Connecting a block to the active chain tip is split into explicit phases:
+prepare loads the block and snapshots Core facts, execute runs block connection,
+report publishes `BlockChecked` and invalid-block state, and commit flushes the
+connection attempt, persists if needed, advances the tip, and publishes the
+connected-block event. Each phase takes a narrow resource object for the
+capabilities it uses.
 
 One bounded active-chain activation step is represented by
 `CoreActivateBestChainStepRequest`. The request carries a
-`CoreChainActivationState` capability for active-chain mutation. `Chainstate`
-owns the concrete state; validation owns the disconnect/connect/prune sequence
-for the step.
+`CoreChainActivationState` capability for active-chain mutation and
+`CoreChainActivationResources`, which are split into the narrow phase resources
+inside the step. `Chainstate` owns the concrete state; validation owns the
+disconnect/connect/prune sequence for the step.
 
 `Chainstate::ActivateBestChain()` delegates its serialized loop to
 `ChainstateActivationOrchestrator`. The orchestrator owns the current Core

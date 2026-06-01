@@ -14,14 +14,20 @@
 #include <span>
 
 class BlockHeaderContextProvider;
+class BlockIndexLookup;
 class Chainstate;
 class ChainstateEventSink;
 class CoreChainValidationContext;
+namespace Consensus {
+struct Params;
+} // namespace Consensus
 
 [[nodiscard]] NewBlockHeadersResult ProcessNewBlockHeaders(CoreChainValidationContext& context, std::span<const CBlockHeader> headers, BlockHeaderAcceptanceOptions options, BlockValidationTime time, BlockValidationState& state) LOCKS_EXCLUDED(cs_main);
+[[nodiscard]] NewBlockStructuralCheckResult CheckNewBlockStructural(const Consensus::Params& consensus_params, const std::shared_ptr<const CBlock>& block, BlockValidationState& state) LOCKS_EXCLUDED(cs_main);
 [[nodiscard]] NewBlockStructuralCheckResult CheckNewBlockStructural(CoreChainValidationContext& context, const std::shared_ptr<const CBlock>& block, BlockValidationState& state) LOCKS_EXCLUDED(cs_main);
 [[nodiscard]] BlockAcceptanceResult AcceptBlock(CoreChainValidationContext& context, const std::shared_ptr<const CBlock>& pblock, BlockValidationState& state, BlockAcceptanceOptions options, BlockValidationTime time) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
 [[nodiscard]] BlockAcceptanceResult AcceptNewBlockData(CoreChainValidationContext& context, const std::shared_ptr<const CBlock>& block, BlockValidationState& state, BlockAcceptanceOptions options, BlockValidationTime time) LOCKS_EXCLUDED(cs_main);
+[[nodiscard]] std::optional<NewBlockCandidateContextSnapshot> SnapshotAcceptedBlockContext(const Consensus::Params& consensus_params, BlockIndexLookup& block_index, const BlockHeaderContextProvider& header_context, const uint256& block_hash) LOCKS_EXCLUDED(cs_main);
 [[nodiscard]] std::optional<NewBlockCandidateContextSnapshot> SnapshotAcceptedBlockContext(CoreChainValidationContext& context, const uint256& block_hash) LOCKS_EXCLUDED(cs_main);
 [[nodiscard]] BlockActivationResult ActivateAcceptedTipCandidate(CoreChainValidationContext& context, ChainstateEventSink* chain_events, const std::shared_ptr<const CBlock>& block, BlockValidationState& state) LOCKS_EXCLUDED(cs_main);
 [[nodiscard]] BlockActivationResult ActivateAcceptedBlock(CoreChainValidationContext& context, ChainstateEventSink* chain_events, const std::shared_ptr<const CBlock>& block, BlockValidationState& state) LOCKS_EXCLUDED(cs_main);

@@ -98,13 +98,14 @@ serialized commit stage.
 Block validation is organized as:
 
 ```text
-structural -> contextual -> spend -> commit
+structural -> contextual -> spend -> report/retire -> commit
 ```
 
 - `structural`: checks that only need the block bytes.
 - `contextual`: checks that need chain facts such as height, time, difficulty,
   deployment state, or previous headers.
 - `spend`: checks UTXO-dependent validity, fees, subsidy, and scripts.
+- `report/retire`: publishes the validation result and orders validated work.
 - `commit`: writes undo data, commits spend state, and updates block metadata.
 
 The rule is: gather Core facts before calling consensus; commit Core mutations

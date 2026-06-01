@@ -5,6 +5,8 @@
 #include <validation/chain_validation.h>
 
 #include <chainstate.h>
+#include <validation/block_header_context_adapters.h>
+#include <validation/block_index_adapters.h>
 #include <validation/block_validation_internal.h>
 #include <validation/core_chain_validation_context.h>
 
@@ -23,9 +25,7 @@ NewBlockStructuralCheckResult ChainValidationService::CheckNewBlockStructural(
     const std::shared_ptr<const CBlock>& block,
     BlockValidationState& state)
 {
-    CoreChainValidationRuntime runtime{m_chainman};
-    CoreChainValidationContext context{m_chainman, runtime};
-    return ::CheckNewBlockStructural(context, block, state);
+    return ::CheckNewBlockStructural(m_chainman.GetConsensus(), block, state);
 }
 
 BlockAcceptanceResult ChainValidationService::AcceptBlock(
@@ -53,9 +53,9 @@ BlockAcceptanceResult ChainValidationService::AcceptNewBlockData(
 std::optional<NewBlockCandidateContextSnapshot> ChainValidationService::SnapshotAcceptedBlockContext(
     const uint256& block_hash)
 {
-    CoreChainValidationRuntime runtime{m_chainman};
-    CoreChainValidationContext context{m_chainman, runtime};
-    return ::SnapshotAcceptedBlockContext(context, block_hash);
+    CoreBlockIndexStore block_index{m_chainman};
+    const CoreBlockHeaderContextProvider header_context{m_chainman};
+    return ::SnapshotAcceptedBlockContext(m_chainman.GetConsensus(), block_index, header_context, block_hash);
 }
 
 BlockActivationResult ChainValidationService::ActivateAcceptedBlock(

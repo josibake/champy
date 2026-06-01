@@ -437,15 +437,20 @@ static bool StoreBlockData(
     return true;
 }
 
-NewBlockStructuralCheckResult CheckNewBlockStructural(CoreChainValidationContext& context, const std::shared_ptr<const CBlock>& block, BlockValidationState& state)
+NewBlockStructuralCheckResult CheckNewBlockStructural(const Consensus::Params& consensus_params, const std::shared_ptr<const CBlock>& block, BlockValidationState& state)
 {
     AssertLockNotHeld(cs_main);
     assert(block);
 
-    if (!CheckBlock(*block, state, context.ConsensusParams())) {
+    if (!CheckBlock(*block, state, consensus_params)) {
         return {};
     }
     return {.proof = BlockStructuralCheckProof{.block_hash = block->GetHash()}};
+}
+
+NewBlockStructuralCheckResult CheckNewBlockStructural(CoreChainValidationContext& context, const std::shared_ptr<const CBlock>& block, BlockValidationState& state)
+{
+    return CheckNewBlockStructural(context.ConsensusParams(), block, state);
 }
 
 BlockAcceptanceResult AcceptBlock(CoreChainValidationContext& context, const std::shared_ptr<const CBlock>& pblock, BlockValidationState& state, BlockAcceptanceOptions options, BlockValidationTime time)
@@ -529,16 +534,18 @@ BlockAcceptanceResult AcceptNewBlockData(CoreChainValidationContext& context, co
     return AcceptBlock(context, block, state, options, time);
 }
 
-std::optional<NewBlockCandidateContextSnapshot> SnapshotAcceptedBlockContext(CoreChainValidationContext& context, const uint256& block_hash)
+std::optional<NewBlockCandidateContextSnapshot> SnapshotAcceptedBlockContext(
+    const Consensus::Params& consensus_params,
+    BlockIndexLookup& block_index,
+    const BlockHeaderContextProvider& header_context,
+    const uint256& block_hash)
 {
     AssertLockNotHeld(cs_main);
     LOCK(cs_main);
 
-    CoreBlockIndexStore block_index{context.MakeBlockIndexStore()};
     const CBlockIndex* block_index_entry{block_index.LookupBlockIndex(block_hash)};
     if (!block_index_entry) return std::nullopt;
 
-    const CoreBlockHeaderContextProvider header_context{context.MakeHeaderContextProvider()};
     const Consensus::BlockHeaderContext headers{header_context.BuildContext(block_index_entry->pprev)};
     const bool has_spend_stage{block_index_entry->pprev != nullptr};
     return NewBlockCandidateContextSnapshot{
@@ -548,10 +555,17 @@ std::optional<NewBlockCandidateContextSnapshot> SnapshotAcceptedBlockContext(Cor
         .previous_median_time_past = headers.PreviousMedianTimePast(),
         .previous_block_time = headers.PreviousBlockTime(),
         .deployments = headers.Deployments(),
-        .spend_options = has_spend_stage ? BuildCoreBlockSpendConsensusOptions(*block_index_entry, context.ConsensusParams(), headers.Deployments()) : Consensus::BlockSpendConsensusOptions{},
-        .block_subsidy = Consensus::CalculateBlockSubsidy(block_index_entry->nHeight, context.ConsensusParams()),
+        .spend_options = has_spend_stage ? BuildCoreBlockSpendConsensusOptions(*block_index_entry, consensus_params, headers.Deployments()) : Consensus::BlockSpendConsensusOptions{},
+        .block_subsidy = Consensus::CalculateBlockSubsidy(block_index_entry->nHeight, consensus_params),
         .has_spend_stage = has_spend_stage,
     };
+}
+
+std::optional<NewBlockCandidateContextSnapshot> SnapshotAcceptedBlockContext(CoreChainValidationContext& context, const uint256& block_hash)
+{
+    CoreBlockIndexStore block_index{context.MakeBlockIndexStore()};
+    const CoreBlockHeaderContextProvider header_context{context.MakeHeaderContextProvider()};
+    return SnapshotAcceptedBlockContext(context.ConsensusParams(), block_index, header_context, block_hash);
 }
 
 BlockActivationResult ActivateAcceptedBlock(CoreChainValidationContext& context, ChainstateEventSink* chain_events, const std::shared_ptr<const CBlock>& block, BlockValidationState& state)
