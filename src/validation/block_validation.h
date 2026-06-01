@@ -124,10 +124,43 @@ enum class NewBlockProcessingStatus {
     Processed,
 };
 
+struct BlockActivationTimings {
+    std::chrono::nanoseconds spend_join{0};
+    std::chrono::nanoseconds script_validation{0};
+};
+
+enum class BlockActivationStatus {
+    Completed,
+    SystemError,
+};
+
+struct BlockActivationResult {
+    BlockActivationStatus status{BlockActivationStatus::SystemError};
+    BlockActivationTimings timings{};
+    uint64_t connected_blocks{0};
+
+    [[nodiscard]] static BlockActivationResult Completed(BlockActivationTimings timings = {}, uint64_t connected_blocks = 0) noexcept
+    {
+        return {BlockActivationStatus::Completed, timings, connected_blocks};
+    }
+
+    [[nodiscard]] static BlockActivationResult SystemError(BlockActivationTimings timings = {}, uint64_t connected_blocks = 0) noexcept
+    {
+        return {BlockActivationStatus::SystemError, timings, connected_blocks};
+    }
+
+    [[nodiscard]] bool Succeeded() const noexcept
+    {
+        return status == BlockActivationStatus::Completed;
+    }
+};
+
 struct NewBlockProcessingTimings {
     std::chrono::nanoseconds structural_check{0};
     std::chrono::nanoseconds block_acceptance{0};
     std::chrono::nanoseconds context_snapshot{0};
+    std::chrono::nanoseconds spend_join{0};
+    std::chrono::nanoseconds script_validation{0};
     std::chrono::nanoseconds activation{0};
     std::chrono::nanoseconds total{0};
 };
@@ -136,6 +169,7 @@ struct NewBlockProcessingResult {
     NewBlockProcessingStatus status{NewBlockProcessingStatus::BlockCheckFailed};
     BlockAcceptanceStatus block_acceptance_status{BlockAcceptanceStatus::HeaderRejected};
     NewBlockProcessingTimings timings{};
+    uint64_t activated_blocks{0};
     std::optional<NewBlockCandidateContextSnapshot> candidate_context{};
 
     [[nodiscard]] bool processed() const noexcept

@@ -11,7 +11,11 @@
 #include <cstddef>
 #include <cstdint>
 #include <map>
+#include <memory>
+#include <optional>
 #include <vector>
+
+class CBlock;
 
 namespace node {
 
@@ -30,13 +34,13 @@ struct IbdStageMetrics {
     uint64_t bytes{0};
     std::chrono::nanoseconds elapsed{0};
 
-    void Record(std::chrono::nanoseconds duration, uint64_t bytes_processed = 0) noexcept;
+    void Record(std::chrono::nanoseconds duration, uint64_t bytes_processed = 0, uint64_t blocks_processed = 1) noexcept;
 };
 
 class IbdPipelineMetrics
 {
 public:
-    void Record(IbdPipelineStage stage, std::chrono::nanoseconds duration, uint64_t bytes_processed = 0) noexcept;
+    void Record(IbdPipelineStage stage, std::chrono::nanoseconds duration, uint64_t bytes_processed = 0, uint64_t blocks_processed = 1) noexcept;
 
     [[nodiscard]] const IbdStageMetrics& Stage(IbdPipelineStage stage) const noexcept;
     [[nodiscard]] IbdStageMetrics& Stage(IbdPipelineStage stage) noexcept;
@@ -54,6 +58,8 @@ private:
 enum class IbdRetireStatus {
     Ready,
     Queued,
+    NotReady,
+    ParentMismatch,
     DuplicateHeight,
     StaleHeight,
     InvalidHeight,
@@ -62,6 +68,33 @@ enum class IbdRetireStatus {
 struct IbdRetireResult {
     IbdRetireStatus status{IbdRetireStatus::InvalidHeight};
     std::size_t ready_count{0};
+};
+
+enum class IbdScriptValidationStatus {
+    NotSubmitted,
+    Pending,
+    Valid,
+    Failed,
+};
+
+struct IbdValidatedBlockPackage {
+    PeerBlockRef block;
+    uint256 parent_hash{};
+    std::shared_ptr<const CBlock> block_data;
+    bool spend_effects_ready{false};
+    IbdScriptValidationStatus script_status{IbdScriptValidationStatus::NotSubmitted};
+
+    [[nodiscard]] bool ReadyForSerializedCommit() const noexcept
+    {
+        return spend_effects_ready && script_status == IbdScriptValidationStatus::Valid;
+    }
+};
+
+[[nodiscard]] IbdValidatedBlockPackage CommitReadyPackage(PeerBlockRef block);
+
+struct IbdRetireChainPosition {
+    int next_height{-1};
+    std::optional<uint256> expected_parent_hash{};
 };
 
 /**
@@ -75,21 +108,26 @@ class IbdOrderedRetireQueue
 {
 public:
     explicit IbdOrderedRetireQueue(int next_height);
+    explicit IbdOrderedRetireQueue(IbdRetireChainPosition position);
 
     [[nodiscard]] IbdRetireResult Add(PeerBlockRef block);
-    [[nodiscard]] std::vector<PeerBlockRef> PopReady();
+    [[nodiscard]] IbdRetireResult Add(IbdValidatedBlockPackage package);
+    [[nodiscard]] std::vector<IbdValidatedBlockPackage> PopReady();
 
     [[nodiscard]] int NextHeight() const noexcept { return m_next_height; }
+    [[nodiscard]] const std::optional<uint256>& ExpectedParentHash() const noexcept { return m_expected_parent_hash; }
     [[nodiscard]] std::size_t PendingCount() const noexcept { return m_pending.size(); }
     [[nodiscard]] std::size_t ReadyCount() const noexcept { return m_ready.size(); }
     [[nodiscard]] bool Empty() const noexcept { return m_pending.empty() && m_ready.empty(); }
 
 private:
+    [[nodiscard]] bool ParentChainMatches(const IbdValidatedBlockPackage& package) const;
     void MoveContiguousToReady();
 
     int m_next_height;
-    std::map<int, PeerBlockRef> m_pending;
-    std::vector<PeerBlockRef> m_ready;
+    std::optional<uint256> m_expected_parent_hash;
+    std::map<int, IbdValidatedBlockPackage> m_pending;
+    std::vector<IbdValidatedBlockPackage> m_ready;
 };
 
 struct IbdPipelineLimits {
@@ -98,11 +136,13 @@ struct IbdPipelineLimits {
 
 struct IbdPipelineAdmissionWindow {
     int next_commit_height{-1};
+    std::optional<uint256> expected_parent_hash{};
     IbdPipelineLimits limits{};
 };
 
 enum class IbdAdmissionStatus {
     Accepted,
+    ParentMismatch,
     StaleHeight,
     TooFarAhead,
     InvalidHeight,
@@ -116,10 +156,12 @@ class IbdPipeline
 {
 public:
     explicit IbdPipeline(int next_commit_height, IbdPipelineLimits limits = {});
+    explicit IbdPipeline(IbdRetireChainPosition position, IbdPipelineLimits limits = {});
 
     [[nodiscard]] IbdAdmissionResult Admit(PeerBlockRef block) const noexcept;
     [[nodiscard]] IbdRetireResult MarkValidated(PeerBlockRef block);
-    [[nodiscard]] std::vector<PeerBlockRef> PopReadyToCommit();
+    [[nodiscard]] IbdRetireResult MarkValidated(IbdValidatedBlockPackage package);
+    [[nodiscard]] std::vector<IbdValidatedBlockPackage> PopReadyToCommit();
 
     [[nodiscard]] int NextCommitHeight() const noexcept { return m_retire_queue.NextHeight(); }
     [[nodiscard]] std::size_t PendingRetireCount() const noexcept { return m_retire_queue.PendingCount(); }

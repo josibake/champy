@@ -9,9 +9,9 @@
 
 namespace node {
 
-void IbdStageMetrics::Record(std::chrono::nanoseconds duration, uint64_t bytes_processed) noexcept
+void IbdStageMetrics::Record(std::chrono::nanoseconds duration, uint64_t bytes_processed, uint64_t blocks_processed) noexcept
 {
-    ++blocks;
+    blocks += blocks_processed;
     bytes += bytes_processed;
     elapsed += duration;
 }
@@ -43,30 +43,60 @@ const IbdStageMetrics& IbdPipelineMetrics::Stage(IbdPipelineStage stage) const n
     return const_cast<IbdPipelineMetrics&>(*this).Stage(stage);
 }
 
-void IbdPipelineMetrics::Record(IbdPipelineStage stage, std::chrono::nanoseconds duration, uint64_t bytes_processed) noexcept
+void IbdPipelineMetrics::Record(IbdPipelineStage stage, std::chrono::nanoseconds duration, uint64_t bytes_processed, uint64_t blocks_processed) noexcept
 {
-    Stage(stage).Record(duration, bytes_processed);
+    Stage(stage).Record(duration, bytes_processed, blocks_processed);
 }
 
-IbdOrderedRetireQueue::IbdOrderedRetireQueue(int next_height) : m_next_height{next_height}
+IbdValidatedBlockPackage CommitReadyPackage(PeerBlockRef block)
 {
-    assert(next_height >= 0);
+    const uint256 parent_hash{block.parent_hash};
+    return IbdValidatedBlockPackage{
+        .block = std::move(block),
+        .parent_hash = parent_hash,
+        .block_data = nullptr,
+        .spend_effects_ready = true,
+        .script_status = IbdScriptValidationStatus::Valid,
+    };
+}
+
+IbdOrderedRetireQueue::IbdOrderedRetireQueue(int next_height)
+    : IbdOrderedRetireQueue{IbdRetireChainPosition{.next_height = next_height}}
+{
+}
+
+IbdOrderedRetireQueue::IbdOrderedRetireQueue(IbdRetireChainPosition position)
+    : m_next_height{position.next_height},
+      m_expected_parent_hash{position.expected_parent_hash}
+{
+    assert(position.next_height >= 0);
 }
 
 IbdRetireResult IbdOrderedRetireQueue::Add(PeerBlockRef block)
 {
-    if (block.height < 0) {
+    return Add(CommitReadyPackage(std::move(block)));
+}
+
+IbdRetireResult IbdOrderedRetireQueue::Add(IbdValidatedBlockPackage package)
+{
+    if (!package.ReadyForSerializedCommit()) {
+        return {.status = IbdRetireStatus::NotReady};
+    }
+    if (package.block.height < 0) {
         return {.status = IbdRetireStatus::InvalidHeight};
     }
-    if (block.height < m_next_height) {
+    if (package.block.height < m_next_height) {
         return {.status = IbdRetireStatus::StaleHeight};
     }
-    if (m_pending.contains(block.height)) {
+    if (m_pending.contains(package.block.height)) {
         return {.status = IbdRetireStatus::DuplicateHeight};
+    }
+    if (!ParentChainMatches(package)) {
+        return {.status = IbdRetireStatus::ParentMismatch};
     }
 
     const std::size_t previous_ready{m_ready.size()};
-    m_pending.emplace(block.height, std::move(block));
+    m_pending.emplace(package.block.height, std::move(package));
     MoveContiguousToReady();
     const std::size_t new_ready{m_ready.size() - previous_ready};
 
@@ -76,11 +106,32 @@ IbdRetireResult IbdOrderedRetireQueue::Add(PeerBlockRef block)
     };
 }
 
-std::vector<PeerBlockRef> IbdOrderedRetireQueue::PopReady()
+std::vector<IbdValidatedBlockPackage> IbdOrderedRetireQueue::PopReady()
 {
-    std::vector<PeerBlockRef> ready;
+    std::vector<IbdValidatedBlockPackage> ready;
     ready.swap(m_ready);
     return ready;
+}
+
+bool IbdOrderedRetireQueue::ParentChainMatches(const IbdValidatedBlockPackage& package) const
+{
+    if (!m_expected_parent_hash) return true;
+
+    if (package.block.height == m_next_height && package.parent_hash != *m_expected_parent_hash) {
+        return false;
+    }
+
+    const auto previous{m_pending.find(package.block.height - 1)};
+    if (previous != m_pending.end() && package.parent_hash != previous->second.block.hash) {
+        return false;
+    }
+
+    const auto next{m_pending.find(package.block.height + 1)};
+    if (next != m_pending.end() && next->second.parent_hash != package.block.hash) {
+        return false;
+    }
+
+    return true;
 }
 
 void IbdOrderedRetireQueue::MoveContiguousToReady()
@@ -89,6 +140,10 @@ void IbdOrderedRetireQueue::MoveContiguousToReady()
         auto it{m_pending.find(m_next_height)};
         if (it == m_pending.end()) return;
 
+        if (m_expected_parent_hash) {
+            assert(it->second.parent_hash == *m_expected_parent_hash);
+            m_expected_parent_hash = it->second.block.hash;
+        }
         m_ready.push_back(std::move(it->second));
         m_pending.erase(it);
         ++m_next_height;
@@ -96,7 +151,12 @@ void IbdOrderedRetireQueue::MoveContiguousToReady()
 }
 
 IbdPipeline::IbdPipeline(int next_commit_height, IbdPipelineLimits limits)
-    : m_limits{limits}, m_retire_queue{next_commit_height}
+    : IbdPipeline{IbdRetireChainPosition{.next_height = next_commit_height}, limits}
+{
+}
+
+IbdPipeline::IbdPipeline(IbdRetireChainPosition position, IbdPipelineLimits limits)
+    : m_limits{limits}, m_retire_queue{std::move(position)}
 {
 }
 
@@ -108,6 +168,12 @@ IbdAdmissionResult IbdPipeline::Admit(PeerBlockRef block) const noexcept
     if (block.height < m_retire_queue.NextHeight()) {
         return {.status = IbdAdmissionStatus::StaleHeight};
     }
+    if (block.height == m_retire_queue.NextHeight()) {
+        const std::optional<uint256>& expected_parent_hash{m_retire_queue.ExpectedParentHash()};
+        if (expected_parent_hash && block.parent_hash != *expected_parent_hash) {
+            return {.status = IbdAdmissionStatus::ParentMismatch};
+        }
+    }
     if (m_limits.max_blocks_ahead > 0 &&
         static_cast<std::size_t>(block.height - m_retire_queue.NextHeight()) >= m_limits.max_blocks_ahead) {
         return {.status = IbdAdmissionStatus::TooFarAhead};
@@ -117,10 +183,15 @@ IbdAdmissionResult IbdPipeline::Admit(PeerBlockRef block) const noexcept
 
 IbdRetireResult IbdPipeline::MarkValidated(PeerBlockRef block)
 {
-    return m_retire_queue.Add(std::move(block));
+    return MarkValidated(CommitReadyPackage(std::move(block)));
 }
 
-std::vector<PeerBlockRef> IbdPipeline::PopReadyToCommit()
+IbdRetireResult IbdPipeline::MarkValidated(IbdValidatedBlockPackage package)
+{
+    return m_retire_queue.Add(std::move(package));
+}
+
+std::vector<IbdValidatedBlockPackage> IbdPipeline::PopReadyToCommit()
 {
     return m_retire_queue.PopReady();
 }

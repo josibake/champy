@@ -330,7 +330,7 @@ void ChainTestingSetup::LoadVerifyActivateChainstate()
     assert(status == kernel::ChainstateLoadStatus::SUCCESS);
 
     BlockValidationState state;
-    if (!chainman.ActiveChainstate().ActivateBestChain(state)) {
+    if (!chainman.ActiveChainstate().ActivateBestChain(state).Succeeded()) {
         throw std::runtime_error(strprintf("ActivateBestChain failed. (%s)", state.ToString()));
     }
 }

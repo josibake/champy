@@ -11,6 +11,16 @@
 #include <chrono>
 #include <cstddef>
 
+namespace {
+
+std::chrono::nanoseconds NonnegativeDuration(SteadyClock::time_point start, SteadyClock::time_point end)
+{
+    if (end <= start) return {};
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(end - start);
+}
+
+} // namespace
+
 BlockConnectionTraceCounters BlockConnectionTraceCountersFor(ChainstateManager& chainman)
 {
     return {
@@ -104,6 +114,19 @@ void BlockConnectionTrace::IndexCommitted()
              Ticks<MillisecondsDouble>(m_after_index - m_after_undo),
              Ticks<SecondsDouble>(m_counters.time_index),
              Ticks<MillisecondsDouble>(m_counters.time_index) / m_counters.num_blocks_total);
+}
+
+BlockConnectionStageTimings BlockConnectionTrace::Timings() const
+{
+    return {
+        .sanity_checks = NonnegativeDuration(m_start, m_after_sanity),
+        .fork_checks = NonnegativeDuration(m_after_sanity, m_after_forks),
+        .spend_join = NonnegativeDuration(m_after_forks, m_after_spend_validation),
+        .script_validation = NonnegativeDuration(m_after_spend_validation, m_after_spend_completion),
+        .undo_write = NonnegativeDuration(m_after_spend_completion, m_after_undo),
+        .index_commit = NonnegativeDuration(m_after_undo, m_after_index),
+        .total = NonnegativeDuration(m_start, m_after_index),
+    };
 }
 
 std::chrono::nanoseconds BlockConnectionTrace::TraceDuration() const

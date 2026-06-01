@@ -20,6 +20,7 @@
 #include <chainstate.h>
 
 #include <cassert>
+#include <utility>
 #include <vector>
 
 /*
@@ -117,17 +118,34 @@ void BenchmarkBlockConnectionEngine(benchmark::Bench& bench, std::vector<CKey>& 
             .block_index_committer = block_index_store,
             .script_check_scheduler = validation_context.ScriptCheckScheduler(),
             .validation_cache = validation_context.ScriptValidationCache(),
-            .trace_counters = validation_context.TraceCounters(),
         };
+        BlockConnectionTrace trace{validation_context.TraceCounters()};
         CoreBlockConnectionSetup connection_setup{
             runtime_inputs,
             PlanCoreBlockConnection(SnapshotCoreBlockConnectionPolicy(validation_context, *pindex), block_index_store, *pindex),
             *pindex,
+            trace,
             /*cache_script_results=*/false};
         connection_setup.MaybeLogScriptPolicy(chainstate.LastScriptCheckReasonLogged(), test_block.GetHash());
         validation::CoreCoinsBlockConnectionState connection_state{viewNew};
         const validation::BlockConnectionRequest request{connection_setup.Request(test_block, connection_state)};
-        assert(validation::BlockConnectionEngine{}.Connect(request, test_block_state).Succeeded());
+        validation::BlockConnectionEngine engine;
+        auto connected{engine.Connect(request, test_block_state)};
+        assert(connected.Succeeded());
+        assert(connected.commit_package);
+        const validation::BlockConnectionCommitRequest commit_request{
+            .runtime = {
+                .undo_writer = block_store,
+                .block_index_committer = block_index_store,
+                .trace = trace,
+            },
+            .context = {
+                .block = test_block,
+                .block_index = *pindex,
+                .connection_state = connection_state,
+            },
+        };
+        assert(engine.Commit(commit_request, std::move(*connected.commit_package), test_block_state).Succeeded());
     });
 }
 

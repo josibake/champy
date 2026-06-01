@@ -123,7 +123,7 @@ bool CoreChainValidationContext::FlushActiveChainstateIfNeeded(BlockValidationSt
     return m_chainman.FlushActiveChainstateIfNeeded(state, external_cache_usage);
 }
 
-bool CoreChainValidationContext::ActivateBestChain(BlockValidationState& state, const std::shared_ptr<const CBlock>& block, ChainstateEventSink* chain_events) const
+BlockActivationResult CoreChainValidationContext::ActivateBestChain(BlockValidationState& state, const std::shared_ptr<const CBlock>& block, ChainstateEventSink* chain_events) const
 {
     return m_chainman.ActiveChainstate().ActivateBestChain(state, block, chain_events);
 }

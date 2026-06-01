@@ -14,6 +14,16 @@
 
 class ChainstateManager;
 
+struct BlockConnectionStageTimings {
+    std::chrono::nanoseconds sanity_checks{0};
+    std::chrono::nanoseconds fork_checks{0};
+    std::chrono::nanoseconds spend_join{0};
+    std::chrono::nanoseconds script_validation{0};
+    std::chrono::nanoseconds undo_write{0};
+    std::chrono::nanoseconds index_commit{0};
+    std::chrono::nanoseconds total{0};
+};
+
 struct BlockConnectionTraceCounters {
     int64_t& num_blocks_total;
     SteadyClock::duration& time_check;
@@ -40,6 +50,7 @@ public:
     void UndoWritten() EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
     void IndexCommitted() EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
 
+    [[nodiscard]] BlockConnectionStageTimings Timings() const;
     [[nodiscard]] std::chrono::nanoseconds TraceDuration() const;
 
 private:

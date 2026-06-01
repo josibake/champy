@@ -24,6 +24,7 @@ class CBlockIndex;
 class ChainstateEventSink;
 class CoreChainLock;
 class CoreChainValidationContext;
+struct BlockActivationTimings;
 
 namespace kernel {
 class Notifications;
@@ -96,6 +97,8 @@ struct CoreConnectTipResources {
     ChainstateEventSink* chain_events{nullptr};
     validation::ValidationEventQueue& validation_events;
     CoreConnectTipTiming timing;
+    BlockActivationTimings& activation_timings;
+    uint64_t& activation_connected_blocks;
     CoreChainLock* chain_lock{nullptr};
 };
 

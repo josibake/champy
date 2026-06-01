@@ -9,8 +9,12 @@
 #include <consensus/block_consensus_pipeline.h>
 #include <consensus/block_spend.h>
 #include <kernel/cs_main.h>
+#include <validation/block_connection_state.h>
+#include <uint256.h>
 
 #include <memory>
+#include <optional>
+#include <utility>
 
 class CBlock;
 class CBlockIndex;
@@ -26,17 +30,14 @@ class Notifications;
 /**
  * Block connection options.
  *
- * These keep block-check policy and commit behavior explicit at the validation
- * boundary. Script-cache policy belongs to the script-checker capability.
+ * These keep block-check policy explicit at the validation boundary.
+ * Script-cache policy belongs to the script-checker capability.
  */
 struct BlockConnectionOptions {
     Consensus::BlockCheckOptions block_check_options{};
-    bool commit{true};
 };
 
 namespace validation {
-
-class BlockConnectionState;
 
 /**
  * Consensus and policy context for a block connection attempt.
@@ -82,15 +83,41 @@ struct BlockConnectionRequest {
     BlockConnectionOptions options{};
 };
 
+struct BlockConnectionCommitRuntime {
+    BlockUndoWriter& undo_writer;
+    BlockIndexValidityCommitter& block_index_committer;
+    BlockConnectionTrace& trace;
+};
+
+struct BlockConnectionCommitContext {
+    const CBlock& block;
+    CBlockIndex& block_index;
+    BlockConnectionState& connection_state;
+};
+
+struct BlockConnectionCommitRequest {
+    BlockConnectionCommitRuntime runtime;
+    BlockConnectionCommitContext context;
+};
+
 enum class BlockConnectionStatus {
     Connected,
     Failed,
 };
 
+struct BlockConnectionCommitPackage {
+    uint256 expected_previous_block;
+    Consensus::BlockCommitContext commit_context;
+    std::unique_ptr<BlockConnectionSpendState> spend_state;
+    std::optional<Consensus::BlockSpendEffects> effects;
+};
+
 struct BlockConnectionResult {
     BlockConnectionStatus status{BlockConnectionStatus::Failed};
+    std::optional<BlockConnectionCommitPackage> commit_package{};
 
     [[nodiscard]] static BlockConnectionResult Connected() { return {BlockConnectionStatus::Connected}; }
+    [[nodiscard]] static BlockConnectionResult Connected(BlockConnectionCommitPackage package) { return {BlockConnectionStatus::Connected, std::move(package)}; }
     [[nodiscard]] static BlockConnectionResult Failed() { return {BlockConnectionStatus::Failed}; }
     [[nodiscard]] bool Succeeded() const { return status == BlockConnectionStatus::Connected; }
 };
@@ -98,6 +125,8 @@ struct BlockConnectionResult {
 class BlockConnectionEngine final {
 public:
     [[nodiscard]] BlockConnectionResult Connect(const BlockConnectionRequest& request, BlockValidationState& state) const
+        EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
+    [[nodiscard]] BlockConnectionResult Commit(const BlockConnectionCommitRequest& request, BlockConnectionCommitPackage package, BlockValidationState& state) const
         EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
 };
 

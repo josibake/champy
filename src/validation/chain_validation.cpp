@@ -58,7 +58,7 @@ std::optional<NewBlockCandidateContextSnapshot> ChainValidationService::Snapshot
     return ::SnapshotAcceptedBlockContext(context, block_hash);
 }
 
-bool ChainValidationService::ActivateAcceptedBlock(
+BlockActivationResult ChainValidationService::ActivateAcceptedBlock(
     ChainstateEventSink* chain_events,
     const std::shared_ptr<const CBlock>& block,
     BlockValidationState& state)
@@ -66,6 +66,15 @@ bool ChainValidationService::ActivateAcceptedBlock(
     CoreChainValidationRuntime runtime{m_chainman};
     CoreChainValidationContext context{m_chainman, runtime};
     return ::ActivateAcceptedBlock(context, chain_events, block, state);
+}
+
+void ChainValidationService::ReportBlockChecked(
+    const std::shared_ptr<const CBlock>& block,
+    const BlockValidationState& state)
+{
+    CoreChainValidationRuntime runtime{m_chainman};
+    CoreChainValidationContext context{m_chainman, runtime};
+    ::ReportBlockChecked(context, block, state);
 }
 
 NewBlockProcessingResult ChainValidationService::ProcessNewBlock(

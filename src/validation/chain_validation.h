@@ -44,10 +44,14 @@ public:
     [[nodiscard]] std::optional<NewBlockCandidateContextSnapshot> SnapshotAcceptedBlockContext(
         const uint256& block_hash) LOCKS_EXCLUDED(cs_main);
 
-    [[nodiscard]] bool ActivateAcceptedBlock(
+    [[nodiscard]] BlockActivationResult ActivateAcceptedBlock(
         ChainstateEventSink* chain_events,
         const std::shared_ptr<const CBlock>& block,
         BlockValidationState& state) LOCKS_EXCLUDED(cs_main);
+
+    void ReportBlockChecked(
+        const std::shared_ptr<const CBlock>& block,
+        const BlockValidationState& state) LOCKS_EXCLUDED(cs_main);
 
     [[nodiscard]] NewBlockProcessingResult ProcessNewBlock(
         ChainstateEventSink* chain_events,

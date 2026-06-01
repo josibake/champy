@@ -14,6 +14,7 @@ namespace node {
 
 struct PeerBlockRef {
     uint256 hash{};
+    uint256 parent_hash{};
     int height{-1};
     arith_uint256 chain_work{};
 };

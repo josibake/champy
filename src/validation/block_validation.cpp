@@ -73,6 +73,7 @@ ChainWorkBlockSnapshot MakeChainWorkBlockSnapshot(const CBlockIndex& block)
 {
     return {
         .hash = block.GetBlockHash(),
+        .parent_hash = block.pprev ? block.pprev->GetBlockHash() : uint256{},
         .height = block.nHeight,
         .chain_work = block.nChainWork,
     };
@@ -121,7 +122,6 @@ static CoreBlockConnectionRuntimeInputs MakeCoreBlockConnectionRuntimeInputs(
         .block_index_committer = block_index_committer,
         .script_check_scheduler = script_check_scheduler,
         .validation_cache = context.ScriptValidationCache(),
-        .trace_counters = context.TraceCounters(),
     };
 }
 
@@ -559,7 +559,7 @@ std::optional<NewBlockCandidateContextSnapshot> SnapshotAcceptedBlockContext(Cor
     };
 }
 
-bool ActivateAcceptedBlock(CoreChainValidationContext& context, ChainstateEventSink* chain_events, const std::shared_ptr<const CBlock>& block, BlockValidationState& state)
+BlockActivationResult ActivateAcceptedBlock(CoreChainValidationContext& context, ChainstateEventSink* chain_events, const std::shared_ptr<const CBlock>& block, BlockValidationState& state)
 {
     AssertLockNotHeld(cs_main);
     assert(block);
@@ -568,7 +568,7 @@ bool ActivateAcceptedBlock(CoreChainValidationContext& context, ChainstateEventS
     return context.ActivateBestChain(state, block, chain_events);
 }
 
-static void NotifyBlockChecked(CoreChainValidationContext& context, const std::shared_ptr<const CBlock>& block, const BlockValidationState& state)
+void ReportBlockChecked(CoreChainValidationContext& context, const std::shared_ptr<const CBlock>& block, const BlockValidationState& state)
 {
     LOCK(cs_main);
     auto& validation_events{context.ValidationEvents()};
@@ -600,7 +600,7 @@ NewBlockProcessingResult ProcessNewBlock(CoreChainValidationContext& context, Ch
     result.timings.structural_check = has_structural_proof ? std::chrono::nanoseconds{0} :
                                                              std::chrono::steady_clock::now() - structural_start;
     if (!structural_check.passed()) {
-        NotifyBlockChecked(context, block, state);
+        ReportBlockChecked(context, block, state);
         LogError("%s: AcceptBlock FAILED (%s)\n", __func__, state.ToString());
         FinishNewBlockProcessingTiming(result, total_start);
         return result;
@@ -622,7 +622,7 @@ NewBlockProcessingResult ProcessNewBlock(CoreChainValidationContext& context, Ch
     const bool accepted_for_processing{acceptance.accepted_for_processing()};
     if (!accepted_for_processing) {
         result.status = NewBlockProcessingStatus::BlockNotAccepted;
-        NotifyBlockChecked(context, block, state);
+        ReportBlockChecked(context, block, state);
         LogError("%s: AcceptBlock FAILED (%s)\n", __func__, state.ToString());
         FinishNewBlockProcessingTiming(result, total_start);
         return result;
@@ -635,9 +635,12 @@ NewBlockProcessingResult ProcessNewBlock(CoreChainValidationContext& context, Ch
 
     BlockValidationState activate_state; // Only used to report errors, not invalidity - ignore it
     const auto activation_start{std::chrono::steady_clock::now()};
-    const bool activated{ActivateAcceptedBlock(context, chain_events, block, activate_state)};
+    const BlockActivationResult activation{ActivateAcceptedBlock(context, chain_events, block, activate_state)};
     result.timings.activation = std::chrono::steady_clock::now() - activation_start;
-    if (!activated) {
+    result.timings.spend_join = activation.timings.spend_join;
+    result.timings.script_validation = activation.timings.script_validation;
+    result.activated_blocks = activation.connected_blocks;
+    if (!activation.Succeeded()) {
         LogError("%s: ActivateBestChain failed (%s)\n", __func__, activate_state.ToString());
         FinishNewBlockProcessingTiming(result, total_start);
         return result;
@@ -712,15 +715,14 @@ BlockValidationState TestBlockValidity(
     index_dummy.nHeight = tip->nHeight + 1;
     index_dummy.phashBlock = &block_hash;
 
-    // Test validation uses the normal connection path with commit disabled. It
-    // may update reusable script caches, but staged coin effects stay local to
-    // the caller-supplied connection attempt.
+    // Test validation uses the normal connection path and discards the commit
+    // package. It may update reusable script caches, but staged coin effects
+    // stay local to the caller-supplied connection attempt.
     const BlockConnectionOptions connect_options{
         .block_check_options = Consensus::BlockCheckOptions{
             .check_pow = false,
             .check_merkle_root = false,
         },
-        .commit = false,
     };
 
     const Consensus::BlockHeaderContext headers{request.header_context.BuildContext(tip)};
@@ -747,7 +749,8 @@ BlockValidationState TestBlockValidity(
         .connection_state = request.connection_state,
         .options = connect_options,
     };
-    if (!validation::BlockConnectionEngine{}.Connect(connection_request, state).Succeeded()) {
+    const validation::BlockConnectionResult connected{validation::BlockConnectionEngine{}.Connect(connection_request, state)};
+    if (!connected.Succeeded()) {
         if (state.IsValid()) NONFATAL_UNREACHABLE();
         return state;
     }
@@ -942,16 +945,37 @@ VerifyDBResult CVerifyDB::VerifyDB(
                 LogError("Verification error: ReadBlock failed at %d, hash=%s", pindex->nHeight, pindex->GetBlockHash().ToString());
                 return VerifyDBResult::CORRUPTED_BLOCK_DB;
             }
+            BlockConnectionTrace trace{request.validation_context.TraceCounters()};
             CoreBlockConnectionSetup connection_setup{
                 runtime_inputs,
                 PlanCoreBlockConnection(SnapshotCoreBlockConnectionPolicy(request.validation_context, *pindex), request.block_index_lookup, *pindex),
                 *pindex,
+                trace,
                 /*cache_script_results=*/false};
             connection_setup.MaybeLogScriptPolicy(request.last_script_check_reason_logged, block.GetHash());
             validation::CoreCoinsBlockConnectionState connection_state{coins};
             const validation::BlockConnectionRequest connection_request{connection_setup.Request(block, connection_state)};
-            if (!validation::BlockConnectionEngine{}.Connect(connection_request, state).Succeeded()) {
+            validation::BlockConnectionEngine engine;
+            auto connected{engine.Connect(connection_request, state)};
+            if (!connected.Succeeded()) {
                 LogError("Verification error: found unconnectable block at %d, hash=%s (%s)", pindex->nHeight, pindex->GetBlockHash().ToString(), state.ToString());
+                return VerifyDBResult::CORRUPTED_BLOCK_DB;
+            }
+            assert(connected.commit_package);
+            const validation::BlockConnectionCommitRequest commit_request{
+                .runtime = {
+                    .undo_writer = request.undo_writer,
+                    .block_index_committer = request.block_index_committer,
+                    .trace = trace,
+                },
+                .context = {
+                    .block = block,
+                    .block_index = *pindex,
+                    .connection_state = connection_state,
+                },
+            };
+            if (!engine.Commit(commit_request, std::move(*connected.commit_package), state).Succeeded()) {
+                LogError("Verification error: failed to commit block at %d, hash=%s (%s)", pindex->nHeight, pindex->GetBlockHash().ToString(), state.ToString());
                 return VerifyDBResult::CORRUPTED_BLOCK_DB;
             }
             if (request.interrupt) return VerifyDBResult::INTERRUPTED;

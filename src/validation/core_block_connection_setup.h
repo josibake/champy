@@ -34,13 +34,12 @@ struct CoreBlockConnectionRuntimeInputs {
     BlockIndexValidityCommitter& block_index_committer;
     validation::ScriptCheckScheduler& script_check_scheduler;
     ValidationCache& validation_cache;
-    BlockConnectionTraceCounters trace_counters;
     CoreChainLock* chain_lock{nullptr};
 };
 
 class CoreBlockConnectionSetup final {
 public:
-    CoreBlockConnectionSetup(CoreBlockConnectionRuntimeInputs runtime, CoreBlockConnectionPlan connection_plan, CBlockIndex& block_index, bool cache_script_results)
+    CoreBlockConnectionSetup(CoreBlockConnectionRuntimeInputs runtime, CoreBlockConnectionPlan connection_plan, CBlockIndex& block_index, BlockConnectionTrace& trace, bool cache_script_results)
         EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
 
     CoreBlockConnectionSetup(const CoreBlockConnectionSetup&) = delete;
@@ -60,7 +59,7 @@ private:
     BlockIndexValidityCommitter& m_block_index_committer;
     CoreBlockConnectionPlan m_connection_plan;
     CoreBlockScriptChecks m_script_checks;
-    BlockConnectionTrace m_trace;
+    BlockConnectionTrace& m_trace;
 };
 
 #endif // BITCOIN_VALIDATION_CORE_BLOCK_CONNECTION_SETUP_H

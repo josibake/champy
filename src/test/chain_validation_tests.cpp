@@ -143,7 +143,7 @@ BOOST_AUTO_TEST_CASE(service_exposes_structural_accept_and_activate_stages)
     BOOST_CHECK_EQUAL(snapshot->block_subsidy, GetBlockSubsidy(/*nHeight=*/1, Params().GetConsensus()));
 
     BlockValidationState activation_state;
-    BOOST_REQUIRE(validation.ActivateAcceptedBlock(/*chain_events=*/nullptr, block, activation_state));
+    BOOST_REQUIRE(validation.ActivateAcceptedBlock(/*chain_events=*/nullptr, block, activation_state).Succeeded());
     BOOST_CHECK_EQUAL(WITH_LOCK(chainman.GetMutex(), return chainman.ActiveHeight()), 1);
 }
 
@@ -162,6 +162,12 @@ BOOST_AUTO_TEST_CASE(ibd_block_processor_records_stage_metrics)
 
     BOOST_REQUIRE(result.validation.processed());
     BOOST_REQUIRE(result.validation.new_block());
+    BOOST_CHECK_EQUAL(result.validation.activated_blocks, 1U);
+    BOOST_REQUIRE(result.accepted_candidate);
+    BOOST_CHECK(result.accepted_candidate->block.hash == block->GetHash());
+    BOOST_CHECK(result.accepted_candidate->block.parent_hash == Params().GenesisBlock().GetHash());
+    BOOST_CHECK_EQUAL(result.accepted_candidate->block.height, 1);
+    BOOST_CHECK(result.accepted_candidate->block_data == block);
 
     const node::IbdPipelineMetrics& metrics{processor.Metrics()};
     BOOST_CHECK_EQUAL(metrics.Stage(node::IbdPipelineStage::Download).blocks, 1U);
@@ -169,7 +175,37 @@ BOOST_AUTO_TEST_CASE(ibd_block_processor_records_stage_metrics)
     BOOST_CHECK_EQUAL(metrics.Stage(node::IbdPipelineStage::StructuralValidation).blocks, 1U);
     BOOST_CHECK_EQUAL(metrics.Stage(node::IbdPipelineStage::BlockAdmission).blocks, 1U);
     BOOST_CHECK_EQUAL(metrics.Stage(node::IbdPipelineStage::ContextSnapshot).blocks, 1U);
+    BOOST_CHECK_EQUAL(metrics.Stage(node::IbdPipelineStage::SpendJoin).blocks, 1U);
+    BOOST_CHECK_EQUAL(metrics.Stage(node::IbdPipelineStage::ScriptValidation).blocks, 1U);
     BOOST_CHECK_EQUAL(metrics.Stage(node::IbdPipelineStage::Commit).blocks, 1U);
+}
+
+BOOST_AUTO_TEST_CASE(ibd_block_processor_records_only_reached_stages)
+{
+    auto& chainman{*Assert(m_node.chainman)};
+    node::IbdBlockProcessor processor{chainman};
+    const auto valid_block{CreateBlockChain(/*total_height=*/1, Params()).front()};
+    auto invalid_block{std::make_shared<CBlock>(*valid_block)};
+    invalid_block->hashMerkleRoot = valid_block->hashMerkleRoot == uint256::ONE ? uint256::ZERO : uint256::ONE;
+
+    const node::IbdBlockProcessResult result{processor.ProcessDownloadedBlock({
+        .block = invalid_block,
+        .block_data_storage = BlockDataStorageMode::ForceStore,
+        .min_pow_checked = true,
+        .time = CurrentBlockValidationTime(),
+    })};
+
+    BOOST_CHECK(result.validation.status == NewBlockProcessingStatus::BlockCheckFailed);
+    BOOST_CHECK(!result.accepted_candidate);
+
+    const node::IbdPipelineMetrics& metrics{processor.Metrics()};
+    BOOST_CHECK_EQUAL(metrics.Stage(node::IbdPipelineStage::Download).blocks, 1U);
+    BOOST_CHECK_EQUAL(metrics.Stage(node::IbdPipelineStage::StructuralValidation).blocks, 1U);
+    BOOST_CHECK_EQUAL(metrics.Stage(node::IbdPipelineStage::BlockAdmission).blocks, 0U);
+    BOOST_CHECK_EQUAL(metrics.Stage(node::IbdPipelineStage::ContextSnapshot).blocks, 0U);
+    BOOST_CHECK_EQUAL(metrics.Stage(node::IbdPipelineStage::SpendJoin).blocks, 0U);
+    BOOST_CHECK_EQUAL(metrics.Stage(node::IbdPipelineStage::ScriptValidation).blocks, 0U);
+    BOOST_CHECK_EQUAL(metrics.Stage(node::IbdPipelineStage::Commit).blocks, 0U);
 }
 
 BOOST_AUTO_TEST_CASE(service_test_block_validity_uses_explicit_time)

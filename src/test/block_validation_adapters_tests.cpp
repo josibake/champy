@@ -83,6 +83,26 @@ public:
     CBlockIndex* dirty_index{nullptr};
 };
 
+struct BlockConnectionTraceFixture {
+    int64_t blocks_total{0};
+    SteadyClock::duration time_check{};
+    SteadyClock::duration time_forks{};
+    SteadyClock::duration time_connect{};
+    SteadyClock::duration time_verify{};
+    SteadyClock::duration time_undo{};
+    SteadyClock::duration time_index{};
+    BlockConnectionTrace trace{
+        BlockConnectionTraceCounters{
+            .num_blocks_total = blocks_total,
+            .time_check = time_check,
+            .time_forks = time_forks,
+            .time_connect = time_connect,
+            .time_verify = time_verify,
+            .time_undo = time_undo,
+            .time_index = time_index,
+        }};
+};
+
 class FixedActiveChainView final : public validation::ActiveChainView
 {
 public:
@@ -170,6 +190,28 @@ private:
     uint256 m_best_block;
     Consensus::SnapshotSpendState m_spend_state;
 };
+
+validation::BlockConnectionCommitRequest MakeBlockConnectionCommitRequest(
+    BlockUndoWriter& undo_writer,
+    BlockIndexValidityCommitter& block_index_committer,
+    BlockConnectionTrace& trace,
+    const CBlock& block,
+    CBlockIndex& block_index,
+    validation::BlockConnectionState& connection_state)
+{
+    return {
+        .runtime = {
+            .undo_writer = undo_writer,
+            .block_index_committer = block_index_committer,
+            .trace = trace,
+        },
+        .context = {
+            .block = block,
+            .block_index = block_index,
+            .connection_state = connection_state,
+        },
+    };
+}
 
 CTransactionRef MakeCoinbase(CAmount value)
 {
@@ -444,7 +486,11 @@ BOOST_AUTO_TEST_CASE(block_connection_engine_accepts_snapshot_state_backend)
     };
 
     BlockValidationState state;
-    BOOST_REQUIRE(validation::BlockConnectionEngine{}.Connect(request, state).Succeeded());
+    validation::BlockConnectionEngine engine;
+    auto validated{engine.Connect(request, state)};
+    BOOST_REQUIRE(validated.Succeeded());
+    BOOST_REQUIRE(validated.commit_package);
+    BOOST_REQUIRE(engine.Commit(MakeBlockConnectionCommitRequest(undo_writer, block_index_committer, trace, block, block_index, connection_state), std::move(*validated.commit_package), state).Succeeded());
 
     BOOST_CHECK(connection_state.BestBlock() == block_hash);
     BOOST_CHECK(block_index.IsValid(BLOCK_VALID_SCRIPTS));
@@ -457,6 +503,178 @@ BOOST_AUTO_TEST_CASE(block_connection_engine_accepts_snapshot_state_backend)
     BOOST_CHECK_EQUAL(coinbase_coin->height, 1);
     BOOST_CHECK(coinbase_coin->is_coinbase);
     BOOST_CHECK_EQUAL(coinbase_coin->output.nValue, 50);
+}
+
+BOOST_AUTO_TEST_CASE(block_connection_engine_returns_commit_package_without_mutation)
+{
+    LOCK(::cs_main);
+
+    const uint256 previous_hash{uint256::ONE};
+    CBlock block{MakeBlock(previous_hash, /*coinbase_value=*/50)};
+    const uint256 block_hash{block.GetHash()};
+    CBlockIndex previous_index;
+    previous_index.phashBlock = &previous_hash;
+    previous_index.nHeight = 0;
+
+    CBlockIndex block_index{block};
+    block_index.pprev = &previous_index;
+    block_index.nHeight = 1;
+    block_index.phashBlock = &block_hash;
+
+    SnapshotBlockConnectionState connection_state;
+    connection_state.SetBestBlock(previous_hash);
+
+    kernel::Notifications notifications;
+    FakeBlockUndoWriter undo_writer;
+    FakeBlockIndexCommitter block_index_committer;
+    Consensus::DirectBlockScriptChecker script_checker;
+    BlockConnectionTraceFixture trace;
+
+    const Consensus::BlockConsensusContext consensus_context{
+        .spend = Consensus::BlockSpendContext{
+            .block_height = 1,
+            .previous_median_time_past = 0,
+        },
+        .commit = Consensus::BlockCommitContext{
+            .new_best_block = block_hash,
+            .block_height = 1,
+            .previous_median_time_past = 0,
+        },
+        .block_subsidy = 50,
+    };
+    validation::BlockConnectionRequest request{
+        .runtime = {
+            .notifications = notifications,
+            .undo_writer = undo_writer,
+            .block_index_committer = block_index_committer,
+            .script_checker = script_checker,
+            .trace = trace.trace,
+        },
+        .context = {
+            .consensus_params = Params().GetConsensus(),
+            .consensus_context = consensus_context,
+            .sequence_lock_times = FixedSequenceLockTimes(),
+            .spend_options = Consensus::BlockSpendConsensusOptions{
+                .check_no_unspent_output_overwrite = true,
+            },
+        },
+        .block = block,
+        .block_index = block_index,
+        .connection_state = connection_state,
+        .options = {
+            .block_check_options = Consensus::BlockCheckOptions{
+                .check_pow = false,
+            },
+        },
+    };
+
+    BlockValidationState state;
+    validation::BlockConnectionEngine engine;
+    auto validated{engine.Connect(request, state)};
+    BOOST_REQUIRE(validated.Succeeded());
+    BOOST_REQUIRE(validated.commit_package);
+
+    const COutPoint coinbase_outpoint{block.vtx[0]->GetHash(), 0};
+    BOOST_CHECK(connection_state.BestBlock() == previous_hash);
+    BOOST_CHECK(!connection_state.GetCoin(coinbase_outpoint));
+    BOOST_CHECK(!block_index.IsValid(BLOCK_VALID_SCRIPTS));
+    BOOST_CHECK(!undo_writer.wrote_undo);
+    BOOST_CHECK_EQUAL(block_index_committer.dirty_index, nullptr);
+
+    const auto commit_request{
+        MakeBlockConnectionCommitRequest(undo_writer, block_index_committer, trace.trace, block, block_index, connection_state)};
+    BOOST_REQUIRE(engine.Commit(commit_request, std::move(*validated.commit_package), state).Succeeded());
+
+    BOOST_CHECK(connection_state.BestBlock() == block_hash);
+    const auto coinbase_coin{connection_state.GetCoin(coinbase_outpoint)};
+    BOOST_REQUIRE(coinbase_coin);
+    BOOST_CHECK_EQUAL(coinbase_coin->height, 1);
+    BOOST_CHECK(coinbase_coin->is_coinbase);
+    BOOST_CHECK_EQUAL(coinbase_coin->output.nValue, 50);
+    BOOST_CHECK(block_index.IsValid(BLOCK_VALID_SCRIPTS));
+    BOOST_CHECK(undo_writer.wrote_undo);
+    BOOST_CHECK_EQUAL(block_index_committer.dirty_index, &block_index);
+}
+
+BOOST_AUTO_TEST_CASE(block_connection_commit_rejects_stale_parent)
+{
+    LOCK(::cs_main);
+
+    const uint256 previous_hash{uint256::ONE};
+    CBlock block{MakeBlock(previous_hash, /*coinbase_value=*/50)};
+    const uint256 block_hash{block.GetHash()};
+    CBlockIndex previous_index;
+    previous_index.phashBlock = &previous_hash;
+    previous_index.nHeight = 0;
+
+    CBlockIndex block_index{block};
+    block_index.pprev = &previous_index;
+    block_index.nHeight = 1;
+    block_index.phashBlock = &block_hash;
+
+    SnapshotBlockConnectionState connection_state;
+    connection_state.SetBestBlock(previous_hash);
+
+    kernel::Notifications notifications;
+    FakeBlockUndoWriter undo_writer;
+    FakeBlockIndexCommitter block_index_committer;
+    Consensus::DirectBlockScriptChecker script_checker;
+    BlockConnectionTraceFixture trace;
+
+    const Consensus::BlockConsensusContext consensus_context{
+        .spend = Consensus::BlockSpendContext{
+            .block_height = 1,
+            .previous_median_time_past = 0,
+        },
+        .commit = Consensus::BlockCommitContext{
+            .new_best_block = block_hash,
+            .block_height = 1,
+            .previous_median_time_past = 0,
+        },
+        .block_subsidy = 50,
+    };
+    validation::BlockConnectionRequest request{
+        .runtime = {
+            .notifications = notifications,
+            .undo_writer = undo_writer,
+            .block_index_committer = block_index_committer,
+            .script_checker = script_checker,
+            .trace = trace.trace,
+        },
+        .context = {
+            .consensus_params = Params().GetConsensus(),
+            .consensus_context = consensus_context,
+            .sequence_lock_times = FixedSequenceLockTimes(),
+            .spend_options = Consensus::BlockSpendConsensusOptions{
+                .check_no_unspent_output_overwrite = true,
+            },
+        },
+        .block = block,
+        .block_index = block_index,
+        .connection_state = connection_state,
+        .options = {
+            .block_check_options = Consensus::BlockCheckOptions{
+                .check_pow = false,
+            },
+        },
+    };
+
+    BlockValidationState state;
+    validation::BlockConnectionEngine engine;
+    auto validated{engine.Connect(request, state)};
+    BOOST_REQUIRE(validated.Succeeded());
+    BOOST_REQUIRE(validated.commit_package);
+
+    connection_state.SetBestBlock(uint256{2});
+    BOOST_CHECK(!engine.Commit(
+        MakeBlockConnectionCommitRequest(undo_writer, block_index_committer, trace.trace, block, block_index, connection_state),
+        std::move(*validated.commit_package),
+        state).Succeeded());
+
+    BOOST_CHECK(state.IsError());
+    BOOST_CHECK_EQUAL(state.GetRejectReason(), "stale block connection");
+    BOOST_CHECK(!undo_writer.wrote_undo);
+    BOOST_CHECK_EQUAL(block_index_committer.dirty_index, nullptr);
 }
 
 BOOST_AUTO_TEST_CASE(block_connection_engine_validates_spends_with_snapshot_state_backend)
@@ -548,7 +766,11 @@ BOOST_AUTO_TEST_CASE(block_connection_engine_validates_spends_with_snapshot_stat
     };
 
     BlockValidationState state;
-    BOOST_REQUIRE(validation::BlockConnectionEngine{}.Connect(request, state).Succeeded());
+    validation::BlockConnectionEngine engine;
+    auto validated{engine.Connect(request, state)};
+    BOOST_REQUIRE(validated.Succeeded());
+    BOOST_REQUIRE(validated.commit_package);
+    BOOST_REQUIRE(engine.Commit(MakeBlockConnectionCommitRequest(undo_writer, block_index_committer, trace, block, block_index, connection_state), std::move(*validated.commit_package), state).Succeeded());
 
     BOOST_CHECK(!connection_state.GetCoin(prevout));
     const COutPoint spend_outpoint{spend_tx->GetHash(), 0};

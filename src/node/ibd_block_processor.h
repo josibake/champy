@@ -11,6 +11,7 @@
 #include <validation/block_validation.h>
 
 #include <memory>
+#include <optional>
 
 class ChainstateEventSink;
 class ChainstateManager;
@@ -26,8 +27,15 @@ struct IbdBlockProcessRequest {
     BlockValidationTime time{};
 };
 
+struct IbdAcceptedBlockCandidate {
+    PeerBlockRef block;
+    std::shared_ptr<const CBlock> block_data;
+    NewBlockCandidateContextSnapshot context;
+};
+
 struct IbdBlockProcessResult {
     NewBlockProcessingResult validation;
+    std::optional<IbdAcceptedBlockCandidate> accepted_candidate{};
 };
 
 /**

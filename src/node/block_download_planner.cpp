@@ -24,7 +24,12 @@ static std::optional<int64_t> FindInFlightPeer(std::span<const BlockInFlight> bl
 static bool IbdPipelineAccepts(const std::optional<IbdPipelineAdmissionWindow>& window, const PeerBlockRef& block)
 {
     if (!window) return true;
-    const IbdPipeline pipeline{window->next_commit_height, window->limits};
+    const IbdPipeline pipeline{
+        IbdRetireChainPosition{
+            .next_height = window->next_commit_height,
+            .expected_parent_hash = window->expected_parent_hash,
+        },
+        window->limits};
     return pipeline.Admit(block).status == IbdAdmissionStatus::Accepted;
 }
 

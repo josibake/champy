@@ -122,6 +122,7 @@ static std::optional<validation::ActiveChainTipSnapshot> MakeActiveChainTipSnaps
     if (!block_index) return std::nullopt;
     return validation::ActiveChainTipSnapshot{
         .hash = block_index->GetBlockHash(),
+        .parent_hash = block_index->pprev ? block_index->pprev->GetBlockHash() : uint256{},
         .height = block_index->nHeight,
         .time = block_index->GetBlockTime(),
         .chain_work = block_index->nChainWork,
@@ -134,6 +135,7 @@ static std::optional<ChainWorkBlockSnapshot> MakeChainWorkBlockSnapshot(const CB
     if (!block_index) return std::nullopt;
     return ChainWorkBlockSnapshot{
         .hash = block_index->GetBlockHash(),
+        .parent_hash = block_index->pprev ? block_index->pprev->GetBlockHash() : uint256{},
         .height = block_index->nHeight,
         .chain_work = block_index->nChainWork,
     };
@@ -862,15 +864,15 @@ public:
     {
     }
 
-    bool Activate()
+    BlockActivationResult Activate()
     {
-        return m_commit_executor.RunSerialized([&]() -> bool {
+        return m_commit_executor.RunSerialized([&]() -> BlockActivationResult {
             return ActivateSerialized();
         });
     }
 
 private:
-    bool ActivateSerialized()
+    BlockActivationResult ActivateSerialized()
     {
         do {
             LimitValidationQueueIfNeeded();
@@ -880,11 +882,11 @@ private:
                     return ActivateLocked(chain_lock);
                 })};
 
-            if (locked_result == ActivateBestChainLockedResult::SystemError) return false;
-            if (locked_result == ActivateBestChainLockedResult::NoWork) return true;
+            if (locked_result == ActivateBestChainLockedResult::SystemError) return BlockActivationResult::SystemError(m_activation_timings, m_connected_blocks);
+            if (locked_result == ActivateBestChainLockedResult::NoWork) return BlockActivationResult::Completed(m_activation_timings, m_connected_blocks);
             if (locked_result == ActivateBestChainLockedResult::Interrupted) break;
 
-            if (!FlushPeriodic()) return false;
+            if (!FlushPeriodic()) return BlockActivationResult::SystemError(m_activation_timings, m_connected_blocks);
 
             // Give activation a chance to run once before honoring interrupt so
             // genesis connection during LoadChainTip cannot leave a null best
@@ -893,7 +895,7 @@ private:
         } while (m_progress.new_tip != m_progress.most_work);
 
         m_chainstate.m_chainman.CheckBlockIndex();
-        return true;
+        return BlockActivationResult::Completed(m_activation_timings, m_connected_blocks);
     }
 
     void LimitValidationQueueIfNeeded() const
@@ -947,6 +949,8 @@ private:
                     .time_total = m_chainstate.m_chainman.TimeTotal(),
                     .blocks_total = m_chainstate.m_chainman.NumBlocksTotal(),
                 },
+                .activation_timings = m_activation_timings,
+                .activation_connected_blocks = m_connected_blocks,
                 .chain_lock = &chain_lock,
             };
             const auto step_result{ActivateCoreBestChainStep(
@@ -1023,9 +1027,11 @@ private:
     ChainstateEventSink* m_chain_events;
     validation::CoreValidationCommitExecutor m_commit_executor;
     ActivateBestChainProgress m_progress;
+    BlockActivationTimings m_activation_timings;
+    uint64_t m_connected_blocks{0};
 };
 
-bool Chainstate::ActivateBestChain(
+BlockActivationResult Chainstate::ActivateBestChain(
     BlockValidationState& state,
     std::shared_ptr<const CBlock> pblock,
     ChainstateEventSink* chain_events)
@@ -1069,7 +1075,7 @@ bool Chainstate::PreciousBlock(BlockValidationState& state, CBlockIndex* pindex,
         }
     }
 
-    return ActivateBestChain(state, std::shared_ptr<const CBlock>(), chain_events);
+    return ActivateBestChain(state, std::shared_ptr<const CBlock>(), chain_events).Succeeded();
 }
 
 bool Chainstate::InvalidateBlock(BlockValidationState& state, CBlockIndex* const pindex, ChainstateEventSink* chain_events)
@@ -1613,7 +1619,7 @@ void ChainstateManager::LoadExternalBlockFile(
                 // was interrupted by the user.
                 if (hash == params.GetConsensus().hashGenesisBlock && WITH_LOCK(::cs_main, return ActiveHeight()) == -1) {
                     BlockValidationState state;
-                    if (!ActiveChainstate().ActivateBestChain(state, nullptr)) {
+                    if (!ActiveChainstate().ActivateBestChain(state, nullptr).Succeeded()) {
                         break;
                     }
                 }
@@ -2159,6 +2165,7 @@ std::optional<ChainWorkBlockSnapshot> ChainstateManager::ActiveTipChainWorkBlock
     if (!snapshot) return std::nullopt;
     return ChainWorkBlockSnapshot{
         .hash = snapshot->hash,
+        .parent_hash = snapshot->parent_hash,
         .height = snapshot->height,
         .chain_work = snapshot->chain_work,
     };
@@ -3027,7 +3034,7 @@ util::Result<void> ChainstateManager::ActivateBestChains(ChainstateEventSink* ch
         chainstate = m_chainstate.get();
     }
     BlockValidationState state;
-    if (!chainstate->ActivateBestChain(state, nullptr, chain_events)) {
+    if (!chainstate->ActivateBestChain(state, nullptr, chain_events).Succeeded()) {
         LOCK(GetMutex());
         return util::Error{Untranslated(strprintf("%s Failed to connect best block (%s)", chainstate->ToString(), state.ToString()))};
     }

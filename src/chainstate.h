@@ -520,9 +520,9 @@ public:
      * May not be called with cs_main held. May not be called in a
      * validationinterface callback.
      *
-     * @returns true unless a system error occurred
+     * @returns completed unless a system error occurred
      */
-    bool ActivateBestChain(
+    BlockActivationResult ActivateBestChain(
         BlockValidationState& state,
         std::shared_ptr<const CBlock> pblock = nullptr,
         ChainstateEventSink* chain_events = nullptr)

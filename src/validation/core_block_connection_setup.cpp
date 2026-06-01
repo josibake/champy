@@ -10,7 +10,7 @@
 
 #include <utility>
 
-CoreBlockConnectionSetup::CoreBlockConnectionSetup(CoreBlockConnectionRuntimeInputs runtime, CoreBlockConnectionPlan connection_plan, CBlockIndex& block_index, bool cache_script_results)
+CoreBlockConnectionSetup::CoreBlockConnectionSetup(CoreBlockConnectionRuntimeInputs runtime, CoreBlockConnectionPlan connection_plan, CBlockIndex& block_index, BlockConnectionTrace& trace, bool cache_script_results)
     : m_notifications{runtime.notifications},
       m_block_index{block_index},
       m_undo_writer{runtime.undo_writer},
@@ -22,7 +22,7 @@ CoreBlockConnectionSetup::CoreBlockConnectionSetup(CoreBlockConnectionRuntimeInp
           cache_script_results,
           runtime.validation_cache,
           runtime.chain_lock},
-      m_trace{runtime.trace_counters}
+      m_trace{trace}
 {
 }
 

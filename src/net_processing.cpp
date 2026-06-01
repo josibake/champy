@@ -206,6 +206,7 @@ static PeerBlockRef PeerBlockRefFor(const ChainWorkBlockSnapshot& block)
 {
     return PeerBlockRef{
         .hash = block.hash,
+        .parent_hash = block.parent_hash,
         .height = block.height,
         .chain_work = block.chain_work,
     };
@@ -1312,6 +1313,7 @@ void PeerManagerImpl::FindNextBlocksToDownload(const Peer& peer, unsigned int co
     }
 
     const std::vector<node::BlockInFlight> blocks_in_flight{WITH_LOCK(m_block_download_mutex, return m_block_download.Snapshot())};
+    const CBlockIndex* active_tip{m_chainman.ActiveTip()};
 
     const node::BlockDownloadPlannerResult plan{node::PlanNextBlocksToDownload({
         .peer = peer.m_id,
@@ -1330,6 +1332,7 @@ void PeerManagerImpl::FindNextBlocksToDownload(const Peer& peer, unsigned int co
         .blocks_in_flight = blocks_in_flight,
         .ibd_pipeline = node::IbdPipelineAdmissionWindow{
             .next_commit_height = m_chainman.ActiveHeight() + 1,
+            .expected_parent_hash = active_tip ? std::optional<uint256>{active_tip->GetBlockHash()} : std::nullopt,
             .limits = node::IbdPipelineLimits{.max_blocks_ahead = BLOCK_DOWNLOAD_WINDOW},
         },
     })};
@@ -2083,7 +2086,7 @@ void PeerManagerImpl::ProcessGetBlockData(CNode& pfrom, Peer& peer, const CInv& 
         BlockValidationState state;
         Chainstate& active_chainstate{m_chainman.ActiveChainstate()};
         node::MempoolChainSync chain_events{active_chainstate, m_mempool};
-        if (!active_chainstate.ActivateBestChain(state, a_recent_block, &chain_events)) {
+        if (!active_chainstate.ActivateBestChain(state, a_recent_block, &chain_events).Succeeded()) {
             LogDebug(BCLog::NET, "failed to activate chain (%s)\n", state.ToString());
         }
     }
@@ -3758,7 +3761,7 @@ void PeerManagerImpl::ProcessMessage(Peer& peer, CNode& pfrom, const std::string
             BlockValidationState state;
             Chainstate& active_chainstate{m_chainman.ActiveChainstate()};
             node::MempoolChainSync chain_events{active_chainstate, m_mempool};
-            if (!active_chainstate.ActivateBestChain(state, a_recent_block, &chain_events)) {
+            if (!active_chainstate.ActivateBestChain(state, a_recent_block, &chain_events).Succeeded()) {
                 LogDebug(BCLog::NET, "failed to activate chain (%s)\n", state.ToString());
             }
         }
