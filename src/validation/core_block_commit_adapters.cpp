@@ -7,7 +7,6 @@
 #include <chain.h>
 #include <coins.h>
 #include <undo.h>
-#include <validation/block_coin_effects.h>
 #include <validation/block_connection_state.h>
 #include <validation/block_index.h>
 #include <validation/block_storage.h>
@@ -64,13 +63,23 @@ Consensus::BlockCommitResult<void> CoreBlockEffectsWriter::CommitBlockMetadata(c
     return {};
 }
 
-CoreBlockSpendStateCommitter::CoreBlockSpendStateCommitter(CCoinsViewCache& staged_view, CCoinsViewCache& view)
-    : m_staged_view{staged_view}, m_view{view}
+CoreBlockSpendEffectsCommitter::CoreBlockSpendEffectsCommitter(CCoinsViewCache& view)
+    : m_view{view}
 {
 }
 
-Consensus::BlockCommitResult<void> CoreBlockSpendStateCommitter::CommitSpendState(const Consensus::BlockCommitContext&, const Consensus::BlockSpendEffects&)
+Consensus::BlockCommitResult<void> CoreBlockSpendEffectsCommitter::CommitSpendState(const Consensus::BlockCommitContext&, const Consensus::BlockSpendEffects& effects)
 {
-    validation::CommitStagedCoinsForBlock(m_staged_view, m_view);
+    for (const Consensus::TransactionCoinEffects& transaction_effects : effects.transaction_effects) {
+        for (const Consensus::SpentCoinEffect& spend : transaction_effects.spends) {
+            if (!m_view.SpendCoin(spend.outpoint)) {
+                return Consensus::Unexpected<Consensus::BlockCommitError>{{.reject_reason = "stale block spend state"}};
+            }
+        }
+
+        for (const Consensus::CreatedCoinEffect& create : transaction_effects.creates) {
+            m_view.AddCoin(create.outpoint, ToCoreCoin(create.coin), /*possible_overwrite=*/create.coin.is_coinbase);
+        }
+    }
     return {};
 }

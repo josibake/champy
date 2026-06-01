@@ -30,14 +30,13 @@ private:
     CBlockIndex& m_block_index;
 };
 
-class CoreBlockSpendStateCommitter final : public Consensus::BlockSpendStateCommitter {
+class CoreBlockSpendEffectsCommitter final : public Consensus::BlockSpendStateCommitter {
 public:
-    CoreBlockSpendStateCommitter(CCoinsViewCache& staged_view, CCoinsViewCache& view);
+    explicit CoreBlockSpendEffectsCommitter(CCoinsViewCache& view);
 
     [[nodiscard]] Consensus::BlockCommitResult<void> CommitSpendState(const Consensus::BlockCommitContext& context, const Consensus::BlockSpendEffects& effects) override EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
 
 private:
-    CCoinsViewCache& m_staged_view;
     CCoinsViewCache& m_view;
 };
 

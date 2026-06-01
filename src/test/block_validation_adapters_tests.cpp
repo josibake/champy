@@ -11,8 +11,10 @@
 #include <validation/block_connection.h>
 #include <validation/block_connection_trace.h>
 #include <validation/block_script_check_adapters.h>
+#include <validation/core_block_connection_snapshot.h>
 #include <validation/core_coins_block_connection_state.h>
 #include <validation/core_chain_lock.h>
+#include <validation/snapshot_block_connection_state.h>
 #include <validation/test_block_validity.h>
 #include <chain.h>
 #include <chainstate.h>
@@ -20,7 +22,6 @@
 #include <coins.h>
 #include <consensus/merkle.h>
 #include <consensus/script_checker.h>
-#include <consensus/snapshot_spend_state.h>
 #include <consensus/block_spend.h>
 #include <validation/core_block_commit_adapters.h>
 #include <kernel/cs_main.h>
@@ -41,6 +42,8 @@
 #include <vector>
 
 namespace {
+
+using validation::SnapshotBlockConnectionState;
 
 class FixedSequenceLockTimeView final : public Consensus::SequenceLockTimeView
 {
@@ -84,23 +87,7 @@ public:
 };
 
 struct BlockConnectionTraceFixture {
-    int64_t blocks_total{0};
-    SteadyClock::duration time_check{};
-    SteadyClock::duration time_forks{};
-    SteadyClock::duration time_connect{};
-    SteadyClock::duration time_verify{};
-    SteadyClock::duration time_undo{};
-    SteadyClock::duration time_index{};
-    BlockConnectionTrace trace{
-        BlockConnectionTraceCounters{
-            .num_blocks_total = blocks_total,
-            .time_check = time_check,
-            .time_forks = time_forks,
-            .time_connect = time_connect,
-            .time_verify = time_verify,
-            .time_undo = time_undo,
-            .time_index = time_index,
-        }};
+    BlockConnectionTrace trace;
 };
 
 class FixedActiveChainView final : public validation::ActiveChainView
@@ -129,71 +116,10 @@ public:
     }
 };
 
-class NoopBlockConnectionAttemptGuard final : public validation::BlockConnectionAttemptGuard
-{
-public:
-    void Commit() override {}
-};
-
-class SnapshotBlockConnectionSpendState final : public validation::BlockConnectionSpendState
-{
-public:
-    SnapshotBlockConnectionSpendState(
-        Consensus::SnapshotSpendState& spend_state,
-        std::unique_ptr<Consensus::BlockSpendWorkspace> workspace)
-        : m_spend_state{spend_state},
-          m_workspace{std::move(workspace)}
-    {
-    }
-
-    [[nodiscard]] Consensus::BlockSpendWorkspace& Workspace() override { return *m_workspace; }
-    [[nodiscard]] Consensus::BlockSpendStateCommitter& Committer() override { return m_spend_state; }
-
-private:
-    Consensus::SnapshotSpendState& m_spend_state;
-    std::unique_ptr<Consensus::BlockSpendWorkspace> m_workspace;
-};
-
-class SnapshotBlockConnectionState final : public validation::BlockConnectionState
-{
-public:
-    [[nodiscard]] uint256 BestBlock() const override { return m_best_block; }
-    void SetBestBlock(const uint256& block_hash) override { m_best_block = block_hash; }
-    [[nodiscard]] std::unique_ptr<validation::BlockConnectionAttemptGuard> BeginConnectionAttempt() override
-    {
-        return std::make_unique<NoopBlockConnectionAttemptGuard>();
-    }
-
-    [[nodiscard]] Consensus::BlockSpendResult<std::unique_ptr<validation::BlockConnectionSpendState>> BeginBlockSpend(
-        const Consensus::BlockSpendContext& context,
-        std::shared_ptr<const Consensus::SequenceLockTimeView>) override
-    {
-        auto workspace{m_spend_state.BeginBlockSpend(context)};
-        if (!workspace) return Consensus::Unexpected<Consensus::BlockSpendError>{workspace.error()};
-
-        std::unique_ptr<validation::BlockConnectionSpendState> spend_state{
-            std::make_unique<SnapshotBlockConnectionSpendState>(m_spend_state, std::move(*workspace))};
-        return std::move(spend_state);
-    }
-
-    [[nodiscard]] std::optional<Consensus::CoinSnapshot> GetCoin(const COutPoint& outpoint) const
-    {
-        return m_spend_state.GetCoin(outpoint);
-    }
-
-    void AddCoin(const COutPoint& outpoint, Consensus::CoinSnapshot coin)
-    {
-        m_spend_state.AddCoin(outpoint, std::move(coin));
-    }
-
-private:
-    uint256 m_best_block;
-    Consensus::SnapshotSpendState m_spend_state;
-};
-
 validation::BlockConnectionCommitRequest MakeBlockConnectionCommitRequest(
     BlockUndoWriter& undo_writer,
     BlockIndexValidityCommitter& block_index_committer,
+    Consensus::BlockSpendStateCommitter& spend_state_committer,
     BlockConnectionTrace& trace,
     const CBlock& block,
     CBlockIndex& block_index,
@@ -203,6 +129,7 @@ validation::BlockConnectionCommitRequest MakeBlockConnectionCommitRequest(
         .runtime = {
             .undo_writer = undo_writer,
             .block_index_committer = block_index_committer,
+            .spend_state_committer = spend_state_committer,
             .trace = trace,
         },
         .context = {
@@ -406,9 +333,206 @@ BOOST_AUTO_TEST_CASE(core_block_effects_writer_uses_storage_adapters)
     BOOST_CHECK(coins.GetBestBlock() == uint256::ONE);
 }
 
-BOOST_AUTO_TEST_CASE(block_connection_engine_accepts_snapshot_state_backend)
+BOOST_AUTO_TEST_CASE(core_block_spend_effects_committer_applies_value_effects)
 {
     LOCK(::cs_main);
+
+    CCoinsViewCache coins{&CoinsViewEmpty::Get()};
+    CoreBlockSpendEffectsCommitter committer{coins};
+
+    const COutPoint spent_outpoint{Txid::FromUint256(uint256::ONE), 0};
+    coins.AddCoin(spent_outpoint, Coin{CTxOut{40, CScript{} << OP_TRUE}, 7, false}, /*possible_overwrite=*/false);
+
+    const COutPoint created_outpoint{Txid::FromUint256(uint256{2}), 0};
+    Consensus::BlockSpendEffects effects;
+    effects.transaction_effects.resize(1);
+    effects.transaction_effects[0].spends.push_back(Consensus::SpentCoinEffect{
+        .outpoint = spent_outpoint,
+        .coin = Consensus::CoinSnapshot{
+            .output = CTxOut{40, CScript{} << OP_TRUE},
+            .height = 7,
+            .is_coinbase = false,
+        },
+    });
+    effects.transaction_effects[0].creates.push_back(Consensus::CreatedCoinEffect{
+        .outpoint = created_outpoint,
+        .coin = Consensus::CoinSnapshot{
+            .output = CTxOut{39, CScript{} << OP_TRUE},
+            .height = 8,
+            .is_coinbase = false,
+        },
+    });
+
+    const Consensus::BlockCommitContext context{
+        .new_best_block = uint256{3},
+        .block_height = 8,
+    };
+    BOOST_REQUIRE(committer.CommitSpendState(context, effects));
+    BOOST_CHECK(!coins.HaveCoin(spent_outpoint));
+    const auto created{coins.GetCoin(created_outpoint)};
+    BOOST_REQUIRE(created);
+    BOOST_CHECK_EQUAL(created->out.nValue, 39);
+    BOOST_CHECK_EQUAL(created->nHeight, 8);
+}
+
+BOOST_AUTO_TEST_CASE(core_block_spend_effects_committer_rejects_stale_effects)
+{
+    LOCK(::cs_main);
+
+    CCoinsViewCache coins{&CoinsViewEmpty::Get()};
+    CoreBlockSpendEffectsCommitter committer{coins};
+
+    Consensus::BlockSpendEffects effects;
+    effects.transaction_effects.resize(1);
+    effects.transaction_effects[0].spends.push_back(Consensus::SpentCoinEffect{
+        .outpoint = COutPoint{Txid::FromUint256(uint256::ONE), 0},
+        .coin = Consensus::CoinSnapshot{
+            .output = CTxOut{40, CScript{} << OP_TRUE},
+            .height = 7,
+            .is_coinbase = false,
+        },
+    });
+
+    const auto commit{committer.CommitSpendState(Consensus::BlockCommitContext{}, effects)};
+    BOOST_REQUIRE(!commit);
+    BOOST_CHECK_EQUAL(commit.error().reject_reason, "stale block spend state");
+}
+
+BOOST_AUTO_TEST_CASE(core_block_connection_snapshot_materializes_required_coins)
+{
+    LOCK(::cs_main);
+
+    const uint256 previous_hash{uint256::ONE};
+    const COutPoint prevout{Txid::FromUint256(uint256::ONE), 0};
+    const CTransactionRef spend_tx{MakeSpendTx(prevout, /*value=*/39)};
+    CBlock block{MakeBlock(previous_hash, /*coinbase_value=*/50, {spend_tx})};
+    const uint256 block_hash{block.GetHash()};
+
+    CBlockIndex previous_index;
+    previous_index.phashBlock = &previous_hash;
+    previous_index.nHeight = 1;
+
+    CBlockIndex block_index{block};
+    block_index.pprev = &previous_index;
+    block_index.nHeight = 2;
+    block_index.phashBlock = &block_hash;
+
+    CCoinsViewCache coins{&CoinsViewEmpty::Get()};
+    coins.SetBestBlock(previous_hash);
+    coins.AddCoin(prevout, Coin{CTxOut{40, CScript{} << OP_TRUE}, 1, false}, /*possible_overwrite=*/false);
+    const COutPoint created_collision{spend_tx->GetHash(), 0};
+    coins.AddCoin(created_collision, Coin{CTxOut{1, CScript{} << OP_TRUE}, 1, false}, /*possible_overwrite=*/false);
+
+    const SnapshotBlockConnectionState snapshot{validation::SnapshotCoreBlockConnectionState(block, block_index, coins)};
+
+    BOOST_CHECK(snapshot.BestBlock() == previous_hash);
+    BOOST_CHECK(snapshot.GetCoin(prevout).has_value());
+    BOOST_CHECK(snapshot.GetCoin(created_collision).has_value());
+    BOOST_CHECK(!snapshot.GetCoin(COutPoint{Txid::FromUint256(uint256{9}), 0}).has_value());
+}
+
+BOOST_AUTO_TEST_CASE(block_connection_engine_validates_snapshot_and_commits_to_core_state)
+{
+    const uint256 previous_hash{uint256::ONE};
+    const COutPoint prevout{Txid::FromUint256(uint256::ONE), 0};
+    const CTransactionRef spend_tx{MakeSpendTx(prevout, /*value=*/39)};
+    CBlock block{MakeBlock(previous_hash, /*coinbase_value=*/50, {spend_tx})};
+    const uint256 block_hash{block.GetHash()};
+
+    CBlockIndex previous_index;
+    previous_index.phashBlock = &previous_hash;
+    previous_index.nHeight = 1;
+
+    CBlockIndex block_index{block};
+    block_index.pprev = &previous_index;
+    block_index.nHeight = 2;
+    block_index.phashBlock = &block_hash;
+
+    CCoinsViewCache coins{&CoinsViewEmpty::Get()};
+    {
+        LOCK(::cs_main);
+        coins.SetBestBlock(previous_hash);
+        coins.AddCoin(prevout, Coin{CTxOut{40, CScript{} << OP_TRUE}, 1, false}, /*possible_overwrite=*/false);
+    }
+
+    SnapshotBlockConnectionState snapshot_state;
+    {
+        LOCK(::cs_main);
+        snapshot_state = validation::SnapshotCoreBlockConnectionState(block, block_index, coins);
+    }
+
+    kernel::Notifications notifications;
+    FakeBlockUndoWriter undo_writer;
+    FakeBlockIndexCommitter block_index_committer;
+    Consensus::DirectBlockScriptChecker script_checker;
+    BlockConnectionTrace trace;
+
+    const Consensus::BlockConsensusContext consensus_context{
+        .spend = Consensus::BlockSpendContext{
+            .block_height = 2,
+            .previous_median_time_past = 0,
+        },
+        .commit = Consensus::BlockCommitContext{
+            .new_best_block = block_hash,
+            .block_height = 2,
+            .previous_median_time_past = 0,
+        },
+        .block_subsidy = 50,
+    };
+    validation::BlockConnectionRequest request{
+        .runtime = {
+            .notifications = notifications,
+            .script_checker = script_checker,
+            .trace = trace,
+        },
+        .context = {
+            .consensus_params = Params().GetConsensus(),
+            .consensus_context = consensus_context,
+            .sequence_lock_times = FixedSequenceLockTimes(),
+            .spend_options = Consensus::BlockSpendConsensusOptions{
+                .check_no_unspent_output_overwrite = true,
+            },
+        },
+        .block = block,
+        .block_index = block_index,
+        .connection_state = snapshot_state,
+        .options = {
+            .block_check_options = Consensus::BlockCheckOptions{
+                .check_pow = false,
+            },
+        },
+    };
+
+    AssertLockNotHeld(::cs_main);
+    BlockValidationState state;
+    validation::BlockConnectionEngine engine;
+    auto validated{engine.ConnectPrepared(request, state)};
+    BOOST_REQUIRE(validated.Succeeded());
+    BOOST_REQUIRE(validated.commit_package);
+
+    validation::CoreCoinsBlockConnectionState core_connection_state{coins};
+    CoreBlockSpendEffectsCommitter spend_state_committer{coins};
+    {
+        LOCK(::cs_main);
+        BOOST_REQUIRE(engine.Commit(
+            MakeBlockConnectionCommitRequest(undo_writer, block_index_committer, spend_state_committer, trace, block, block_index, core_connection_state),
+            std::move(*validated.commit_package),
+            state).Succeeded());
+
+        BOOST_CHECK(coins.GetBestBlock() == block_hash);
+        BOOST_CHECK(!coins.HaveCoin(prevout));
+        const COutPoint spend_outpoint{spend_tx->GetHash(), 0};
+        const auto spend_coin{coins.GetCoin(spend_outpoint)};
+        BOOST_REQUIRE(spend_coin);
+        BOOST_CHECK_EQUAL(spend_coin->out.nValue, 39);
+        BOOST_CHECK_EQUAL(spend_coin->nHeight, 2);
+        BOOST_CHECK(block_index.IsValid(BLOCK_VALID_SCRIPTS));
+    }
+}
+
+BOOST_AUTO_TEST_CASE(block_connection_engine_accepts_snapshot_state_backend)
+{
+    AssertLockNotHeld(::cs_main);
 
     const uint256 previous_hash{uint256::ONE};
     CBlock block{MakeBlock(previous_hash, /*coinbase_value=*/50)};
@@ -429,23 +553,7 @@ BOOST_AUTO_TEST_CASE(block_connection_engine_accepts_snapshot_state_backend)
     FakeBlockUndoWriter undo_writer;
     FakeBlockIndexCommitter block_index_committer;
     Consensus::DirectBlockScriptChecker script_checker;
-    int64_t blocks_total{0};
-    SteadyClock::duration time_check{};
-    SteadyClock::duration time_forks{};
-    SteadyClock::duration time_connect{};
-    SteadyClock::duration time_verify{};
-    SteadyClock::duration time_undo{};
-    SteadyClock::duration time_index{};
-    BlockConnectionTrace trace{
-        BlockConnectionTraceCounters{
-            .num_blocks_total = blocks_total,
-            .time_check = time_check,
-            .time_forks = time_forks,
-            .time_connect = time_connect,
-            .time_verify = time_verify,
-            .time_undo = time_undo,
-            .time_index = time_index,
-        }};
+    BlockConnectionTrace trace;
 
     const Consensus::BlockConsensusContext consensus_context{
         .spend = Consensus::BlockSpendContext{
@@ -462,8 +570,6 @@ BOOST_AUTO_TEST_CASE(block_connection_engine_accepts_snapshot_state_backend)
     validation::BlockConnectionRequest request{
         .runtime = {
             .notifications = notifications,
-            .undo_writer = undo_writer,
-            .block_index_committer = block_index_committer,
             .script_checker = script_checker,
             .trace = trace,
         },
@@ -487,13 +593,19 @@ BOOST_AUTO_TEST_CASE(block_connection_engine_accepts_snapshot_state_backend)
 
     BlockValidationState state;
     validation::BlockConnectionEngine engine;
-    auto validated{engine.Connect(request, state)};
+    auto validated{engine.ConnectPrepared(request, state)};
     BOOST_REQUIRE(validated.Succeeded());
     BOOST_REQUIRE(validated.commit_package);
-    BOOST_REQUIRE(engine.Commit(MakeBlockConnectionCommitRequest(undo_writer, block_index_committer, trace, block, block_index, connection_state), std::move(*validated.commit_package), state).Succeeded());
+    {
+        LOCK(::cs_main);
+        BOOST_REQUIRE(engine.Commit(MakeBlockConnectionCommitRequest(undo_writer, block_index_committer, connection_state.Committer(), trace, block, block_index, connection_state), std::move(*validated.commit_package), state).Succeeded());
+    }
 
     BOOST_CHECK(connection_state.BestBlock() == block_hash);
-    BOOST_CHECK(block_index.IsValid(BLOCK_VALID_SCRIPTS));
+    {
+        LOCK(::cs_main);
+        BOOST_CHECK(block_index.IsValid(BLOCK_VALID_SCRIPTS));
+    }
     BOOST_CHECK_EQUAL(block_index_committer.dirty_index, &block_index);
     BOOST_CHECK(undo_writer.wrote_undo);
 
@@ -507,7 +619,7 @@ BOOST_AUTO_TEST_CASE(block_connection_engine_accepts_snapshot_state_backend)
 
 BOOST_AUTO_TEST_CASE(block_connection_engine_returns_commit_package_without_mutation)
 {
-    LOCK(::cs_main);
+    AssertLockNotHeld(::cs_main);
 
     const uint256 previous_hash{uint256::ONE};
     CBlock block{MakeBlock(previous_hash, /*coinbase_value=*/50)};
@@ -545,8 +657,6 @@ BOOST_AUTO_TEST_CASE(block_connection_engine_returns_commit_package_without_muta
     validation::BlockConnectionRequest request{
         .runtime = {
             .notifications = notifications,
-            .undo_writer = undo_writer,
-            .block_index_committer = block_index_committer,
             .script_checker = script_checker,
             .trace = trace.trace,
         },
@@ -570,20 +680,26 @@ BOOST_AUTO_TEST_CASE(block_connection_engine_returns_commit_package_without_muta
 
     BlockValidationState state;
     validation::BlockConnectionEngine engine;
-    auto validated{engine.Connect(request, state)};
+    auto validated{engine.ConnectPrepared(request, state)};
     BOOST_REQUIRE(validated.Succeeded());
     BOOST_REQUIRE(validated.commit_package);
 
     const COutPoint coinbase_outpoint{block.vtx[0]->GetHash(), 0};
     BOOST_CHECK(connection_state.BestBlock() == previous_hash);
     BOOST_CHECK(!connection_state.GetCoin(coinbase_outpoint));
-    BOOST_CHECK(!block_index.IsValid(BLOCK_VALID_SCRIPTS));
+    {
+        LOCK(::cs_main);
+        BOOST_CHECK(!block_index.IsValid(BLOCK_VALID_SCRIPTS));
+    }
     BOOST_CHECK(!undo_writer.wrote_undo);
     BOOST_CHECK_EQUAL(block_index_committer.dirty_index, nullptr);
 
     const auto commit_request{
-        MakeBlockConnectionCommitRequest(undo_writer, block_index_committer, trace.trace, block, block_index, connection_state)};
-    BOOST_REQUIRE(engine.Commit(commit_request, std::move(*validated.commit_package), state).Succeeded());
+        MakeBlockConnectionCommitRequest(undo_writer, block_index_committer, connection_state.Committer(), trace.trace, block, block_index, connection_state)};
+    {
+        LOCK(::cs_main);
+        BOOST_REQUIRE(engine.Commit(commit_request, std::move(*validated.commit_package), state).Succeeded());
+    }
 
     BOOST_CHECK(connection_state.BestBlock() == block_hash);
     const auto coinbase_coin{connection_state.GetCoin(coinbase_outpoint)};
@@ -591,14 +707,17 @@ BOOST_AUTO_TEST_CASE(block_connection_engine_returns_commit_package_without_muta
     BOOST_CHECK_EQUAL(coinbase_coin->height, 1);
     BOOST_CHECK(coinbase_coin->is_coinbase);
     BOOST_CHECK_EQUAL(coinbase_coin->output.nValue, 50);
-    BOOST_CHECK(block_index.IsValid(BLOCK_VALID_SCRIPTS));
+    {
+        LOCK(::cs_main);
+        BOOST_CHECK(block_index.IsValid(BLOCK_VALID_SCRIPTS));
+    }
     BOOST_CHECK(undo_writer.wrote_undo);
     BOOST_CHECK_EQUAL(block_index_committer.dirty_index, &block_index);
 }
 
 BOOST_AUTO_TEST_CASE(block_connection_commit_rejects_stale_parent)
 {
-    LOCK(::cs_main);
+    AssertLockNotHeld(::cs_main);
 
     const uint256 previous_hash{uint256::ONE};
     CBlock block{MakeBlock(previous_hash, /*coinbase_value=*/50)};
@@ -636,8 +755,6 @@ BOOST_AUTO_TEST_CASE(block_connection_commit_rejects_stale_parent)
     validation::BlockConnectionRequest request{
         .runtime = {
             .notifications = notifications,
-            .undo_writer = undo_writer,
-            .block_index_committer = block_index_committer,
             .script_checker = script_checker,
             .trace = trace.trace,
         },
@@ -661,15 +778,18 @@ BOOST_AUTO_TEST_CASE(block_connection_commit_rejects_stale_parent)
 
     BlockValidationState state;
     validation::BlockConnectionEngine engine;
-    auto validated{engine.Connect(request, state)};
+    auto validated{engine.ConnectPrepared(request, state)};
     BOOST_REQUIRE(validated.Succeeded());
     BOOST_REQUIRE(validated.commit_package);
 
     connection_state.SetBestBlock(uint256{2});
-    BOOST_CHECK(!engine.Commit(
-        MakeBlockConnectionCommitRequest(undo_writer, block_index_committer, trace.trace, block, block_index, connection_state),
-        std::move(*validated.commit_package),
-        state).Succeeded());
+    {
+        LOCK(::cs_main);
+        BOOST_CHECK(!engine.Commit(
+            MakeBlockConnectionCommitRequest(undo_writer, block_index_committer, connection_state.Committer(), trace.trace, block, block_index, connection_state),
+            std::move(*validated.commit_package),
+            state).Succeeded());
+    }
 
     BOOST_CHECK(state.IsError());
     BOOST_CHECK_EQUAL(state.GetRejectReason(), "stale block connection");
@@ -679,7 +799,7 @@ BOOST_AUTO_TEST_CASE(block_connection_commit_rejects_stale_parent)
 
 BOOST_AUTO_TEST_CASE(block_connection_engine_validates_spends_with_snapshot_state_backend)
 {
-    LOCK(::cs_main);
+    AssertLockNotHeld(::cs_main);
 
     const uint256 previous_hash{uint256::ONE};
     const COutPoint prevout{Txid::FromUint256(uint256::ONE), 0};
@@ -709,23 +829,7 @@ BOOST_AUTO_TEST_CASE(block_connection_engine_validates_spends_with_snapshot_stat
     FakeBlockUndoWriter undo_writer;
     FakeBlockIndexCommitter block_index_committer;
     Consensus::DirectBlockScriptChecker script_checker;
-    int64_t blocks_total{0};
-    SteadyClock::duration time_check{};
-    SteadyClock::duration time_forks{};
-    SteadyClock::duration time_connect{};
-    SteadyClock::duration time_verify{};
-    SteadyClock::duration time_undo{};
-    SteadyClock::duration time_index{};
-    BlockConnectionTrace trace{
-        BlockConnectionTraceCounters{
-            .num_blocks_total = blocks_total,
-            .time_check = time_check,
-            .time_forks = time_forks,
-            .time_connect = time_connect,
-            .time_verify = time_verify,
-            .time_undo = time_undo,
-            .time_index = time_index,
-        }};
+    BlockConnectionTrace trace;
 
     const Consensus::BlockConsensusContext consensus_context{
         .spend = Consensus::BlockSpendContext{
@@ -742,8 +846,6 @@ BOOST_AUTO_TEST_CASE(block_connection_engine_validates_spends_with_snapshot_stat
     validation::BlockConnectionRequest request{
         .runtime = {
             .notifications = notifications,
-            .undo_writer = undo_writer,
-            .block_index_committer = block_index_committer,
             .script_checker = script_checker,
             .trace = trace,
         },
@@ -767,10 +869,13 @@ BOOST_AUTO_TEST_CASE(block_connection_engine_validates_spends_with_snapshot_stat
 
     BlockValidationState state;
     validation::BlockConnectionEngine engine;
-    auto validated{engine.Connect(request, state)};
+    auto validated{engine.ConnectPrepared(request, state)};
     BOOST_REQUIRE(validated.Succeeded());
     BOOST_REQUIRE(validated.commit_package);
-    BOOST_REQUIRE(engine.Commit(MakeBlockConnectionCommitRequest(undo_writer, block_index_committer, trace, block, block_index, connection_state), std::move(*validated.commit_package), state).Succeeded());
+    {
+        LOCK(::cs_main);
+        BOOST_REQUIRE(engine.Commit(MakeBlockConnectionCommitRequest(undo_writer, block_index_committer, connection_state.Committer(), trace, block, block_index, connection_state), std::move(*validated.commit_package), state).Succeeded());
+    }
 
     BOOST_CHECK(!connection_state.GetCoin(prevout));
     const COutPoint spend_outpoint{spend_tx->GetHash(), 0};
@@ -808,31 +913,13 @@ BOOST_AUTO_TEST_CASE(test_block_validity_accepts_snapshot_state_backend)
     FakeBlockUndoWriter undo_writer;
     FakeBlockIndexCommitter block_index_committer;
     Consensus::DirectBlockScriptChecker script_checker;
-    int64_t blocks_total{0};
-    SteadyClock::duration time_check{};
-    SteadyClock::duration time_forks{};
-    SteadyClock::duration time_connect{};
-    SteadyClock::duration time_verify{};
-    SteadyClock::duration time_undo{};
-    SteadyClock::duration time_index{};
-    BlockConnectionTrace trace{
-        BlockConnectionTraceCounters{
-            .num_blocks_total = blocks_total,
-            .time_check = time_check,
-            .time_forks = time_forks,
-            .time_connect = time_connect,
-            .time_verify = time_verify,
-            .time_undo = time_undo,
-            .time_index = time_index,
-        }};
+    BlockConnectionTrace trace;
 
     TestBlockValidityRequest request{
         .active_chain = active_chain,
         .consensus_params = consensus_params,
         .header_context = header_context,
         .connection_state = connection_state,
-        .undo_writer = undo_writer,
-        .block_index_committer = block_index_committer,
         .notifications = notifications,
         .script_checker = script_checker,
         .trace = trace,

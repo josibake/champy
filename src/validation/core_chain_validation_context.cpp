@@ -127,3 +127,12 @@ BlockActivationResult CoreChainValidationContext::ActivateBestChain(BlockValidat
 {
     return m_chainman.ActiveChainstate().ActivateBestChain(state, block, chain_events);
 }
+
+BlockActivationResult CoreChainValidationContext::ActivateMostWorkTipBlock(
+    BlockValidationState& state,
+    CBlockIndex& block_index,
+    const std::shared_ptr<const CBlock>& block,
+    ChainstateEventSink* chain_events) const
+{
+    return m_chainman.ActiveChainstate().ActivateMostWorkTipBlock(state, block_index, block, chain_events);
+}

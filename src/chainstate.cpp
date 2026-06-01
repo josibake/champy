@@ -8,6 +8,8 @@
 #include <chainstate.h>
 
 #include <arith_uint256.h>
+#include <validation/core_block_commit_adapters.h>
+#include <validation/core_block_connection_snapshot.h>
 #include <validation/core_coins_block_connection_state.h>
 #include <validation/block_data_adapters.h>
 #include <validation/block_index_adapters.h>
@@ -855,12 +857,14 @@ public:
         Chainstate& chainstate,
         BlockValidationState& state,
         std::shared_ptr<const CBlock> cached_block,
-        ChainstateEventSink* chain_events)
+        ChainstateEventSink* chain_events,
+        CBlockIndex* target_block = nullptr)
         : m_chainstate{chainstate},
           m_state{state},
           m_cached_block{std::move(cached_block)},
           m_chain_events{chain_events},
-          m_commit_executor{chainstate.m_chainstate_mutex}
+          m_commit_executor{chainstate.m_chainstate_mutex},
+          m_target_block{target_block}
     {
     }
 
@@ -918,7 +922,7 @@ private:
             std::vector<ConnectedBlock> connected_blocks; // Destructed before cs_main is unlocked.
 
             if (m_progress.most_work == nullptr) {
-                m_progress.most_work = m_chainstate.FindMostWorkChain();
+                m_progress.most_work = SelectMostWorkCandidate();
             }
 
             if (m_progress.most_work == nullptr || m_progress.most_work == m_chainstate.m_chain.Tip()) {
@@ -928,6 +932,8 @@ private:
             CoreBlockDataStore block_store{m_chainstate.m_blockman};
             CoreBlockIndexStore block_index_store{m_chainstate.m_chainman};
             validation::CoreCoinsBlockConnectionState connection_state{*m_chainstate.m_coins_views->m_block_connection_view};
+            validation::CoreCoinsBlockConnectionSnapshotter connection_snapshotter{*m_chainstate.m_coins_views->m_block_connection_view};
+            CoreBlockSpendEffectsCommitter spend_state_committer{*m_chainstate.m_coins_views->m_block_connection_view};
             CoreChainActivationState activation_state{m_chainstate};
             CoreChainValidationContext validation_context{m_chainstate.m_chainman, validation_runtime};
             CoreConnectTipResources connection_resources{
@@ -937,6 +943,8 @@ private:
                 .block_index_lookup = block_index_store,
                 .block_index_committer = block_index_store,
                 .connection_state = connection_state,
+                .connection_snapshotter = connection_snapshotter,
+                .spend_state_committer = spend_state_committer,
                 .last_script_check_reason_logged = m_chainstate.LastScriptCheckReasonLogged(),
                 .connected_blocks = connected_blocks,
                 .chain_events = m_chain_events,
@@ -984,6 +992,17 @@ private:
         return m_cached_block->GetHash() == m_progress.most_work->GetBlockHash() ? m_cached_block : std::shared_ptr<const CBlock>{};
     }
 
+    CBlockIndex* SelectMostWorkCandidate() EXCLUSIVE_LOCKS_REQUIRED(cs_main)
+    {
+        AssertLockHeld(cs_main);
+        CBlockIndex* most_work{m_chainstate.FindMostWorkChain()};
+        if (!m_target_block) return most_work;
+
+        if (most_work != m_target_block) return nullptr;
+        if (m_target_block->pprev != m_chainstate.m_chain.Tip()) return nullptr;
+        return m_target_block;
+    }
+
     ActivateBestChainLockedResult NotifyLocked(
         CBlockIndex* starting_tip,
         validation::ValidationEventQueue& validation_events) EXCLUSIVE_LOCKS_REQUIRED(cs_main)
@@ -1029,6 +1048,7 @@ private:
     ActivateBestChainProgress m_progress;
     BlockActivationTimings m_activation_timings;
     uint64_t m_connected_blocks{0};
+    CBlockIndex* m_target_block{nullptr};
 };
 
 BlockActivationResult Chainstate::ActivateBestChain(
@@ -1045,6 +1065,18 @@ BlockActivationResult Chainstate::ActivateBestChain(
     AssertLockNotHeld(::cs_main);
 
     return ChainstateActivationOrchestrator{*this, state, std::move(pblock), chain_events}.Activate();
+}
+
+BlockActivationResult Chainstate::ActivateMostWorkTipBlock(
+    BlockValidationState& state,
+    CBlockIndex& block_index,
+    std::shared_ptr<const CBlock> pblock,
+    ChainstateEventSink* chain_events)
+{
+    AssertLockNotHeld(m_chainstate_mutex);
+    AssertLockNotHeld(::cs_main);
+
+    return ChainstateActivationOrchestrator{*this, state, std::move(pblock), chain_events, &block_index}.Activate();
 }
 
 bool Chainstate::PreciousBlock(BlockValidationState& state, CBlockIndex* pindex, ChainstateEventSink* chain_events)

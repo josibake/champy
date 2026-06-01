@@ -49,6 +49,11 @@ public:
         const std::shared_ptr<const CBlock>& block,
         BlockValidationState& state) LOCKS_EXCLUDED(cs_main);
 
+    [[nodiscard]] BlockActivationResult ActivateAcceptedTipCandidate(
+        ChainstateEventSink* chain_events,
+        const std::shared_ptr<const CBlock>& block,
+        BlockValidationState& state) LOCKS_EXCLUDED(cs_main);
+
     void ReportBlockChecked(
         const std::shared_ptr<const CBlock>& block,
         const BlockValidationState& state) LOCKS_EXCLUDED(cs_main);

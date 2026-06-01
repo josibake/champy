@@ -1313,8 +1313,6 @@ void PeerManagerImpl::FindNextBlocksToDownload(const Peer& peer, unsigned int co
     }
 
     const std::vector<node::BlockInFlight> blocks_in_flight{WITH_LOCK(m_block_download_mutex, return m_block_download.Snapshot())};
-    const CBlockIndex* active_tip{m_chainman.ActiveTip()};
-
     const node::BlockDownloadPlannerResult plan{node::PlanNextBlocksToDownload({
         .peer = peer.m_id,
         .max_blocks = count,
@@ -1330,11 +1328,8 @@ void PeerManagerImpl::FindNextBlocksToDownload(const Peer& peer, unsigned int co
             .candidates = candidates,
         },
         .blocks_in_flight = blocks_in_flight,
-        .ibd_pipeline = node::IbdPipelineAdmissionWindow{
-            .next_commit_height = m_chainman.ActiveHeight() + 1,
-            .expected_parent_hash = active_tip ? std::optional<uint256>{active_tip->GetBlockHash()} : std::nullopt,
-            .limits = node::IbdPipelineLimits{.max_blocks_ahead = BLOCK_DOWNLOAD_WINDOW},
-        },
+        .ibd_pipeline = m_ibd_block_processor.AdmissionWindow(
+            node::IbdPipelineLimits{.max_blocks_ahead = BLOCK_DOWNLOAD_WINDOW}),
     })};
 
     if (plan.last_common) {

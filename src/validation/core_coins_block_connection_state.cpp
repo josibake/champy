@@ -7,7 +7,6 @@
 #include <coins.h>
 #include <consensus/expected.h>
 #include <validation/coins_view_spend_state.h>
-#include <validation/core_block_commit_adapters.h>
 
 #include <cassert>
 #include <memory>
@@ -36,17 +35,14 @@ private:
 class CoreCoinsBlockConnectionSpendState final : public BlockConnectionSpendState {
 public:
     CoreCoinsBlockConnectionSpendState(CCoinsViewCache& coins, std::shared_ptr<const Consensus::SequenceLockTimeView> sequence_lock_times)
-        : m_workspace{coins, std::move(sequence_lock_times)},
-          m_committer{m_workspace.StagedCoins(), coins}
+        : m_workspace{coins, std::move(sequence_lock_times)}
     {
     }
 
     [[nodiscard]] Consensus::BlockSpendWorkspace& Workspace() override { return m_workspace; }
-    [[nodiscard]] Consensus::BlockSpendStateCommitter& Committer() override { return m_committer; }
 
 private:
     CoinsViewBlockSpendWorkspace m_workspace;
-    CoreBlockSpendStateCommitter m_committer;
 };
 
 } // namespace

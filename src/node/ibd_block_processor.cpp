@@ -4,6 +4,7 @@
 
 #include <node/ibd_block_processor.h>
 
+#include <chainstate.h>
 #include <logging.h>
 #include <primitives/block.h>
 #include <serialize.h>
@@ -96,6 +97,18 @@ IbdBlockProcessResult FinishBlockProcessResult(
 
 } // namespace
 
+IbdPipelineAdmissionWindow IbdBlockProcessor::AdmissionWindow(IbdPipelineLimits limits) const
+{
+    AssertLockHeld(::cs_main);
+
+    const CBlockIndex* active_tip{m_chainman.ActiveTip()};
+    return {
+        .next_commit_height = m_chainman.ActiveHeight() + 1,
+        .expected_parent_hash = active_tip ? std::optional<uint256>{active_tip->GetBlockHash()} : std::nullopt,
+        .limits = limits,
+    };
+}
+
 IbdBlockProcessResult IbdBlockProcessor::ProcessDownloadedBlock(IbdBlockProcessRequest request)
 {
     AssertLockNotHeld(::cs_main);
@@ -148,7 +161,13 @@ IbdBlockProcessResult IbdBlockProcessor::ProcessDownloadedBlock(IbdBlockProcessR
 
     BlockValidationState activate_state;
     const auto activation_start{std::chrono::steady_clock::now()};
-    const BlockActivationResult activation{chain_validation.ActivateAcceptedBlock(request.chain_events, request.block, activate_state)};
+    BlockActivationResult activation{chain_validation.ActivateAcceptedTipCandidate(request.chain_events, request.block, activate_state)};
+    if (activation.Succeeded() && activation.connected_blocks == 0) {
+        // The exact-tip path is only valid when it preserves best-chain
+        // selection. Fall back to full activation for stale, fork, or reorg
+        // cases.
+        activation = chain_validation.ActivateAcceptedBlock(request.chain_events, request.block, activate_state);
+    }
     validation.timings.activation = std::chrono::steady_clock::now() - activation_start;
     validation.timings.spend_join = activation.timings.spend_join;
     validation.timings.script_validation = activation.timings.script_validation;

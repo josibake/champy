@@ -55,7 +55,6 @@ namespace {
         return BlockConnectionResult::Connected();
     }
 
-    assert(package.spend_state);
     CoreBlockEffectsWriter effects_writer{
         runtime.undo_writer,
         runtime.block_index_committer,
@@ -65,7 +64,7 @@ namespace {
         package.commit_context,
         *package.effects,
         effects_writer,
-        package.spend_state->Committer(),
+        runtime.spend_state_committer,
         effects_writer)};
     if (!commit) {
         ApplyBlockCommitError(state, commit.error());
@@ -91,7 +90,11 @@ namespace {
 BlockConnectionResult BlockConnectionEngine::Connect(const BlockConnectionRequest& request, BlockValidationState& state) const
 {
     AssertLockHeld(cs_main);
+    return ConnectPrepared(request, state);
+}
 
+BlockConnectionResult BlockConnectionEngine::ConnectPrepared(const BlockConnectionRequest& request, BlockValidationState& state) const
+{
     const BlockConnectionRuntime& runtime{request.runtime};
     const BlockConnectionContext& context{request.context};
     const CBlock& block{request.block};
@@ -132,7 +135,6 @@ BlockConnectionResult BlockConnectionEngine::Connect(const BlockConnectionReques
         return BlockConnectionResult::Connected(BlockConnectionCommitPackage{
             .expected_previous_block = hashPrevBlock,
             .commit_context = context.consensus_context.commit,
-            .spend_state = nullptr,
             .effects = std::nullopt,
         });
     }
@@ -171,7 +173,6 @@ BlockConnectionResult BlockConnectionEngine::Connect(const BlockConnectionReques
     return BlockConnectionResult::Connected(BlockConnectionCommitPackage{
         .expected_previous_block = hashPrevBlock,
         .commit_context = context.consensus_context.commit,
-        .spend_state = std::move(*spend_state),
         .effects = std::move(*spend_effects),
     });
 }

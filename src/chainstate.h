@@ -529,6 +529,23 @@ public:
         EXCLUSIVE_LOCKS_REQUIRED(!m_chainstate_mutex)
             LOCKS_EXCLUDED(::cs_main);
 
+    /**
+     * Activate block_index only if it is the current most-work block and
+     * directly extends the active tip.
+     *
+     * This is an IBD fast path for an ordered commit stage. It keeps the same
+     * lock, event, and commit contracts as ActivateBestChain(). If the block is
+     * not an exact active-tip candidate, the result is completed with zero
+     * connected blocks and callers should fall back to ActivateBestChain().
+     */
+    BlockActivationResult ActivateMostWorkTipBlock(
+        BlockValidationState& state,
+        CBlockIndex& block_index,
+        std::shared_ptr<const CBlock> pblock,
+        ChainstateEventSink* chain_events = nullptr)
+        EXCLUSIVE_LOCKS_REQUIRED(!m_chainstate_mutex)
+            LOCKS_EXCLUDED(::cs_main);
+
     // Apply the effects of a block disconnection on the UTXO set.
     bool DisconnectTip(
         BlockValidationState& state,

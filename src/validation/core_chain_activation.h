@@ -6,6 +6,11 @@
 #define BITCOIN_VALIDATION_CORE_CHAIN_ACTIVATION_H
 
 #include <kernel/cs_main.h>
+#include <validation/block_connection.h>
+#include <validation/block_connection_state.h>
+#include <validation/block_connection_trace.h>
+#include <validation/core_block_connection_context.h>
+#include <validation/snapshot_block_connection_state.h>
 #include <util/time.h>
 
 #include <cstdint>
@@ -26,11 +31,15 @@ class CoreChainLock;
 class CoreChainValidationContext;
 struct BlockActivationTimings;
 
+namespace Consensus {
+class BlockSpendStateCommitter;
+} // namespace Consensus
 namespace kernel {
 class Notifications;
 } // namespace kernel
 namespace validation {
 class BlockConnectionState;
+class CoreCoinsBlockConnectionSnapshotter;
 class ValidationEventQueue;
 } // namespace validation
 
@@ -92,6 +101,8 @@ struct CoreConnectTipResources {
     BlockIndexLookup& block_index_lookup;
     BlockIndexValidityCommitter& block_index_committer;
     validation::BlockConnectionState& connection_state;
+    validation::CoreCoinsBlockConnectionSnapshotter& connection_snapshotter;
+    Consensus::BlockSpendStateCommitter& spend_state_committer;
     std::optional<const char*>& last_script_check_reason_logged;
     std::vector<ConnectedBlock>& connected_blocks;
     ChainstateEventSink* chain_events{nullptr};
@@ -107,6 +118,45 @@ struct CoreConnectTipRequest {
     CBlockIndex& block_index;
     std::shared_ptr<const CBlock> cached_block;
 };
+
+/**
+ * Staged Core connection values for one active-chain tip.
+ *
+ * These values keep block loading, spend/script execution, and commit separate
+ * while the activation caller retains ownership of resources. They are only
+ * valid while the referenced CoreConnectTipResources and block index remain
+ * live under the documented cs_main contract.
+ */
+struct PreparedCoreConnectTip {
+    CoreConnectTipResources* resources{nullptr};
+    CBlockIndex* block_index{nullptr};
+    std::shared_ptr<const CBlock> block;
+    CoreBlockConnectionPlan connection_plan;
+    validation::SnapshotBlockConnectionState snapshot_state;
+    SteadyClock::time_point time_start;
+    SteadyClock::time_point time_block_loaded;
+};
+
+struct ExecutedCoreConnectTip {
+    PreparedCoreConnectTip prepared;
+    validation::BlockConnectionCommitPackage commit_package;
+    BlockConnectionTrace trace;
+    SteadyClock::time_point time_block_connected;
+};
+
+struct CoreConnectTipExecutionResult {
+    CoreConnectTipStatus status{CoreConnectTipStatus::BlockConnectionFailed};
+    std::optional<ExecutedCoreConnectTip> execution;
+};
+
+[[nodiscard]] std::optional<PreparedCoreConnectTip> PrepareCoreConnectTip(CoreConnectTipRequest request, BlockValidationState& state)
+    EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
+
+[[nodiscard]] CoreConnectTipExecutionResult ExecuteCoreConnectTip(PreparedCoreConnectTip prepared, BlockValidationState& state)
+    EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
+
+[[nodiscard]] CoreConnectTipResult CommitCoreConnectTip(ExecutedCoreConnectTip execution, BlockValidationState& state)
+    EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
 
 [[nodiscard]] CoreConnectTipResult ConnectCoreChainTip(CoreConnectTipRequest request, BlockValidationState& state)
     EXCLUSIVE_LOCKS_REQUIRED(::cs_main);

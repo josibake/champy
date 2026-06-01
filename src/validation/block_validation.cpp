@@ -41,6 +41,7 @@
 #include <validation/block_validation_policy.h>
 #include <validation/coins_view_spend_state.h>
 #include <validation/core_block_connection_setup.h>
+#include <validation/core_block_commit_adapters.h>
 #include <validation/core_block_policy.h>
 #include <validation/core_chain_validation_context.h>
 #include <validation/core_coins_block_connection_state.h>
@@ -110,16 +111,12 @@ private:
 
 static CoreBlockConnectionRuntimeInputs MakeCoreBlockConnectionRuntimeInputs(
     CoreChainValidationContext& context,
-    BlockUndoWriter& undo_writer,
-    BlockIndexValidityCommitter& block_index_committer,
     validation::ScriptCheckScheduler& script_check_scheduler) EXCLUSIVE_LOCKS_REQUIRED(cs_main)
 {
     AssertLockHeld(cs_main);
 
     return {
         .notifications = context.Notifications(),
-        .undo_writer = undo_writer,
-        .block_index_committer = block_index_committer,
         .script_check_scheduler = script_check_scheduler,
         .validation_cache = context.ScriptValidationCache(),
     };
@@ -568,6 +565,24 @@ BlockActivationResult ActivateAcceptedBlock(CoreChainValidationContext& context,
     return context.ActivateBestChain(state, block, chain_events);
 }
 
+BlockActivationResult ActivateAcceptedTipCandidate(CoreChainValidationContext& context, ChainstateEventSink* chain_events, const std::shared_ptr<const CBlock>& block, BlockValidationState& state)
+{
+    AssertLockNotHeld(cs_main);
+    assert(block);
+
+    context.NotifyHeaderTip();
+
+    CBlockIndex* block_index{nullptr};
+    {
+        LOCK(cs_main);
+        CoreBlockIndexStore block_index_store{context.MakeBlockIndexStore()};
+        block_index = block_index_store.LookupBlockIndex(block->GetHash());
+    }
+    if (!block_index) return BlockActivationResult::Completed();
+
+    return context.ActivateMostWorkTipBlock(state, *block_index, block, chain_events);
+}
+
 void ReportBlockChecked(CoreChainValidationContext& context, const std::shared_ptr<const CBlock>& block, const BlockValidationState& state)
 {
     LOCK(cs_main);
@@ -738,8 +753,6 @@ BlockValidationState TestBlockValidity(
     const validation::BlockConnectionRequest connection_request{
         .runtime = {
             .notifications = request.notifications,
-            .undo_writer = request.undo_writer,
-            .block_index_committer = request.block_index_committer,
             .script_checker = request.script_checker,
             .trace = request.trace,
         },
@@ -807,8 +820,6 @@ BlockValidationState TestBlockValidity(
         .consensus_params = chainstate.m_chainman.GetConsensus(),
         .header_context = header_context,
         .connection_state = connection_state,
-        .undo_writer = block_store,
-        .block_index_committer = block_index_store,
         .notifications = context.Notifications(),
         .script_checker = script_checks.Checker(),
         .trace = trace,
@@ -853,7 +864,7 @@ VerifyDBResult CVerifyDB::VerifyDB(
     bool skipped_no_block_data{false};
     bool skipped_l3_checks{false};
     const CoreBlockConnectionRuntimeInputs runtime_inputs{
-        MakeCoreBlockConnectionRuntimeInputs(request.validation_context, request.undo_writer, request.block_index_committer, request.script_check_scheduler)};
+        MakeCoreBlockConnectionRuntimeInputs(request.validation_context, request.script_check_scheduler)};
     LogInfo("Verification progress: 0%%");
 
     for (pindex = request.active_chain.Tip(); pindex && pindex->pprev; pindex = pindex->pprev) {
@@ -954,6 +965,7 @@ VerifyDBResult CVerifyDB::VerifyDB(
                 /*cache_script_results=*/false};
             connection_setup.MaybeLogScriptPolicy(request.last_script_check_reason_logged, block.GetHash());
             validation::CoreCoinsBlockConnectionState connection_state{coins};
+            CoreBlockSpendEffectsCommitter spend_state_committer{coins};
             const validation::BlockConnectionRequest connection_request{connection_setup.Request(block, connection_state)};
             validation::BlockConnectionEngine engine;
             auto connected{engine.Connect(connection_request, state)};
@@ -966,6 +978,7 @@ VerifyDBResult CVerifyDB::VerifyDB(
                 .runtime = {
                     .undo_writer = request.undo_writer,
                     .block_index_committer = request.block_index_committer,
+                    .spend_state_committer = spend_state_committer,
                     .trace = trace,
                 },
                 .context = {

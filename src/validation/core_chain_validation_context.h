@@ -84,6 +84,11 @@ public:
     bool FlushActiveChainstateToDisk(BlockValidationState& state, FlushStateMode mode) const EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
     bool FlushActiveChainstateIfNeeded(BlockValidationState& state, ExternalCacheUsage external_cache_usage) const EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
     BlockActivationResult ActivateBestChain(BlockValidationState& state, const std::shared_ptr<const CBlock>& block, ChainstateEventSink* chain_events) const LOCKS_EXCLUDED(::cs_main);
+    BlockActivationResult ActivateMostWorkTipBlock(
+        BlockValidationState& state,
+        CBlockIndex& block_index,
+        const std::shared_ptr<const CBlock>& block,
+        ChainstateEventSink* chain_events) const LOCKS_EXCLUDED(::cs_main);
 
 private:
     ChainstateManager& m_chainman;

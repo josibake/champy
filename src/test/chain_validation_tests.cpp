@@ -10,7 +10,14 @@
 #include <test/util/mining.h>
 #include <test/util/setup_common.h>
 #include <util/check.h>
+#include <validation/block_data_adapters.h>
+#include <validation/block_index_adapters.h>
 #include <validation/chain_validation.h>
+#include <validation/core_block_commit_adapters.h>
+#include <validation/core_block_connection_snapshot.h>
+#include <validation/core_chain_activation.h>
+#include <validation/core_chain_validation_context.h>
+#include <validation/core_coins_block_connection_state.h>
 #include <validation_state.h>
 
 #include <chrono>
@@ -147,11 +154,121 @@ BOOST_AUTO_TEST_CASE(service_exposes_structural_accept_and_activate_stages)
     BOOST_CHECK_EQUAL(WITH_LOCK(chainman.GetMutex(), return chainman.ActiveHeight()), 1);
 }
 
+BOOST_AUTO_TEST_CASE(service_activates_accepted_tip_candidate)
+{
+    auto& chainman{*Assert(m_node.chainman)};
+    ChainValidationService validation{chainman};
+    const auto block{CreateBlockChain(/*total_height=*/1, Params()).front()};
+
+    BlockValidationState state;
+    const BlockAcceptanceResult accepted{validation.AcceptNewBlockData(
+        block,
+        state,
+        {.block_data_storage = BlockDataStorageMode::ForceStore, .header = {.min_pow_checked = true}},
+        CurrentBlockValidationTime())};
+    BOOST_REQUIRE(accepted.accepted_for_processing());
+    BOOST_CHECK_EQUAL(WITH_LOCK(chainman.GetMutex(), return chainman.ActiveHeight()), 0);
+
+    BlockValidationState activation_state;
+    const BlockActivationResult activated{validation.ActivateAcceptedTipCandidate(/*chain_events=*/nullptr, block, activation_state)};
+    BOOST_REQUIRE(activated.Succeeded());
+    BOOST_CHECK_EQUAL(activated.connected_blocks, 1U);
+    BOOST_CHECK_EQUAL(WITH_LOCK(chainman.GetMutex(), return chainman.ActiveHeight()), 1);
+
+    BlockValidationState stale_state;
+    const BlockActivationResult stale{validation.ActivateAcceptedTipCandidate(/*chain_events=*/nullptr, block, stale_state)};
+    BOOST_REQUIRE(stale.Succeeded());
+    BOOST_CHECK_EQUAL(stale.connected_blocks, 0U);
+}
+
+BOOST_AUTO_TEST_CASE(core_connect_tip_can_run_as_explicit_stages)
+{
+    auto& chainman{*Assert(m_node.chainman)};
+    Chainstate& chainstate{chainman.ActiveChainstate()};
+    ChainValidationService chain_validation{chainman};
+    const auto block{CreateBlockChain(/*total_height=*/1, Params()).front()};
+
+    BlockValidationState state;
+    const BlockAcceptanceResult accepted{chain_validation.AcceptNewBlockData(
+        block,
+        state,
+        {.block_data_storage = BlockDataStorageMode::ForceStore, .header = {.min_pow_checked = true}},
+        CurrentBlockValidationTime())};
+    BOOST_REQUIRE(accepted.accepted_for_processing());
+    BOOST_CHECK_EQUAL(WITH_LOCK(chainman.GetMutex(), return chainman.ActiveHeight()), 0);
+
+    LOCK(cs_main);
+    CoreChainValidationRuntime runtime{chainman};
+    CoreChainValidationContext context{chainman, runtime};
+    CoreBlockDataStore block_store{chainman.m_blockman};
+    CoreBlockIndexStore block_index_store{chainman};
+    validation::CoreCoinsBlockConnectionState connection_state{chainstate.CoinsTip()};
+    validation::CoreCoinsBlockConnectionSnapshotter connection_snapshotter{chainstate.CoinsTip()};
+    CoreBlockSpendEffectsCommitter spend_state_committer{chainstate.CoinsTip()};
+    CoreChainActivationState active_chain{chainstate};
+    std::vector<ConnectedBlock> connected_blocks;
+    BlockActivationTimings activation_timings;
+    uint64_t activation_connected_blocks{0};
+    CoreConnectTipResources resources{
+        .context = context,
+        .block_reader = block_store,
+        .undo_writer = block_store,
+        .block_index_lookup = block_index_store,
+        .block_index_committer = block_index_store,
+        .connection_state = connection_state,
+        .connection_snapshotter = connection_snapshotter,
+        .spend_state_committer = spend_state_committer,
+        .last_script_check_reason_logged = chainstate.LastScriptCheckReasonLogged(),
+        .connected_blocks = connected_blocks,
+        .chain_events = nullptr,
+        .validation_events = runtime.ValidationEvents(),
+        .timing = {
+            .time_connect_total = chainman.TimeConnectTotal(),
+            .time_flush = chainman.TimeFlush(),
+            .time_chainstate = chainman.TimeChainstate(),
+            .time_post_connect = chainman.TimePostConnect(),
+            .time_total = chainman.TimeTotal(),
+            .blocks_total = chainman.NumBlocksTotal(),
+        },
+        .activation_timings = activation_timings,
+        .activation_connected_blocks = activation_connected_blocks,
+        .chain_lock = nullptr,
+    };
+    CBlockIndex* block_index{Assert(block_index_store.LookupBlockIndex(block->GetHash()))};
+
+    auto prepared{PrepareCoreConnectTip(
+        {.resources = resources, .block_index = *block_index, .cached_block = block},
+        state)};
+    BOOST_REQUIRE(prepared);
+    BOOST_CHECK(prepared->block == block);
+
+    auto executed{ExecuteCoreConnectTip(std::move(*prepared), state)};
+    BOOST_REQUIRE(executed.execution);
+    BOOST_CHECK(executed.execution->commit_package.expected_previous_block == Params().GenesisBlock().GetHash());
+
+    const CoreConnectTipResult committed{CommitCoreConnectTip(std::move(*executed.execution), state)};
+    BOOST_REQUIRE(committed.Succeeded());
+    BOOST_CHECK_EQUAL(activation_connected_blocks, 1U);
+    BOOST_CHECK_EQUAL(chainstate.m_chain.Height(), 1);
+    BOOST_REQUIRE_EQUAL(connected_blocks.size(), 1U);
+    BOOST_CHECK(connected_blocks.front().pindex == block_index);
+}
+
 BOOST_AUTO_TEST_CASE(ibd_block_processor_records_stage_metrics)
 {
     auto& chainman{*Assert(m_node.chainman)};
     node::IbdBlockProcessor processor{chainman};
     const auto block{CreateBlockChain(/*total_height=*/1, Params()).front()};
+
+    {
+        LOCK(cs_main);
+        const node::IbdPipelineAdmissionWindow window{
+            processor.AdmissionWindow(node::IbdPipelineLimits{.max_blocks_ahead = 7})};
+        BOOST_CHECK_EQUAL(window.next_commit_height, 1);
+        BOOST_REQUIRE(window.expected_parent_hash);
+        BOOST_CHECK(*window.expected_parent_hash == Params().GenesisBlock().GetHash());
+        BOOST_CHECK_EQUAL(window.limits.max_blocks_ahead, 7U);
+    }
 
     const node::IbdBlockProcessResult result{processor.ProcessDownloadedBlock({
         .block = block,
@@ -178,6 +295,15 @@ BOOST_AUTO_TEST_CASE(ibd_block_processor_records_stage_metrics)
     BOOST_CHECK_EQUAL(metrics.Stage(node::IbdPipelineStage::SpendJoin).blocks, 1U);
     BOOST_CHECK_EQUAL(metrics.Stage(node::IbdPipelineStage::ScriptValidation).blocks, 1U);
     BOOST_CHECK_EQUAL(metrics.Stage(node::IbdPipelineStage::Commit).blocks, 1U);
+
+    {
+        LOCK(cs_main);
+        const node::IbdPipelineAdmissionWindow window{
+            processor.AdmissionWindow(node::IbdPipelineLimits{.max_blocks_ahead = 7})};
+        BOOST_CHECK_EQUAL(window.next_commit_height, 2);
+        BOOST_REQUIRE(window.expected_parent_hash);
+        BOOST_CHECK(*window.expected_parent_hash == block->GetHash());
+    }
 }
 
 BOOST_AUTO_TEST_CASE(ibd_block_processor_records_only_reached_stages)

@@ -22,6 +22,7 @@
 #include <validation/block_validation.h>
 #include <validation/block_validation_error.h>
 #include <validation/core_block_connection_context.h>
+#include <validation/core_block_connection_snapshot.h>
 #include <validation/core_block_connection_setup.h>
 #include <validation/core_chain_lock.h>
 #include <validation/core_chain_validation_context.h>
@@ -74,8 +75,6 @@ std::shared_ptr<const CBlock> LoadBlockForConnection(
 
 CoreBlockConnectionRuntimeInputs MakeCoreBlockConnectionRuntimeInputs(
     CoreChainValidationContext& context,
-    BlockUndoWriter& undo_writer,
-    BlockIndexValidityCommitter& block_index_committer,
     validation::ScriptCheckScheduler& script_check_scheduler,
     CoreChainLock* chain_lock) EXCLUSIVE_LOCKS_REQUIRED(cs_main)
 {
@@ -83,39 +82,18 @@ CoreBlockConnectionRuntimeInputs MakeCoreBlockConnectionRuntimeInputs(
 
     return {
         .notifications = context.Notifications(),
-        .undo_writer = undo_writer,
-        .block_index_committer = block_index_committer,
         .script_check_scheduler = script_check_scheduler,
         .validation_cache = context.ScriptValidationCache(),
         .chain_lock = chain_lock,
     };
 }
 
-std::optional<validation::BlockConnectionCommitPackage> RunBlockConnection(
+std::optional<validation::BlockConnectionCommitPackage> RunPreparedBlockConnection(
     BlockValidationState& state,
     CBlockIndex& block_index,
-    const std::shared_ptr<const CBlock>& block,
-    validation::BlockConnectionState& connection_state,
-    CoreBlockConnectionRuntimeInputs runtime_inputs,
-    CoreBlockConnectionPlan connection_plan,
-    BlockConnectionTrace& trace,
-    std::optional<const char*>& last_reason_logged,
-    validation::ValidationEventQueue& validation_events) EXCLUSIVE_LOCKS_REQUIRED(cs_main)
+    const validation::BlockConnectionRequest& request)
 {
-    AssertLockHeld(cs_main);
-
-    CoreBlockConnectionSetup connection_setup{
-        runtime_inputs,
-        std::move(connection_plan),
-        block_index,
-        trace,
-        /*cache_script_results=*/false};
-    connection_setup.MaybeLogScriptPolicy(last_reason_logged, block->GetHash());
-    const validation::BlockConnectionRequest request{connection_setup.Request(
-        *block,
-        connection_state)};
-    validation::BlockConnectionResult connection_result{validation::BlockConnectionEngine{}.Connect(request, state)};
-    validation_events.BlockChecked(block, state);
+    validation::BlockConnectionResult connection_result{validation::BlockConnectionEngine{}.ConnectPrepared(request, state)};
     if (!connection_result.Succeeded()) {
         LogError("%s: Block connection %s failed, %s\n", "ConnectTip", block_index.GetBlockHash().ToString(), state.ToString());
         return std::nullopt;
@@ -171,27 +149,6 @@ void PublishConnectedBlock(
 struct CoreChainFork {
     const CBlockIndex* old_tip{nullptr};
     const CBlockIndex* fork{nullptr};
-};
-
-struct PreparedCoreConnectTip {
-    CoreConnectTipResources* resources{nullptr};
-    CBlockIndex* block_index{nullptr};
-    std::shared_ptr<const CBlock> block;
-    SteadyClock::time_point time_start;
-    SteadyClock::time_point time_block_loaded;
-};
-
-struct ExecutedCoreConnectTip {
-    PreparedCoreConnectTip prepared;
-    std::unique_ptr<validation::BlockConnectionAttemptGuard> connection_attempt;
-    validation::BlockConnectionCommitPackage commit_package;
-    BlockConnectionTrace trace;
-    SteadyClock::time_point time_block_connected;
-};
-
-struct CoreConnectTipExecutionResult {
-    CoreConnectTipStatus status{CoreConnectTipStatus::BlockConnectionFailed};
-    std::optional<ExecutedCoreConnectTip> execution;
 };
 
 class ScopedChainLockReleaseOverride
@@ -303,7 +260,7 @@ std::vector<CBlockIndex*> NextCoreChainConnectBatch(CBlockIndex& index_most_work
     return blocks_to_connect;
 }
 
-std::optional<PreparedCoreConnectTip> PrepareCoreConnectTip(CoreConnectTipRequest request, BlockValidationState& state)
+std::optional<PreparedCoreConnectTip> PrepareCoreConnectTipInternal(CoreConnectTipRequest request, BlockValidationState& state)
     EXCLUSIVE_LOCKS_REQUIRED(cs_main)
 {
     AssertLockHeld(cs_main);
@@ -324,39 +281,54 @@ std::optional<PreparedCoreConnectTip> PrepareCoreConnectTip(CoreConnectTipReques
     LogDebug(BCLog::BENCH, "  - Load block from disk: %.2fms\n",
              Ticks<MillisecondsDouble>(time_block_loaded - time_start));
 
+    CoreBlockConnectionPlan connection_plan{PlanCoreBlockConnection(
+        SnapshotCoreBlockConnectionPolicy(resources.context, request.block_index),
+        resources.block_index_lookup,
+        request.block_index)};
+    MaybeLogCoreBlockConnectionScriptPolicy(
+        resources.last_script_check_reason_logged,
+        request.block_index,
+        block_to_connect->GetHash(),
+        connection_plan);
+    validation::SnapshotBlockConnectionState snapshot_state{resources.connection_snapshotter.Snapshot(*block_to_connect, request.block_index)};
+
     return PreparedCoreConnectTip{
         .resources = &resources,
         .block_index = &request.block_index,
         .block = std::move(block_to_connect),
+        .connection_plan = std::move(connection_plan),
+        .snapshot_state = std::move(snapshot_state),
         .time_start = time_start,
         .time_block_loaded = time_block_loaded,
     };
 }
 
-CoreConnectTipExecutionResult ExecuteCoreConnectTip(PreparedCoreConnectTip prepared, BlockValidationState& state)
+CoreConnectTipExecutionResult ExecuteCoreConnectTipInternal(PreparedCoreConnectTip prepared, BlockValidationState& state)
     EXCLUSIVE_LOCKS_REQUIRED(cs_main)
 {
     AssertLockHeld(cs_main);
     CoreConnectTipResources& resources{*Assert(prepared.resources)};
     CBlockIndex& block_index{*Assert(prepared.block_index)};
 
-    auto connection_attempt{resources.connection_state.BeginConnectionAttempt()};
     BlockConnectionTrace trace{resources.context.TraceCounters()};
-    auto commit_package{RunBlockConnection(
-            state,
-            block_index,
-            prepared.block,
-            resources.connection_state,
-            MakeCoreBlockConnectionRuntimeInputs(
-                resources.context,
-                resources.undo_writer,
-                resources.block_index_committer,
-                resources.context.ScriptCheckScheduler(),
-                resources.chain_lock),
-            PlanCoreBlockConnection(SnapshotCoreBlockConnectionPolicy(resources.context, block_index), resources.block_index_lookup, block_index),
-            trace,
-            resources.last_script_check_reason_logged,
-            resources.validation_events)};
+    CoreBlockConnectionSetup connection_setup{
+        MakeCoreBlockConnectionRuntimeInputs(
+            resources.context,
+            resources.context.ScriptCheckScheduler(),
+            /*chain_lock=*/nullptr),
+        std::move(prepared.connection_plan),
+        block_index,
+        trace,
+        /*cache_script_results=*/false};
+    const validation::BlockConnectionRequest request{connection_setup.Request(
+        *prepared.block,
+        prepared.snapshot_state)};
+
+    const auto run_connection = [&]() {
+        return RunPreparedBlockConnection(state, block_index, request);
+    };
+    auto commit_package{resources.chain_lock ? resources.chain_lock->RunUnlocked(run_connection) : run_connection()};
+    resources.validation_events.BlockChecked(prepared.block, state);
     if (!commit_package) {
         if (state.IsInvalid()) {
             resources.context.MarkInvalidBlockFound(block_index, state);
@@ -378,7 +350,6 @@ CoreConnectTipExecutionResult ExecuteCoreConnectTip(PreparedCoreConnectTip prepa
         .status = CoreConnectTipStatus::Connected,
         .execution = ExecutedCoreConnectTip{
             .prepared = std::move(prepared),
-            .connection_attempt = std::move(connection_attempt),
             .commit_package = std::move(*commit_package),
             .trace = std::move(trace),
             .time_block_connected = time_block_connected,
@@ -386,17 +357,19 @@ CoreConnectTipExecutionResult ExecuteCoreConnectTip(PreparedCoreConnectTip prepa
     };
 }
 
-CoreConnectTipResult CommitCoreConnectTip(ExecutedCoreConnectTip execution, BlockValidationState& state)
+CoreConnectTipResult CommitCoreConnectTipInternal(ExecutedCoreConnectTip execution, BlockValidationState& state)
     EXCLUSIVE_LOCKS_REQUIRED(cs_main)
 {
     AssertLockHeld(cs_main);
     CoreConnectTipResources& resources{*Assert(execution.prepared.resources)};
     CBlockIndex& block_index{*Assert(execution.prepared.block_index)};
 
+    auto connection_attempt{resources.connection_state.BeginConnectionAttempt()};
     const validation::BlockConnectionCommitRequest commit_request{
         .runtime = {
             .undo_writer = resources.undo_writer,
             .block_index_committer = resources.block_index_committer,
+            .spend_state_committer = resources.spend_state_committer,
             .trace = execution.trace,
         },
         .context = {
@@ -414,7 +387,7 @@ CoreConnectTipResult CommitCoreConnectTip(ExecutedCoreConnectTip execution, Bloc
     resources.activation_timings.script_validation += connection_timings.script_validation;
     ++resources.activation_connected_blocks;
 
-    execution.connection_attempt->Commit();
+    connection_attempt->Commit();
 
     const auto time_coins_committed{SteadyClock::now()};
     AccumulateAndLogConnectTipStep(
@@ -519,6 +492,21 @@ CoreActivateBestChainStepResult ActivateCoreBestChainStepWithFork(CoreActivateBe
 }
 
 } // namespace
+
+std::optional<PreparedCoreConnectTip> PrepareCoreConnectTip(CoreConnectTipRequest request, BlockValidationState& state)
+{
+    return PrepareCoreConnectTipInternal(std::move(request), state);
+}
+
+CoreConnectTipExecutionResult ExecuteCoreConnectTip(PreparedCoreConnectTip prepared, BlockValidationState& state)
+{
+    return ExecuteCoreConnectTipInternal(std::move(prepared), state);
+}
+
+CoreConnectTipResult CommitCoreConnectTip(ExecutedCoreConnectTip execution, BlockValidationState& state)
+{
+    return CommitCoreConnectTipInternal(std::move(execution), state);
+}
 
 const CBlockIndex* CoreChainActivationState::Tip() const
 {

@@ -68,6 +68,16 @@ BlockActivationResult ChainValidationService::ActivateAcceptedBlock(
     return ::ActivateAcceptedBlock(context, chain_events, block, state);
 }
 
+BlockActivationResult ChainValidationService::ActivateAcceptedTipCandidate(
+    ChainstateEventSink* chain_events,
+    const std::shared_ptr<const CBlock>& block,
+    BlockValidationState& state)
+{
+    CoreChainValidationRuntime runtime{m_chainman};
+    CoreChainValidationContext context{m_chainman, runtime};
+    return ::ActivateAcceptedTipCandidate(context, chain_events, block, state);
+}
+
 void ChainValidationService::ReportBlockChecked(
     const std::shared_ptr<const CBlock>& block,
     const BlockValidationState& state)

@@ -11,8 +11,6 @@
 #include <memory>
 
 class BlockHeaderContextProvider;
-class BlockIndexValidityCommitter;
-class BlockUndoWriter;
 class BlockConnectionTrace;
 class CBlock;
 namespace Consensus {
@@ -32,8 +30,6 @@ struct TestBlockValidityRequest {
     const Consensus::Params& consensus_params;
     BlockHeaderContextProvider& header_context;
     validation::BlockConnectionState& connection_state;
-    BlockUndoWriter& undo_writer;
-    BlockIndexValidityCommitter& block_index_committer;
     kernel::Notifications& notifications;
     Consensus::BlockScriptChecker& script_checker;
     BlockConnectionTrace& trace;

@@ -50,6 +50,7 @@ class IbdBlockProcessor
 public:
     explicit IbdBlockProcessor(ChainstateManager& chainman) : m_chainman{chainman} {}
 
+    [[nodiscard]] IbdPipelineAdmissionWindow AdmissionWindow(IbdPipelineLimits limits) const EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
     [[nodiscard]] IbdBlockProcessResult ProcessDownloadedBlock(IbdBlockProcessRequest request) LOCKS_EXCLUDED(::cs_main);
 
     [[nodiscard]] const IbdPipelineMetrics& Metrics() const noexcept { return m_metrics; }

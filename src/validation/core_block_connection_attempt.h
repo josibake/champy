@@ -7,7 +7,6 @@
 
 #include <consensus/block_consensus_pipeline.h>
 #include <consensus/block_spend.h>
-#include <kernel/cs_main.h>
 
 class CBlock;
 
@@ -24,11 +23,10 @@ public:
     CoreBlockConnectionAttempt(CoreBlockConnectionAttempt&&) = delete;
     CoreBlockConnectionAttempt& operator=(CoreBlockConnectionAttempt&&) = delete;
 
-    [[nodiscard]] Consensus::BlockSpendResult<Consensus::BlockSpendEffects> ValidateAndStageSpend(Consensus::BlockScriptChecker& script_checker)
-        EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
+    [[nodiscard]] Consensus::BlockSpendResult<Consensus::BlockSpendEffects> ValidateAndStageSpend(Consensus::BlockScriptChecker& script_checker);
     [[nodiscard]] Consensus::BlockSpendResult<Consensus::BlockSpendEffects> CompleteSpendStage(
         Consensus::BlockSpendResult<Consensus::BlockSpendEffects> spend_effects,
-        Consensus::BlockScriptChecker& script_checker) EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
+        Consensus::BlockScriptChecker& script_checker);
 
 private:
     Consensus::BlockSpendWorkspace& m_spend_workspace;

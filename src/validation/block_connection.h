@@ -6,6 +6,7 @@
 #define BITCOIN_VALIDATION_BLOCK_CONNECTION_H
 
 #include <consensus/block_check.h>
+#include <consensus/block_commit.h>
 #include <consensus/block_consensus_pipeline.h>
 #include <consensus/block_spend.h>
 #include <kernel/cs_main.h>
@@ -61,8 +62,6 @@ struct BlockConnectionContext {
  */
 struct BlockConnectionRuntime {
     kernel::Notifications& notifications;
-    BlockUndoWriter& undo_writer;
-    BlockIndexValidityCommitter& block_index_committer;
     Consensus::BlockScriptChecker& script_checker;
     BlockConnectionTrace& trace;
 };
@@ -86,6 +85,7 @@ struct BlockConnectionRequest {
 struct BlockConnectionCommitRuntime {
     BlockUndoWriter& undo_writer;
     BlockIndexValidityCommitter& block_index_committer;
+    Consensus::BlockSpendStateCommitter& spend_state_committer;
     BlockConnectionTrace& trace;
 };
 
@@ -108,7 +108,6 @@ enum class BlockConnectionStatus {
 struct BlockConnectionCommitPackage {
     uint256 expected_previous_block;
     Consensus::BlockCommitContext commit_context;
-    std::unique_ptr<BlockConnectionSpendState> spend_state;
     std::optional<Consensus::BlockSpendEffects> effects;
 };
 
@@ -124,6 +123,7 @@ struct BlockConnectionResult {
 
 class BlockConnectionEngine final {
 public:
+    [[nodiscard]] BlockConnectionResult ConnectPrepared(const BlockConnectionRequest& request, BlockValidationState& state) const;
     [[nodiscard]] BlockConnectionResult Connect(const BlockConnectionRequest& request, BlockValidationState& state) const
         EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
     [[nodiscard]] BlockConnectionResult Commit(const BlockConnectionCommitRequest& request, BlockConnectionCommitPackage package, BlockValidationState& state) const

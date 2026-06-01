@@ -30,8 +30,6 @@ class BlockConnectionState;
 
 struct CoreBlockConnectionRuntimeInputs {
     kernel::Notifications& notifications;
-    BlockUndoWriter& undo_writer;
-    BlockIndexValidityCommitter& block_index_committer;
     validation::ScriptCheckScheduler& script_check_scheduler;
     ValidationCache& validation_cache;
     CoreChainLock* chain_lock{nullptr};
@@ -55,8 +53,6 @@ public:
 private:
     kernel::Notifications& m_notifications;
     CBlockIndex& m_block_index;
-    BlockUndoWriter& m_undo_writer;
-    BlockIndexValidityCommitter& m_block_index_committer;
     CoreBlockConnectionPlan m_connection_plan;
     CoreBlockScriptChecks m_script_checks;
     BlockConnectionTrace& m_trace;
