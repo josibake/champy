@@ -6,6 +6,7 @@
 
 #include <validation/block_validation.h>
 #include <validation/chain_validation.h>
+#include <validation/runtime_time.h>
 #include <chainparams.h>
 #include <consensus/merkle.h>
 #include <validation_state.h>
@@ -89,10 +90,10 @@ struct BlockValidationStateCatcher : public CValidationInterface {
           m_state{} {}
 
 protected:
-    void BlockChecked(const std::shared_ptr<const CBlock>& block, const BlockValidationState& state) override
+    void BlockChecked(const validation::BlockCheckedEvent& event) override
     {
-        if (block->GetHash() != m_hash) return;
-        m_state = state;
+        if (event.block->GetHash() != m_hash) return;
+        m_state = event.state;
     }
 };
 
@@ -114,12 +115,14 @@ COutPoint ProcessBlock(const NodeContext& node, const std::shared_ptr<CBlock>& b
     node.validation_signals->RegisterValidationInterface(&bvsc);
     std::optional<node::MempoolChainSync> chain_events;
     if (node.mempool) chain_events.emplace(chainman.ActiveChainstate(), *node.mempool);
-    const NewBlockProcessingResult result{ChainValidationService{chainman}.ProcessNewBlock(
-        chain_events ? &*chain_events : nullptr,
-        block,
-        {.block_data_storage = BlockDataStorageMode::ForceStore, .header = {.min_pow_checked = true}},
-        CurrentBlockValidationTime())};
-    const bool duplicate{!result.new_block() && result.processed()};
+    const NewBlockProcessingResult result{ProcessNewBlock({
+        .chainman = chainman,
+        .chain_events = chain_events ? &*chain_events : nullptr,
+        .block = block,
+        .options = {.block_data_storage = BlockDataStorageMode::ForceStore, .header = {.min_pow_checked = true}},
+        .time = CurrentBlockValidationTime(),
+    })};
+    const bool duplicate{!result.HasNewStoredBlockData() && result.Processed()};
     assert(!duplicate);
     node.validation_signals->UnregisterValidationInterface(&bvsc);
     node.validation_signals->SyncWithValidationInterfaceQueue();

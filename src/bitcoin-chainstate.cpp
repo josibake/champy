@@ -15,6 +15,7 @@
 
 #include <cassert>
 #include <charconv>
+#include <ctime>
 #include <filesystem>
 #include <iostream>
 #include <optional>
@@ -50,15 +51,10 @@ public:
     }
 };
 
-class TestValidationInterface : public ValidationInterface
+ValidationInterface MakeValidationInterface()
 {
-public:
-    TestValidationInterface() = default;
-
-    std::optional<std::string> m_expected_valid_block = std::nullopt;
-
-    void BlockChecked(Block block, BlockValidationStateView state) override
-    {
+    ValidationInterface callbacks;
+    callbacks.block_checked = [](BlockView block, BlockValidationStateView state) {
         auto mode{state.GetValidationMode()};
         switch (mode) {
         case ValidationMode::VALID: {
@@ -104,42 +100,33 @@ public:
             return;
         }
         }
-    }
-};
+    };
+    return callbacks;
+}
 
-class TestKernelNotifications : public KernelNotifications
+KernelNotifications MakeNotifications()
 {
-public:
-    void BlockTipHandler(SynchronizationState, const BlockTreeEntry, double) override
-    {
+    KernelNotifications notifications;
+    notifications.block_tip = [](SynchronizationState, BlockInfoView, double) {
         std::cout << "Block tip changed" << std::endl;
-    }
-
-    void ProgressHandler(std::string_view title, int progress_percent, bool resume_possible) override
-    {
+    };
+    notifications.progress = [](std::string_view title, int progress_percent, bool resume_possible) {
         std::cout << "Made progress: " << title << " " << progress_percent << "%" << std::endl;
-    }
-
-    void WarningSetHandler(Warning warning, std::string_view message) override
-    {
+    };
+    notifications.warning_set = [](Warning warning, std::string_view message) {
         std::cout << message << std::endl;
-    }
-
-    void WarningUnsetHandler(Warning warning) override
-    {
+    };
+    notifications.warning_unset = [](Warning warning) {
         std::cout << "Warning unset: " << static_cast<std::underlying_type_t<Warning>>(warning) << std::endl;
-    }
-
-    void FlushErrorHandler(std::string_view error) override
-    {
+    };
+    notifications.flush_error = [](std::string_view error) {
         std::cout << error << std::endl;
-    }
-
-    void FatalErrorHandler(std::string_view error) override
-    {
+    };
+    notifications.fatal_error = [](std::string_view error) {
         std::cout << error << std::endl;
-    }
-};
+    };
+    return notifications;
+}
 
 int main(int argc, char* argv[])
 {
@@ -174,19 +161,21 @@ int main(int argc, char* argv[])
     ChainParams params{has_regtest_flag ? ChainType::REGTEST : ChainType::MAINNET};
     options.SetChainParams(params);
 
-    options.SetNotifications(std::make_shared<TestKernelNotifications>());
-    options.SetValidationInterface(std::make_shared<TestValidationInterface>());
+    options.SetNotifications(MakeNotifications());
+    options.SetValidationInterface(MakeValidationInterface());
 
     Context context{options};
 
-    ChainstateManagerOptions chainman_opts{context, abs_datadir.string(), (abs_datadir / "blocks").string()};
+    ChainstateOptions chainman_opts{context, abs_datadir.string(), (abs_datadir / "blocks").string()};
     chainman_opts.SetWorkerThreads(4);
+    ChainstateRuntime runtime_options;
+    runtime_options.SetCurrentTime(std::time(nullptr));
 
-    std::unique_ptr<ChainMan> chainman;
+    std::unique_ptr<Chainstate> chainman;
     try {
-        chainman = std::make_unique<ChainMan>(context, chainman_opts);
+        chainman = std::make_unique<Chainstate>(chainman_opts, runtime_options);
     } catch (std::exception&) {
-        std::cerr << "Failed to instantiate ChainMan, exiting" << std::endl;
+        std::cerr << "Failed to instantiate Chainstate, exiting" << std::endl;
         return 1;
     }
 
@@ -199,15 +188,15 @@ int main(int argc, char* argv[])
         }
 
         auto raw_block{hex_string_to_byte_vec(line)};
-        std::unique_ptr<Block> block;
-        try {
-            block = std::make_unique<Block>(raw_block);
-        } catch (std::exception&) {
+        auto block{Block::Parse(raw_block)};
+        if (!block) {
             std::cerr << "Block decode failed, try again:" << std::endl;
             continue;
         }
 
-        const BlockProcessResult process_result{chainman->ProcessBlock(*block)};
+        BlockValidationOptions validation_options;
+        validation_options.SetCurrentTime(std::time(nullptr));
+        const BlockProcessResult process_result{chainman->ProcessBlock(*block, validation_options)};
         if (process_result.processed) {
             std::cerr << "Block has not yet been rejected" << std::endl;
         } else {

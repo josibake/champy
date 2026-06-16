@@ -4,6 +4,7 @@
 //
 #include <validation/block_validation.h>
 #include <validation/chain_validation.h>
+#include <validation/runtime_time.h>
 #include <chainparams.h>
 #include <consensus/amount.h>
 #include <consensus/validation.h>
@@ -102,11 +103,13 @@ BOOST_FIXTURE_TEST_CASE(connect_tip_does_not_cache_inputs_on_failed_connect, Tes
 
     const auto tip{WITH_LOCK(cs_main, return chainstate.m_chain.Tip()->GetBlockHash())};
     const CBlock block{CreateBlock({tx}, CScript{} << OP_TRUE, chainstate)};
-    BOOST_CHECK(ChainValidationService{*Assert(m_node.chainman)}.ProcessNewBlock(
-        std::make_shared<CBlock>(block),
-        {.block_data_storage = BlockDataStorageMode::ForceStore, .header = {.min_pow_checked = true}},
-        CurrentBlockValidationTime())
-        .processed());
+    BOOST_CHECK(ProcessNewBlock({
+        .chainman = *Assert(m_node.chainman),
+        .block = std::make_shared<CBlock>(block),
+        .options = {.block_data_storage = BlockDataStorageMode::ForceStore, .header = {.min_pow_checked = true}},
+        .time = CurrentBlockValidationTime(),
+    })
+        .Processed());
 
     LOCK(cs_main);
     BOOST_CHECK_EQUAL(tip, chainstate.m_chain.Tip()->GetBlockHash()); // block rejected

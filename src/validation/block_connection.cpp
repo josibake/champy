@@ -19,7 +19,6 @@
 #include <validation/block_validation.h>
 #include <validation/block_validation_error.h>
 #include <validation/block_validation_policy.h>
-#include <validation/core_block_commit_adapters.h>
 #include <validation/core_block_connection_attempt.h>
 #include <validation_state.h>
 
@@ -30,19 +29,80 @@ TRACEPOINT_SEMAPHORE(validation, block_connected);
 
 namespace validation {
 
-BlockConnectionResult BlockConnectionEngine::Connect(const BlockConnectionRequest& request, BlockValidationState& state) const
+BlockConnectionBlockPosition SnapshotBlockConnectionPosition(const CBlockIndex& block_index)
+{
+    AssertLockHeld(cs_main);
+    return {
+        .hash = block_index.GetBlockHash(),
+        .parent_hash = block_index.pprev == nullptr ? uint256{} : block_index.pprev->GetBlockHash(),
+        .height = block_index.nHeight,
+    };
+}
+
+namespace {
+
+[[nodiscard]] BlockConnectionResult CommitBlockConnectionEffects(const BlockConnectionCommitRequest& request, BlockConnectionCommitPackage package, BlockValidationState& state)
+    EXCLUSIVE_LOCKS_REQUIRED(::cs_main)
 {
     AssertLockHeld(cs_main);
 
+    const BlockConnectionCommitRuntime& runtime{request.runtime};
+    const BlockConnectionCommitContext& context{request.context};
+    [[maybe_unused]] const BlockConnectionBlockPosition& block_position{context.block_position};
+    BlockConnectionState& connection_state{context.connection_state};
+    BlockConnectionTrace& trace{runtime.trace};
+    const CBlock& block{context.block};
+    [[maybe_unused]] const uint256 block_hash{block.GetHash()};
+
+    if (connection_state.BestBlock() != package.expected_previous_block) {
+        state.Error("stale block connection");
+        return BlockConnectionResult::Failed();
+    }
+
+    if (!package.effects) {
+        connection_state.SetBestBlock(package.commit_context.new_best_block);
+        return BlockConnectionResult::Connected();
+    }
+
+    const auto commit{Consensus::CommitBlockEffects(
+        package.commit_context,
+        *package.effects,
+        runtime.revert_data_writer,
+        runtime.spend_state_committer,
+        runtime.metadata_committer)};
+    if (!commit) {
+        ApplyBlockCommitError(state, commit.error());
+        return BlockConnectionResult::CommitFailed(commit.error().failure_state);
+    }
+
+    trace.UndoWritten();
+    trace.IndexCommitted();
+
+    TRACEPOINT(validation, block_connected,
+               block_hash.data(),
+               block_position.height,
+               block.vtx.size(),
+               package.effects->inputs,
+               package.effects->sigop_cost,
+               trace.TraceDuration().count());
+
+    return BlockConnectionResult::Connected();
+}
+
+} // namespace
+
+BlockConnectionResult BlockConnectionEngine::ConnectPrepared(const BlockConnectionRequest& request, BlockValidationState& state) const
+{
     const BlockConnectionRuntime& runtime{request.runtime};
     const BlockConnectionContext& context{request.context};
     const CBlock& block{request.block};
-    CBlockIndex& block_index{request.block_index};
+    const BlockConnectionBlockPosition& block_position{request.block_position};
     BlockConnectionState& connection_state{request.connection_state};
     const BlockConnectionOptions& options{request.options};
 
     const uint256 block_hash{block.GetHash()};
-    assert(*block_index.phashBlock == block_hash);
+    assert(block_position.hash == block_hash);
+    assert(context.consensus_context.commit.block_height == block_position.height);
 
     BlockConnectionTrace& trace{runtime.trace};
     const Consensus::Params& consensus_params{context.consensus_params};
@@ -58,12 +118,12 @@ BlockConnectionResult BlockConnectionEngine::Connect(const BlockConnectionReques
             state.Error(message.original);
             return BlockConnectionResult::Failed();
         }
-        LogError("%s: Consensus::CheckBlock: %s\n", __func__, state.ToString());
+        LogError("%s: Consensus::CheckBlock: %s\n", __func__, FormatValidationStateForLog(state));
         return BlockConnectionResult::Failed();
     }
 
     // Verify that the view's current state corresponds to the previous block.
-    const uint256 hashPrevBlock{block_index.pprev == nullptr ? uint256{} : block_index.pprev->GetBlockHash()};
+    const uint256 hashPrevBlock{block_position.parent_hash};
     assert(hashPrevBlock == connection_state.BestBlock());
 
     trace.CountBlock();
@@ -71,14 +131,12 @@ BlockConnectionResult BlockConnectionEngine::Connect(const BlockConnectionReques
     // Special case for the genesis block, skipping connection of its
     // transactions. Its coinbase is unspendable.
     if (block_hash == consensus_params.hashGenesisBlock) {
-        if (options.commit) {
-            connection_state.SetBestBlock(block_index.GetBlockHash());
-        }
-        return BlockConnectionResult::Connected();
+        return BlockConnectionResult::Connected(BlockConnectionCommitPackage{
+            .expected_previous_block = hashPrevBlock,
+            .commit_context = context.consensus_context.commit,
+            .effects = std::nullopt,
+        });
     }
-
-    BlockUndoWriter& undo_writer{runtime.undo_writer};
-    BlockIndexValidityCommitter& block_index_committer{runtime.block_index_committer};
 
     trace.SanityChecksDone();
     trace.ForkChecksDone();
@@ -93,15 +151,12 @@ BlockConnectionResult BlockConnectionEngine::Connect(const BlockConnectionReques
     BlockConnectionSpendState& block_spend{**spend_state};
     CoreBlockConnectionAttempt connection_attempt{
         block,
-        block_index,
-        undo_writer,
-        block_index_committer,
-        connection_state,
         block_spend.Workspace(),
-        block_spend.Committer(),
         context.consensus_context,
         context.spend_options};
-    auto spend_effects{connection_attempt.ValidateAndStageSpend(runtime.script_checker)};
+    auto spend_effects{runtime.spend_joiner == nullptr ?
+        connection_attempt.ValidateAndStageSpend(runtime.script_checker) :
+        connection_attempt.ValidateAndStageSpend(*runtime.spend_joiner, runtime.script_checker)};
     const int spend_inputs{spend_effects ? spend_effects->inputs : 0};
     trace.SpendStageValidated(block.vtx.size(), spend_inputs);
 
@@ -110,40 +165,22 @@ BlockConnectionResult BlockConnectionEngine::Connect(const BlockConnectionReques
     spend_effects = connection_attempt.CompleteSpendStage(std::move(spend_effects), runtime.script_checker);
     if (!spend_effects) {
         ApplyBlockSpendError(state, spend_effects.error());
-        LogInfo("Block validation error: %s", state.ToString());
+        LogInfo("Block validation error: %s", FormatValidationStateForLog(state));
         return BlockConnectionResult::Failed();
     }
     assert(spend_effects);
-    const Consensus::BlockSpendEffects& effects{*spend_effects};
-    trace.SpendStageCompleted(effects.inputs);
+    trace.SpendStageCompleted(spend_effects->inputs);
 
-    if (!options.commit) {
-        return BlockConnectionResult::Connected();
-    }
+    return BlockConnectionResult::Connected(BlockConnectionCommitPackage{
+        .expected_previous_block = hashPrevBlock,
+        .commit_context = context.consensus_context.commit,
+        .effects = std::move(*spend_effects),
+    });
+}
 
-    if (const auto spend_state_commit{connection_attempt.WriteUndoAndCommitSpendState(effects)}; !spend_state_commit) {
-        ApplyBlockCommitError(state, spend_state_commit.error());
-        return BlockConnectionResult::Failed();
-    }
-
-    trace.UndoWritten();
-
-    if (const auto index_commit{connection_attempt.CommitBlockIndex(effects)}; !index_commit) {
-        ApplyBlockCommitError(state, index_commit.error());
-        return BlockConnectionResult::Failed();
-    }
-
-    trace.IndexCommitted();
-
-    TRACEPOINT(validation, block_connected,
-               block_hash.data(),
-               block_index.nHeight,
-               block.vtx.size(),
-               effects.inputs,
-               effects.sigop_cost,
-               trace.TraceDuration().count());
-
-    return BlockConnectionResult::Connected();
+BlockConnectionResult BlockConnectionEngine::Commit(const BlockConnectionCommitRequest& request, BlockConnectionCommitPackage package, BlockValidationState& state) const
+{
+    return CommitBlockConnectionEffects(request, std::move(package), state);
 }
 
 } // namespace validation

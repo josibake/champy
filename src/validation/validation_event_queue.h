@@ -5,30 +5,79 @@
 #ifndef BITCOIN_VALIDATION_EVENT_QUEUE_H
 #define BITCOIN_VALIDATION_EVENT_QUEUE_H
 
-#include <kernel/cs_main.h>
+#include <arith_uint256.h>
+#include <primitives/block.h>
+#include <uint256.h>
+#include <validation_state.h>
 
+#include <cstdint>
 #include <memory>
+#include <optional>
 
 class BlockValidationState;
 class CBlock;
-class CBlockIndex;
-struct CBlockLocator;
 class ValidationSignals;
 
 namespace validation {
+
+struct ValidationBlockInfo {
+    uint256 hash{};
+    std::optional<uint256> previous_hash{};
+    int height{-1};
+    CBlockHeader header{};
+    arith_uint256 chain_work{};
+    int64_t chain_time_max{0};
+    int file_number{-1};
+    unsigned int data_pos{0};
+};
+
+struct BlockCheckedEvent {
+    std::shared_ptr<const CBlock> block;
+    BlockValidationState state;
+};
+
+struct PoWValidBlockEvent {
+    std::shared_ptr<const CBlock> block;
+    ValidationBlockInfo block_info;
+};
+
+struct BlockConnectedEvent {
+    std::shared_ptr<const CBlock> block;
+    ValidationBlockInfo block_info;
+};
+
+struct BlockDisconnectedEvent {
+    std::shared_ptr<const CBlock> block;
+    ValidationBlockInfo block_info;
+};
+
+struct TipUpdatedEvent {
+    ValidationBlockInfo new_tip;
+    std::optional<ValidationBlockInfo> fork;
+    bool initial_download{false};
+};
+
+struct ActiveTipChangedEvent {
+    ValidationBlockInfo new_tip;
+    bool initial_download{false};
+};
+
+struct ChainStateFlushedEvent {
+    CBlockLocator locator;
+};
 
 class ValidationEventQueue
 {
 public:
     virtual ~ValidationEventQueue() = default;
 
-    virtual void BlockChecked(const std::shared_ptr<const CBlock>& block, const BlockValidationState& state) = 0;
-    virtual void NewPoWValidBlock(const CBlockIndex* index, const std::shared_ptr<const CBlock>& block) = 0;
-    virtual void BlockConnected(std::shared_ptr<const CBlock> block, const CBlockIndex* index) = 0;
-    virtual void BlockDisconnected(std::shared_ptr<const CBlock> block, const CBlockIndex* index) = 0;
-    virtual void ChainStateFlushed(const CBlockLocator& locator) = 0;
-    virtual void UpdatedBlockTip(const CBlockIndex* new_tip, const CBlockIndex* fork, bool initial_download) EXCLUSIVE_LOCKS_REQUIRED(::cs_main) = 0;
-    virtual void ActiveTipChange(const CBlockIndex& new_tip, bool initial_download) = 0;
+    virtual void BlockChecked(BlockCheckedEvent event) = 0;
+    virtual void NewPoWValidBlock(PoWValidBlockEvent event) = 0;
+    virtual void BlockConnected(BlockConnectedEvent event) = 0;
+    virtual void BlockDisconnected(BlockDisconnectedEvent event) = 0;
+    virtual void ChainStateFlushed(ChainStateFlushedEvent event) = 0;
+    virtual void UpdatedBlockTip(TipUpdatedEvent event) = 0;
+    virtual void ActiveTipChange(ActiveTipChangedEvent event) = 0;
 };
 
 class CoreValidationEventQueue final : public ValidationEventQueue
@@ -36,13 +85,13 @@ class CoreValidationEventQueue final : public ValidationEventQueue
 public:
     explicit CoreValidationEventQueue(ValidationSignals* signals) : m_signals{signals} {}
 
-    void BlockChecked(const std::shared_ptr<const CBlock>& block, const BlockValidationState& state) override;
-    void NewPoWValidBlock(const CBlockIndex* index, const std::shared_ptr<const CBlock>& block) override;
-    void BlockConnected(std::shared_ptr<const CBlock> block, const CBlockIndex* index) override;
-    void BlockDisconnected(std::shared_ptr<const CBlock> block, const CBlockIndex* index) override;
-    void ChainStateFlushed(const CBlockLocator& locator) override;
-    void UpdatedBlockTip(const CBlockIndex* new_tip, const CBlockIndex* fork, bool initial_download) override EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
-    void ActiveTipChange(const CBlockIndex& new_tip, bool initial_download) override;
+    void BlockChecked(BlockCheckedEvent event) override;
+    void NewPoWValidBlock(PoWValidBlockEvent event) override;
+    void BlockConnected(BlockConnectedEvent event) override;
+    void BlockDisconnected(BlockDisconnectedEvent event) override;
+    void ChainStateFlushed(ChainStateFlushedEvent event) override;
+    void UpdatedBlockTip(TipUpdatedEvent event) override;
+    void ActiveTipChange(ActiveTipChangedEvent event) override;
 
 private:
     ValidationSignals* m_signals;

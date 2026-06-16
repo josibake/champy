@@ -13,9 +13,9 @@
 
 #include <algorithm>
 #include <condition_variable>
+#include <deque>
 #include <functional>
 #include <future>
-#include <queue>
 #include <ranges>
 #include <thread>
 #include <type_traits>
@@ -49,7 +49,7 @@ class ThreadPool
 private:
     std::string m_name;
     Mutex m_mutex;
-    std::queue<std::packaged_task<void()>> m_work_queue GUARDED_BY(m_mutex);
+    std::deque<std::packaged_task<void()>> m_work_queue GUARDED_BY(m_mutex);
     std::condition_variable m_cv;
     // Note: m_interrupt must be guarded by m_mutex, and cannot be replaced by an unguarded atomic bool.
     // This ensures threads blocked on m_cv reliably observe the change and proceed correctly without missing signals.
@@ -75,7 +75,7 @@ private:
                 }
 
                 task = std::move(m_work_queue.front());
-                m_work_queue.pop();
+                m_work_queue.pop_front();
             }
 
             {
@@ -134,16 +134,19 @@ public:
             // Ensure Stop() is not called from a worker thread while workers are still registered,
             // otherwise a self-join deadlock would occur.
             auto id = std::this_thread::get_id();
-            for (const auto& worker : m_workers) assert(worker.get_id() != id);
+            for (const auto& worker : m_workers)
+                assert(worker.get_id() != id);
             // Early shutdown to return right away on any concurrent Submit() call
             m_interrupt = true;
             threads_to_join.swap(m_workers);
         }
         m_cv.notify_all();
         // Help draining queue
-        while (ProcessTask()) {}
+        while (ProcessTask()) {
+        }
         // Free resources
-        for (auto& worker : threads_to_join) worker.join();
+        for (auto& worker : threads_to_join)
+            worker.join();
 
         // Since we currently wait for tasks completion, sanity-check empty queue
         LOCK(m_mutex);
@@ -181,16 +184,21 @@ public:
      *          uncaught exceptions, as they would otherwise be silently discarded.
      */
     template <class F>
-    [[nodiscard]] util::Expected<Future<F>, SubmitError> Submit(F&& fn) noexcept EXCLUSIVE_LOCKS_REQUIRED(!m_mutex)
+    [[nodiscard]] util::Expected<Future<F>, SubmitError> Submit(F&& fn) EXCLUSIVE_LOCKS_REQUIRED(!m_mutex)
     {
+        {
+            LOCK(m_mutex);
+            if (m_workers.empty()) return util::Unexpected{SubmitError::Inactive};
+            if (m_interrupt) return util::Unexpected{SubmitError::Interrupted};
+        }
+
         PackagedTask<F> task{std::forward<F>(fn)};
         auto future{task.get_future()};
         {
             LOCK(m_mutex);
             if (m_workers.empty()) return util::Unexpected{SubmitError::Inactive};
             if (m_interrupt) return util::Unexpected{SubmitError::Interrupted};
-
-            m_work_queue.emplace(std::move(task));
+            m_work_queue.emplace_back(std::move(task));
         }
         m_cv.notify_one();
         return {std::move(future)};
@@ -217,19 +225,39 @@ public:
      */
     template <std::ranges::sized_range R>
         requires(!std::is_lvalue_reference_v<R>)
-    [[nodiscard]] util::Expected<std::vector<RangeFuture<R>>, SubmitError> Submit(R&& fns) noexcept EXCLUSIVE_LOCKS_REQUIRED(!m_mutex)
+    [[nodiscard]] util::Expected<std::vector<RangeFuture<R>>, SubmitError> Submit(R&& fns) EXCLUSIVE_LOCKS_REQUIRED(!m_mutex)
     {
+        {
+            LOCK(m_mutex);
+            if (m_workers.empty()) return util::Unexpected{SubmitError::Inactive};
+            if (m_interrupt) return util::Unexpected{SubmitError::Interrupted};
+        }
+
         std::vector<RangeFuture<R>> futures;
         futures.reserve(std::ranges::size(fns));
+        std::vector<std::packaged_task<void()>> queued_tasks;
+        queued_tasks.reserve(std::ranges::size(fns));
+
+        for (auto&& fn : fns) {
+            PackagedTask<std::ranges::range_reference_t<R>> task{std::move(fn)};
+            futures.emplace_back(task.get_future());
+            queued_tasks.emplace_back(std::move(task));
+        }
 
         {
             LOCK(m_mutex);
             if (m_workers.empty()) return util::Unexpected{SubmitError::Inactive};
             if (m_interrupt) return util::Unexpected{SubmitError::Interrupted};
-            for (auto&& fn : fns) {
-                PackagedTask<std::ranges::range_reference_t<R>> task{std::move(fn)};
-                futures.emplace_back(task.get_future());
-                m_work_queue.emplace(std::move(task));
+            const size_t initial_size{m_work_queue.size()};
+            try {
+                for (auto& task : queued_tasks) {
+                    m_work_queue.emplace_back(std::move(task));
+                }
+            } catch (...) {
+                while (m_work_queue.size() > initial_size) {
+                    m_work_queue.pop_back();
+                }
+                throw;
             }
         }
         m_cv.notify_all();
@@ -249,7 +277,7 @@ public:
 
             // Pop the task
             task = std::move(m_work_queue.front());
-            m_work_queue.pop();
+            m_work_queue.pop_front();
         }
         task();
         return true;
@@ -282,12 +310,13 @@ public:
     }
 };
 
-constexpr std::string_view SubmitErrorString(const ThreadPool::SubmitError err) noexcept {
+constexpr std::string_view SubmitErrorString(const ThreadPool::SubmitError err) noexcept
+{
     switch (err) {
-        case ThreadPool::SubmitError::Inactive:
-            return "No active workers";
-        case ThreadPool::SubmitError::Interrupted:
-            return "Interrupted";
+    case ThreadPool::SubmitError::Inactive:
+        return "No active workers";
+    case ThreadPool::SubmitError::Interrupted:
+        return "Interrupted";
     }
     Assume(false); // Unreachable
     return "Unknown error";

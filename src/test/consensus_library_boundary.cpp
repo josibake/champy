@@ -46,7 +46,7 @@ public:
     Consensus::BlockCommitResult<void> CommitBlockMetadata(const Consensus::BlockCommitContext&, const Consensus::BlockSpendEffects&) override { return {}; }
 };
 
-class NoopBlockSpendStateCommitter final : public Consensus::BlockSpendStateCommitter {
+class NoopSpendCommitter final : public Consensus::SpendCommitter {
 public:
     Consensus::BlockCommitResult<void> CommitSpendState(const Consensus::BlockCommitContext&, const Consensus::BlockSpendEffects&) override { return {}; }
 };
@@ -120,7 +120,7 @@ int main()
     assert((*workspace)->StagedSpendView().HaveCoin(COutPoint{block.vtx[0]->GetHash(), 0}));
     assert((*workspace)->StagedSpendView().HaveCoin(COutPoint{block.vtx[1]->GetHash(), 0}));
 
-    NoopBlockSpendStateCommitter spend_committer;
+    NoopSpendCommitter spend_committer;
     NoopBlockCommitSideEffects side_effects;
     const auto commit{Consensus::CommitBlockStageEffects(context.commit, *effects, side_effects, spend_committer, side_effects)};
     assert(commit);

@@ -5,19 +5,28 @@
 #include <consensus/block_commit.h>
 
 namespace Consensus {
+namespace {
 
-BlockCommitResult<void> CommitBlockEffects(const BlockCommitContext& context, const BlockSpendEffects& effects, BlockRevertDataWriter& revert_data_writer, BlockSpendStateCommitter& spend_state_committer, BlockMetadataCommitter& metadata_committer)
+BlockCommitError TaintedCommitError(BlockCommitError error)
+{
+    error.failure_state = BlockCommitFailureState::Tainted;
+    return error;
+}
+
+} // namespace
+
+BlockCommitResult<void> CommitBlockEffects(const BlockCommitContext& context, const BlockSpendEffects& effects, BlockRevertDataWriter& revert_data_writer, SpendCommitter& spend_state_committer, BlockMetadataCommitter& metadata_committer)
 {
     if (const auto revert_write{revert_data_writer.WriteBlockRevertData(context, effects)}; !revert_write) {
         return Consensus::Unexpected<BlockCommitError>{revert_write.error()};
     }
 
     if (const auto spend_state_commit{spend_state_committer.CommitSpendState(context, effects)}; !spend_state_commit) {
-        return Consensus::Unexpected<BlockCommitError>{spend_state_commit.error()};
+        return Consensus::Unexpected<BlockCommitError>{TaintedCommitError(spend_state_commit.error())};
     }
 
     if (const auto metadata_commit{metadata_committer.CommitBlockMetadata(context, effects)}; !metadata_commit) {
-        return Consensus::Unexpected<BlockCommitError>{metadata_commit.error()};
+        return Consensus::Unexpected<BlockCommitError>{TaintedCommitError(metadata_commit.error())};
     }
 
     return {};

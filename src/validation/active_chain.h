@@ -23,6 +23,7 @@ struct ChainBlockSnapshot {
 
 struct ActiveChainTipSnapshot {
     uint256 hash{};
+    uint256 parent_hash{};
     int height{-1};
     int64_t time{0};
     arith_uint256 chain_work{};

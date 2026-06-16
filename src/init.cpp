@@ -83,6 +83,7 @@
 #include <util/threadnames.h>
 #include <util/time.h>
 #include <util/translation.h>
+#include <validation/runtime_time.h>
 #include <chainstate.h>
 #include <validationinterface.h>
 
@@ -1216,6 +1217,7 @@ static ChainstateLoadResult InitAndLoadChainstate(
     options.check_blocks = args.GetIntArg("-checkblocks", DEFAULT_CHECKBLOCKS);
     options.check_level = args.GetIntArg("-checklevel", DEFAULT_CHECKLEVEL);
     options.require_full_verification = args.IsArgSet("-checkblocks") || args.IsArgSet("-checklevel");
+    options.current_time = CurrentNodeTime();
     options.coins_error_cb = [] {
         uiInterface.ThreadSafeMessageBox(
             _("Error reading from database, shutting down."),
@@ -1765,8 +1767,15 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
     node.background_init_thread = std::thread(&util::TraceThread, "initload", [=, &chainman, &args, &node] {
         ScheduleBatchPriority();
         // Import blocks and ActivateBestChain()
-        ImportBlocks(chainman, vImportFiles);
-        WITH_LOCK(::cs_main, chainman.UpdateIBDStatus());
+        auto import_result{ImportBlocks(chainman, vImportFiles, CurrentNodeTime())};
+        if (!import_result) {
+            chainman.GetNotifications().fatalError(import_result.error().message);
+            return;
+        }
+        if (import_result->status == kernel::BlockImportStatus::Interrupted) {
+            return;
+        }
+        WITH_LOCK(::cs_main, chainman.UpdateIBDStatus(CurrentNodeTime()));
         if (args.GetBoolArg("-stopafterblockimport", DEFAULT_STOPAFTERBLOCKIMPORT)) {
             LogInfo("Stopping after block import");
             if (!(Assert(node.shutdown_request))()) {
@@ -1816,7 +1825,7 @@ bool AppInitMain(NodeContext& node, interfaces::BlockAndHeaderTipInfo* tip_info)
         if (tip_info) {
             tip_info->block_height = chain_active_height;
             tip_info->block_time = best_block_time;
-            tip_info->verification_progress = chainman.GuessVerificationProgress(&tip);
+            tip_info->verification_progress = chainman.GuessVerificationProgress(&tip, CurrentNodeTime());
         }
         if (tip_info && chainman.m_best_header) {
             tip_info->header_height = chainman.m_best_header->nHeight;

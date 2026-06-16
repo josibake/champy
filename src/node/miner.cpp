@@ -27,6 +27,7 @@
 #include <util/time.h>
 #include <validation/block_validation.h>
 #include <validation/chain_validation.h>
+#include <validation/runtime_time.h>
 #include <validation/tx_verify.h>
 #include <validation_state.h>
 
@@ -274,8 +275,13 @@ std::unique_ptr<CBlockTemplate> BlockAssembler::CreateNewBlock()
         const Consensus::BlockCheckOptions validity_options{
             .check_pow = false,
             .check_merkle_root = false};
-        if (BlockValidationState state{ChainValidationService{m_chainstate.m_chainman}.TestBlockValidity(m_chainstate, *pblock, validity_options, CurrentBlockValidationTime())}; !state.IsValid()) {
-            throw std::runtime_error(strprintf("TestBlockValidity failed: %s", state.ToString()));
+        if (BlockValidationState state{TestActiveBlockValidityLocked({
+                .chainman = m_chainstate.m_chainman,
+                .block = *pblock,
+                .options = validity_options,
+                .time = CurrentBlockValidationTime(),
+            })}; !state.IsValid()) {
+            throw std::runtime_error(strprintf("TestBlockValidity failed: %s", FormatValidationStateForLog(state)));
         }
     }
     const auto time_2{SteadyClock::now()};

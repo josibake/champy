@@ -8,6 +8,8 @@
 #include <chainstate.h>
 
 #include <arith_uint256.h>
+#include <validation/core_block_commit_adapters.h>
+#include <validation/core_block_connection_snapshot.h>
 #include <validation/core_coins_block_connection_state.h>
 #include <validation/block_data_adapters.h>
 #include <validation/block_index_adapters.h>
@@ -16,8 +18,11 @@
 #include <chain.h>
 #include <validation/chain_validation.h>
 #include <validation/core_chain_activation.h>
+#include <validation/core_block_index_invariants.h>
 #include <validation/core_chain_lock.h>
-#include <validation/core_chain_validation_context.h>
+#include <validation/core_chain_validation_runtimes.h>
+#include <validation/core_validation_event_snapshot.h>
+#include <validation/runtime_time.h>
 #include <validation/validation_commit_executor.h>
 #include <validation/validation_event_queue.h>
 #include <chainstate_event_sink.h>
@@ -28,7 +33,6 @@
 #include <flatfile.h>
 #include <kernel/chainparams.h>
 #include <kernel/coinstats.h>
-#include <kernel/messagestartchars.h>
 #include <kernel/notifications_interface.h>
 #include <kernel/warning.h>
 #include <logging/timer.h>
@@ -122,6 +126,7 @@ static std::optional<validation::ActiveChainTipSnapshot> MakeActiveChainTipSnaps
     if (!block_index) return std::nullopt;
     return validation::ActiveChainTipSnapshot{
         .hash = block_index->GetBlockHash(),
+        .parent_hash = block_index->pprev ? block_index->pprev->GetBlockHash() : uint256{},
         .height = block_index->nHeight,
         .time = block_index->GetBlockTime(),
         .chain_work = block_index->nChainWork,
@@ -134,6 +139,7 @@ static std::optional<ChainWorkBlockSnapshot> MakeChainWorkBlockSnapshot(const CB
     if (!block_index) return std::nullopt;
     return ChainWorkBlockSnapshot{
         .hash = block_index->GetBlockHash(),
+        .parent_hash = block_index->pprev ? block_index->pprev->GetBlockHash() : uint256{},
         .height = block_index->nHeight,
         .chain_work = block_index->nChainWork,
     };
@@ -229,6 +235,30 @@ static void AddMissingBlockIndexCandidates(
     }
 }
 
+static void RefreshBlockIndexCandidates(
+    const std::vector<CBlockIndex*>& block_indices,
+    const CChain& active_chain,
+    std::set<CBlockIndex*, CBlockIndexWorkComparator>& candidates)
+    EXCLUSIVE_LOCKS_REQUIRED(::cs_main)
+{
+    const CBlockIndex* tip{active_chain.Tip()};
+    if (tip == nullptr) {
+        candidates.clear();
+        return;
+    }
+
+    for (auto it{candidates.begin()}; it != candidates.end();) {
+        CBlockIndex* candidate{*it};
+        if (!CanBeBlockIndexCandidate(*candidate) || candidates.value_comp()(candidate, tip)) {
+            it = candidates.erase(it);
+            continue;
+        }
+        ++it;
+    }
+
+    AddMissingBlockIndexCandidates(block_indices, active_chain, candidates);
+}
+
 const CBlockIndex* Chainstate::FindForkInGlobalIndex(const CBlockLocator& locator) const
 {
     AssertLockHeld(cs_main);
@@ -319,7 +349,9 @@ void Chainstate::CheckForkWarningConditions()
     }
 }
 
-// Called both upon regular invalid block discovery *and* InvalidateBlock
+// Called both upon regular invalid block discovery *and* InvalidateBlock.
+// Leaves setBlockIndexCandidates consistent with the failed branch before
+// returning, so callers do not need a separate candidate repair step.
 void Chainstate::InvalidChainFound(CBlockIndex* pindexNew)
 {
     AssertLockHeld(cs_main);
@@ -327,6 +359,7 @@ void Chainstate::InvalidChainFound(CBlockIndex* pindexNew)
         m_chainman.m_best_invalid = pindexNew;
     }
     SetBlockFailureFlags(pindexNew);
+    RefreshBlockIndexCandidates();
     if (m_chainman.m_best_header != nullptr && m_chainman.m_best_header->GetAncestor(pindexNew->nHeight) == pindexNew) {
         m_chainman.RecalculateBestHeader();
     }
@@ -552,7 +585,9 @@ bool Chainstate::FlushStateToDisk(
     }
     if (full_flush_completed) {
         // Update best block in wallet (so we can detect restored wallets).
-        validation::CoreValidationEventQueue{m_chainman.m_options.signals}.ChainStateFlushed(GetLocator(m_chain.Tip()));
+        validation::CoreValidationEventQueue{m_chainman.m_options.signals}.ChainStateFlushed({
+            .locator = GetLocator(m_chain.Tip()),
+        });
     }
     } catch (const std::runtime_error& e) {
         return FatalError(m_chainman.GetNotifications(), state, strprintf(_("System error while flushing: %s"), e.what()));
@@ -564,7 +599,7 @@ void Chainstate::ForceFlushStateToDisk(bool wipe_cache)
 {
     BlockValidationState state;
     if (!this->FlushStateToDisk(state, wipe_cache ? FlushStateMode::FORCE_FLUSH : FlushStateMode::FORCE_SYNC)) {
-        LogWarning("Failed to force flush state (%s)", state.ToString());
+        LogWarning("Failed to force flush state (%s)", FormatValidationStateForLog(state));
     }
 }
 
@@ -573,7 +608,7 @@ void Chainstate::PruneAndFlush()
     BlockValidationState state;
     m_blockman.m_check_for_pruning = true;
     if (!this->FlushStateToDisk(state, FlushStateMode::NONE)) {
-        LogWarning("Failed to flush state (%s)", state.ToString());
+        LogWarning("Failed to flush state (%s)", FormatValidationStateForLog(state));
     }
 }
 
@@ -581,6 +616,7 @@ static void UpdateTipLog(
     const ChainstateManager& chainman,
     const CCoinsViewCache& coins_tip,
     const CBlockIndex* tip,
+    NodeSeconds current_time,
     const std::string& func_name,
     const std::string& prefix,
     const std::string& warning_messages) EXCLUSIVE_LOCKS_REQUIRED(::cs_main)
@@ -594,13 +630,13 @@ static void UpdateTipLog(
                    tip->GetBlockHash().ToString(), tip->nHeight, tip->nVersion,
                    log(tip->nChainWork.getdouble()) / log(2.0), tip->m_chain_tx_count,
                    FormatISO8601DateTime(tip->GetBlockTime()),
-                   chainman.GuessVerificationProgress(tip),
+                   chainman.GuessVerificationProgress(tip, current_time),
                    coins_tip.DynamicMemoryUsage() / double(1_MiB),
                    coins_tip.GetCacheSize(),
                    !warning_messages.empty() ? strprintf(" warning='%s'", warning_messages) : "");
 }
 
-void Chainstate::UpdateTip(const CBlockIndex* pindexNew, ChainstateEventSink* chain_events)
+void Chainstate::UpdateTip(const CBlockIndex* pindexNew, ChainstateEventSink* chain_events, NodeSeconds current_time)
 {
     AssertLockHeld(::cs_main);
     const auto& coins_tip = this->CoinsTip();
@@ -622,13 +658,14 @@ void Chainstate::UpdateTip(const CBlockIndex* pindexNew, ChainstateEventSink* ch
             }
         }
     }
-    UpdateTipLog(m_chainman, coins_tip, pindexNew, __func__, "",
+    UpdateTipLog(m_chainman, coins_tip, pindexNew, current_time, __func__, "",
                  util::Join(warning_messages, Untranslated(", ")).original);
 }
 
 /** Disconnect m_chain's tip. */
 bool Chainstate::DisconnectTip(
     BlockValidationState& state,
+    NodeSeconds current_time,
     ChainstateEventSink* chain_events)
 {
     AssertLockHeld(cs_main);
@@ -638,18 +675,19 @@ bool Chainstate::DisconnectTip(
     assert(pindexDelete->pprev);
     CoreBlockDataStore block_store{m_blockman};
     // Read block from disk.
-    std::shared_ptr<CBlock> pblock = std::make_shared<CBlock>();
-    CBlock& block = *pblock;
-    if (!block_store.ReadBlock(block, *pindexDelete)) {
+    auto block_result{block_store.ReadBlock(SnapshotBlockDataReadRequest(*pindexDelete))};
+    if (!block_result) {
         LogError("DisconnectTip(): Failed to read block\n");
         return false;
     }
+    std::shared_ptr<CBlock> pblock = std::make_shared<CBlock>(std::move(*block_result));
+    CBlock& block = *pblock;
     // Apply the block atomically to the chain state.
     const auto time_start{SteadyClock::now()};
     {
         CCoinsViewCache view(&CoinsTip());
         assert(view.GetBestBlock() == pindexDelete->GetBlockHash());
-        if (DisconnectBlock(block_store, block, pindexDelete, view) != DISCONNECT_OK) {
+        if (DisconnectBlock(block_store, block, SnapshotCoreBlockReplayBlock(*pindexDelete), view) != DISCONNECT_OK) {
             LogError("DisconnectTip(): DisconnectBlock %s failed\n", pindexDelete->GetBlockHash().ToString());
             return false;
         }
@@ -678,25 +716,32 @@ bool Chainstate::DisconnectTip(
         chain_events->BlockDisconnected(block);
     }
 
-    SetActiveChainTip(*pindexDelete->pprev);
-    m_chainman.UpdateIBDStatus();
+    const validation::ValidationBlockInfo disconnected_block_info{validation::SnapshotCoreValidationBlockInfo(*pindexDelete)};
 
-    UpdateTip(pindexDelete->pprev, chain_events);
+    SetActiveChainTip(*pindexDelete->pprev);
+    m_chainman.UpdateIBDStatus(current_time);
+
+    UpdateTip(pindexDelete->pprev, chain_events, current_time);
     // Let wallets know transactions went from 1-confirmed to
     // 0-confirmed or conflicted:
-    validation::CoreValidationEventQueue{m_chainman.m_options.signals}.BlockDisconnected(std::move(pblock), pindexDelete);
+    validation::CoreValidationEventQueue{m_chainman.m_options.signals}.BlockDisconnected({
+        .block = std::move(pblock),
+        .block_info = disconnected_block_info,
+    });
     return true;
 }
 
 bool Chainstate::ReplayBlocks()
 {
     CoreBlockDataStore block_store{m_blockman};
-    CoreBlockIndexStore block_index{m_chainman};
+    CoreBlockIndexStore block_index_store{m_chainman};
+    CoreBlockReplayIndex replay_index{block_index_store};
+    CoreBlockReplayCoins replay_coins{CoinsDB()};
     const BlockReplayRequest request{
-        .coins_db = CoinsDB(),
+        .coins = replay_coins,
         .block_reader = block_store,
         .undo_reader = block_store,
-        .block_index = block_index,
+        .block_index = replay_index,
         .notifications = m_chainman.GetNotifications(),
     };
     return ::ReplayBlocks(request);
@@ -709,13 +754,13 @@ void Chainstate::SetActiveChainTip(CBlockIndex& block_index)
     m_chainman.UpdateActiveTipSnapshot(&block_index);
 }
 
-void Chainstate::AdvanceActiveChainTip(CBlockIndex& block_index, ChainstateEventSink* chain_events)
+void Chainstate::AdvanceActiveChainTip(CBlockIndex& block_index, ChainstateEventSink* chain_events, NodeSeconds current_time)
 {
     AssertLockHeld(cs_main);
 
     SetActiveChainTip(block_index);
-    m_chainman.UpdateIBDStatus();
-    UpdateTip(&block_index, chain_events);
+    m_chainman.UpdateIBDStatus(current_time);
+    UpdateTip(&block_index, chain_events, current_time);
 }
 
 /**
@@ -786,6 +831,14 @@ void Chainstate::PruneBlockIndexCandidates() {
     assert(!setBlockIndexCandidates.empty());
 }
 
+void Chainstate::RefreshBlockIndexCandidates()
+{
+    AssertLockHeld(::cs_main);
+
+    CoreBlockIndexStore block_index_store{m_chainman};
+    ::RefreshBlockIndexCandidates(block_index_store.SnapshotBlockIndices(), m_chain, setBlockIndexCandidates);
+}
+
 static SynchronizationState GetSynchronizationState(bool init, bool blockfiles_indexed)
 {
     if (!init) return SynchronizationState::POST_INIT;
@@ -793,12 +846,12 @@ static SynchronizationState GetSynchronizationState(bool init, bool blockfiles_i
     return SynchronizationState::INIT_DOWNLOAD;
 }
 
-void ChainstateManager::UpdateIBDStatus()
+void ChainstateManager::UpdateIBDStatus(NodeSeconds current_time)
 {
     AssertLockHeld(cs_main);
     if (!m_cached_is_ibd.load(std::memory_order_relaxed)) return;
     if (m_blockman.LoadingBlocks()) return;
-    if (!ActiveChain().IsTipRecent(MinimumChainWork(), m_options.max_tip_age)) return;
+    if (!ActiveChain().IsTipRecent(MinimumChainWork(), current_time, m_options.max_tip_age)) return;
     LogInfo("Leaving InitialBlockDownload (latching to false)");
     m_cached_is_ibd.store(false, std::memory_order_relaxed);
 }
@@ -852,25 +905,36 @@ public:
     ChainstateActivationOrchestrator(
         Chainstate& chainstate,
         BlockValidationState& state,
+        NodeSeconds current_time,
         std::shared_ptr<const CBlock> cached_block,
-        ChainstateEventSink* chain_events)
+        ChainstateEventSink* chain_events,
+        CBlockIndex* target_block = nullptr)
         : m_chainstate{chainstate},
           m_state{state},
+          m_current_time{current_time},
           m_cached_block{std::move(cached_block)},
           m_chain_events{chain_events},
-          m_commit_executor{chainstate.m_chainstate_mutex}
+          m_commit_executor{chainstate.m_chainstate_mutex},
+          m_target_block{target_block}
     {
     }
 
-    bool Activate()
+    BlockActivationResult Activate()
     {
-        return m_commit_executor.RunSerialized([&]() -> bool {
+        return m_commit_executor.RunSerialized([&]() -> BlockActivationResult {
             return ActivateSerialized();
         });
     }
 
+    BlockActivationResult CommitReadyTip(CoreBlockConnectionCommitWork work)
+    {
+        return m_commit_executor.RunSerialized([&]() -> BlockActivationResult {
+            return CommitReadyTipSerialized(std::move(work));
+        });
+    }
+
 private:
-    bool ActivateSerialized()
+    BlockActivationResult ActivateSerialized()
     {
         do {
             LimitValidationQueueIfNeeded();
@@ -880,11 +944,11 @@ private:
                     return ActivateLocked(chain_lock);
                 })};
 
-            if (locked_result == ActivateBestChainLockedResult::SystemError) return false;
-            if (locked_result == ActivateBestChainLockedResult::NoWork) return true;
+            if (locked_result == ActivateBestChainLockedResult::SystemError) return BlockActivationResult::SystemError(m_activation_timings, m_connected_blocks);
+            if (locked_result == ActivateBestChainLockedResult::NoWork) return BlockActivationResult::Completed(m_activation_timings, m_connected_blocks);
             if (locked_result == ActivateBestChainLockedResult::Interrupted) break;
 
-            if (!FlushPeriodic()) return false;
+            if (!FlushPeriodic()) return BlockActivationResult::SystemError(m_activation_timings, m_connected_blocks);
 
             // Give activation a chance to run once before honoring interrupt so
             // genesis connection during LoadChainTip cannot leave a null best
@@ -893,7 +957,26 @@ private:
         } while (m_progress.new_tip != m_progress.most_work);
 
         m_chainstate.m_chainman.CheckBlockIndex();
-        return true;
+        return BlockActivationResult::Completed(m_activation_timings, m_connected_blocks);
+    }
+
+    BlockActivationResult CommitReadyTipSerialized(CoreBlockConnectionCommitWork work)
+    {
+        LimitValidationQueueIfNeeded();
+
+        const ActivateBestChainLockedResult locked_result{
+            m_commit_executor.RunChainstateCommitLockedWithUnlock([&](CoreChainLock& chain_lock) EXCLUSIVE_LOCKS_REQUIRED(cs_main) {
+                return CommitReadyTipLocked(std::move(work), chain_lock);
+            })};
+
+        if (locked_result == ActivateBestChainLockedResult::SystemError) return BlockActivationResult::SystemError(m_activation_timings, m_connected_blocks);
+        if (locked_result == ActivateBestChainLockedResult::NoWork) return BlockActivationResult::Completed(m_activation_timings, m_connected_blocks);
+        if (locked_result != ActivateBestChainLockedResult::Interrupted && !FlushPeriodic()) {
+            return BlockActivationResult::SystemError(m_activation_timings, m_connected_blocks);
+        }
+
+        m_chainstate.m_chainman.CheckBlockIndex();
+        return BlockActivationResult::Completed(m_activation_timings, m_connected_blocks);
     }
 
     void LimitValidationQueueIfNeeded() const
@@ -910,13 +993,13 @@ private:
     {
         CBlockIndex* starting_tip{m_chainstate.m_chain.Tip()};
         bool blocks_connected{false};
-        CoreChainValidationRuntime validation_runtime{m_chainstate.m_chainman};
-        validation::ValidationEventQueue& validation_events{validation_runtime.ValidationEvents()};
+        CoreActivationRuntime activation_runtime{m_chainstate.m_chainman};
+        validation::ValidationEventQueue& validation_events{activation_runtime.ValidationEvents()};
         do {
             std::vector<ConnectedBlock> connected_blocks; // Destructed before cs_main is unlocked.
 
             if (m_progress.most_work == nullptr) {
-                m_progress.most_work = m_chainstate.FindMostWorkChain();
+                m_progress.most_work = SelectMostWorkCandidate();
             }
 
             if (m_progress.most_work == nullptr || m_progress.most_work == m_chainstate.m_chain.Tip()) {
@@ -926,19 +1009,23 @@ private:
             CoreBlockDataStore block_store{m_chainstate.m_blockman};
             CoreBlockIndexStore block_index_store{m_chainstate.m_chainman};
             validation::CoreCoinsBlockConnectionState connection_state{*m_chainstate.m_coins_views->m_block_connection_view};
+            validation::CoreCoinsBlockConnectionSnapshotter connection_snapshotter{*m_chainstate.m_coins_views->m_block_connection_view};
+            CoreBlockSpendEffectsCommitter spend_state_committer{*m_chainstate.m_coins_views->m_block_connection_view};
             CoreChainActivationState activation_state{m_chainstate};
-            CoreChainValidationContext validation_context{m_chainstate.m_chainman, validation_runtime};
-            CoreConnectTipResources connection_resources{
-                .context = validation_context,
+            CoreChainActivationResources activation_resources{
+                .runtime = activation_runtime,
                 .block_reader = block_store,
                 .undo_writer = block_store,
                 .block_index_lookup = block_index_store,
                 .block_index_committer = block_index_store,
                 .connection_state = connection_state,
+                .connection_snapshotter = connection_snapshotter,
+                .spend_state_committer = spend_state_committer,
                 .last_script_check_reason_logged = m_chainstate.LastScriptCheckReasonLogged(),
                 .connected_blocks = connected_blocks,
                 .chain_events = m_chain_events,
                 .validation_events = validation_events,
+                .current_time = m_current_time,
                 .timing = {
                     .time_connect_total = m_chainstate.m_chainman.TimeConnectTotal(),
                     .time_flush = m_chainstate.m_chainman.TimeFlush(),
@@ -947,12 +1034,14 @@ private:
                     .time_total = m_chainstate.m_chainman.TimeTotal(),
                     .blocks_total = m_chainstate.m_chainman.NumBlocksTotal(),
                 },
+                .activation_timings = m_activation_timings,
+                .activation_connected_blocks = m_connected_blocks,
                 .chain_lock = &chain_lock,
             };
             const auto step_result{ActivateCoreBestChainStep(
                 {
                     .active_chain = activation_state,
-                    .connection = connection_resources,
+                    .resources = activation_resources,
                     .index_most_work = *m_progress.most_work,
                     .cached_best_block = CachedBlockForMostWork(),
                 },
@@ -965,8 +1054,11 @@ private:
             }
             m_progress.new_tip = m_chainstate.m_chain.Tip();
 
-            for (auto& [index, block] : std::move(connected_blocks)) {
-                validation_events.BlockConnected(std::move(Assert(block)), Assert(index));
+            for (auto& connected : connected_blocks) {
+                validation_events.BlockConnected({
+                    .block = std::move(Assert(connected.pblock)),
+                    .block_info = std::move(connected.block_info),
+                });
             }
         } while (!m_chainstate.m_chain.Tip() || (starting_tip && CBlockIndexWorkComparator()(m_chainstate.m_chain.Tip(), starting_tip)));
 
@@ -974,10 +1066,96 @@ private:
         return NotifyLocked(starting_tip, validation_events);
     }
 
+    ActivateBestChainLockedResult CommitReadyTipLocked(CoreBlockConnectionCommitWork work, CoreChainLock&) EXCLUSIVE_LOCKS_REQUIRED(cs_main)
+    {
+        CBlockIndex* starting_tip{m_chainstate.m_chain.Tip()};
+        CoreActivationRuntime activation_runtime{m_chainstate.m_chainman};
+        validation::ValidationEventQueue& validation_events{activation_runtime.ValidationEvents()};
+        std::vector<ConnectedBlock> connected_blocks; // Destructed before cs_main is unlocked.
+
+        CoreBlockIndexStore block_index_store{m_chainstate.m_chainman};
+        CBlockIndex* target_block{block_index_store.LookupBlockIndex(work.block_position.hash)};
+        if (!target_block) return ActivateBestChainLockedResult::NoWork;
+        CBlockIndex* most_work{m_chainstate.FindMostWorkChain()};
+        if (!most_work) return ActivateBestChainLockedResult::NoWork;
+        if (most_work->GetAncestor(target_block->nHeight) != target_block) return ActivateBestChainLockedResult::NoWork;
+        if (target_block->pprev != m_chainstate.m_chain.Tip()) return ActivateBestChainLockedResult::NoWork;
+
+        CoreBlockDataStore block_store{m_chainstate.m_blockman};
+        validation::CoreCoinsBlockConnectionState connection_state{*m_chainstate.m_coins_views->m_block_connection_view};
+        CoreBlockSpendEffectsCommitter spend_state_committer{*m_chainstate.m_coins_views->m_block_connection_view};
+        CoreChainActivationState activation_state{m_chainstate};
+
+        const CoreConnectTipResult commit_result{CommitCoreBlockConnection(
+            {
+                .runtime = activation_runtime,
+                .undo_writer = block_store,
+                .block_index_lookup = block_index_store,
+                .block_index_committer = block_index_store,
+                .connection_state = connection_state,
+                .spend_state_committer = spend_state_committer,
+                .connected_blocks = connected_blocks,
+                .chain_events = m_chain_events,
+                .validation_events = &validation_events,
+                .current_time = m_current_time,
+                .report_block_checked = true,
+                .timing = {
+                    .time_connect_total = m_chainstate.m_chainman.TimeConnectTotal(),
+                    .time_flush = m_chainstate.m_chainman.TimeFlush(),
+                    .time_chainstate = m_chainstate.m_chainman.TimeChainstate(),
+                    .time_post_connect = m_chainstate.m_chainman.TimePostConnect(),
+                    .time_total = m_chainstate.m_chainman.TimeTotal(),
+                    .blocks_total = m_chainstate.m_chainman.NumBlocksTotal(),
+                },
+                .activation_timings = m_activation_timings,
+                .activation_connected_blocks = m_connected_blocks,
+            },
+            std::move(work),
+            m_state)};
+
+        if (!commit_result.Succeeded()) {
+            if (m_state.IsInvalid()) {
+                if (m_state.GetResult() != BlockValidationResult::BLOCK_MUTATED) {
+                    activation_state.MarkInvalidChainFound(*target_block);
+                }
+                m_state = BlockValidationState();
+                m_progress.new_tip = m_chainstate.m_chain.Tip();
+                return ActivateBestChainLockedResult::Continue;
+            }
+
+            activation_state.NotifyReorgCompleted(m_chain_events, /*success=*/false);
+            return ActivateBestChainLockedResult::SystemError;
+        }
+
+        activation_state.PruneBlockIndexCandidates();
+        m_progress.most_work = most_work;
+        m_progress.new_tip = m_chainstate.m_chain.Tip();
+
+        for (auto& connected : connected_blocks) {
+            validation_events.BlockConnected({
+                .block = std::move(Assert(connected.pblock)),
+                .block_info = std::move(connected.block_info),
+            });
+        }
+
+        return NotifyLocked(starting_tip, validation_events);
+    }
+
     std::shared_ptr<const CBlock> CachedBlockForMostWork() const
     {
         if (!m_cached_block || !m_progress.most_work) return {};
         return m_cached_block->GetHash() == m_progress.most_work->GetBlockHash() ? m_cached_block : std::shared_ptr<const CBlock>{};
+    }
+
+    CBlockIndex* SelectMostWorkCandidate() EXCLUSIVE_LOCKS_REQUIRED(cs_main)
+    {
+        AssertLockHeld(cs_main);
+        CBlockIndex* most_work{m_chainstate.FindMostWorkChain()};
+        if (!m_target_block) return most_work;
+
+        if (most_work != m_target_block) return nullptr;
+        if (m_target_block->pprev != m_chainstate.m_chain.Tip()) return nullptr;
+        return m_target_block;
     }
 
     ActivateBestChainLockedResult NotifyLocked(
@@ -990,18 +1168,25 @@ private:
         // Enqueue while holding cs_main so UpdatedBlockTip is called in the
         // same order blocks are connected.
         if (&m_chainstate == &m_chainstate.m_chainman.ActiveChainstate() && pindex_fork != m_progress.new_tip) {
-            validation_events.UpdatedBlockTip(m_progress.new_tip, pindex_fork, still_in_ibd);
+            validation_events.UpdatedBlockTip({
+                .new_tip = validation::SnapshotCoreValidationBlockInfo(*Assert(m_progress.new_tip)),
+                .fork = pindex_fork ? std::optional<validation::ValidationBlockInfo>{validation::SnapshotCoreValidationBlockInfo(*pindex_fork)} : std::nullopt,
+                .initial_download = still_in_ibd,
+            });
 
             if (kernel::IsInterrupted(m_chainstate.m_chainman.GetNotifications().blockTip(
                     /*state=*/GetSynchronizationState(still_in_ibd, m_chainstate.m_chainman.m_blockman.m_blockfiles_indexed),
                     /*index=*/*m_progress.new_tip,
-                    /*verification_progress=*/m_chainstate.m_chainman.GuessVerificationProgress(m_progress.new_tip)))) {
+                    /*verification_progress=*/m_chainstate.m_chainman.GuessVerificationProgress(m_progress.new_tip, m_current_time)))) {
                 return ActivateBestChainLockedResult::Interrupted;
             }
         }
 
         if (&m_chainstate == &m_chainstate.m_chainman.ActiveChainstate()) {
-            validation_events.ActiveTipChange(*Assert(m_progress.new_tip), m_chainstate.m_chainman.IsInitialBlockDownload());
+            validation_events.ActiveTipChange({
+                .new_tip = validation::SnapshotCoreValidationBlockInfo(*Assert(m_progress.new_tip)),
+                .initial_download = m_chainstate.m_chainman.IsInitialBlockDownload(),
+            });
         }
         return ActivateBestChainLockedResult::Continue;
     }
@@ -1019,14 +1204,19 @@ private:
 
     Chainstate& m_chainstate;
     BlockValidationState& m_state;
+    NodeSeconds m_current_time;
     std::shared_ptr<const CBlock> m_cached_block;
     ChainstateEventSink* m_chain_events;
     validation::CoreValidationCommitExecutor m_commit_executor;
     ActivateBestChainProgress m_progress;
+    BlockActivationTimings m_activation_timings;
+    uint64_t m_connected_blocks{0};
+    CBlockIndex* m_target_block{nullptr};
 };
 
-bool Chainstate::ActivateBestChain(
+BlockActivationResult Chainstate::ActivateBestChain(
     BlockValidationState& state,
+    NodeSeconds current_time,
     std::shared_ptr<const CBlock> pblock,
     ChainstateEventSink* chain_events)
 {
@@ -1038,10 +1228,35 @@ bool Chainstate::ActivateBestChain(
     // sanely for performance or correctness!
     AssertLockNotHeld(::cs_main);
 
-    return ChainstateActivationOrchestrator{*this, state, std::move(pblock), chain_events}.Activate();
+    return ChainstateActivationOrchestrator{*this, state, current_time, std::move(pblock), chain_events}.Activate();
 }
 
-bool Chainstate::PreciousBlock(BlockValidationState& state, CBlockIndex* pindex, ChainstateEventSink* chain_events)
+BlockActivationResult Chainstate::ActivateMostWorkTipBlock(
+    BlockValidationState& state,
+    NodeSeconds current_time,
+    CBlockIndex& block_index,
+    std::shared_ptr<const CBlock> pblock,
+    ChainstateEventSink* chain_events)
+{
+    AssertLockNotHeld(m_chainstate_mutex);
+    AssertLockNotHeld(::cs_main);
+
+    return ChainstateActivationOrchestrator{*this, state, current_time, std::move(pblock), chain_events, &block_index}.Activate();
+}
+
+BlockActivationResult Chainstate::CommitMostWorkTipBlock(
+    BlockValidationState& state,
+    NodeSeconds current_time,
+    CoreBlockConnectionCommitWork work,
+    ChainstateEventSink* chain_events)
+{
+    AssertLockNotHeld(m_chainstate_mutex);
+    AssertLockNotHeld(::cs_main);
+
+    return ChainstateActivationOrchestrator{*this, state, current_time, {}, chain_events}.CommitReadyTip(std::move(work));
+}
+
+bool Chainstate::PreciousBlock(BlockValidationState& state, NodeSeconds current_time, CBlockIndex* pindex, ChainstateEventSink* chain_events)
 {
     AssertLockNotHeld(m_chainstate_mutex);
     AssertLockNotHeld(::cs_main);
@@ -1069,10 +1284,10 @@ bool Chainstate::PreciousBlock(BlockValidationState& state, CBlockIndex* pindex,
         }
     }
 
-    return ActivateBestChain(state, std::shared_ptr<const CBlock>(), chain_events);
+    return ActivateBestChain(state, current_time, std::shared_ptr<const CBlock>(), chain_events).Succeeded();
 }
 
-bool Chainstate::InvalidateBlock(BlockValidationState& state, CBlockIndex* const pindex, ChainstateEventSink* chain_events)
+bool Chainstate::InvalidateBlock(BlockValidationState& state, NodeSeconds current_time, CBlockIndex* const pindex, ChainstateEventSink* chain_events)
 {
     AssertLockNotHeld(m_chainstate_mutex);
     AssertLockNotHeld(::cs_main);
@@ -1125,7 +1340,7 @@ bool Chainstate::InvalidateBlock(BlockValidationState& state, CBlockIndex* const
 
                 // ActivateBestChain considers blocks already in m_chain
                 // unconditionally valid already, so force disconnect away from it.
-                bool ret = DisconnectTip(state, repair_events);
+                bool ret = DisconnectTip(state, current_time, repair_events);
                 // Let the event sink repair node state for the new tip. Deep
                 // invalidations skip restoration of disconnected transactions.
                 if (chain_events) {
@@ -1190,8 +1405,6 @@ bool Chainstate::InvalidateBlock(BlockValidationState& state, CBlockIndex* const
             if (!*disconnect_result) return false;
         }
 
-        m_chainman.CheckBlockIndex();
-
         const bool final_update_ok{commit_executor.RunBlockIndexLocked([&]() EXCLUSIVE_LOCKS_REQUIRED(cs_main) {
             if (m_chain.Contains(*to_mark_failed)) {
                 // If the to-be-marked invalid block is in the active chain, something is interfering and we can't proceed.
@@ -1206,20 +1419,15 @@ bool Chainstate::InvalidateBlock(BlockValidationState& state, CBlockIndex* const
                 setBlockIndexCandidates.erase(pindex);
             }
 
-            // If any new blocks somehow arrived while we were disconnecting
-            // (above), then the pre-calculation of what should go into
-            // setBlockIndexCandidates may have missed entries. This would
-            // technically be an inconsistency in the block index, but if we clean
-            // it up here, this should be an essentially unobservable error.
-            // Loop back over all block index entries and add any missing entries
-            // to setBlockIndexCandidates.
-            CoreBlockIndexStore block_index_store{m_chainman};
-            AddMissingBlockIndexCandidates(block_index_store.SnapshotBlockIndices(), m_chain, setBlockIndexCandidates);
-
             InvalidChainFound(to_mark_failed);
             return true;
         })};
         if (!final_update_ok) return false;
+
+        // InvalidChainFound repairs candidates that could have arrived while
+        // this invalidation was disconnecting active blocks. Check the block
+        // index only after that repair has completed.
+        m_chainman.CheckBlockIndex();
 
         // Only notify about a new block tip if the active chain was modified.
         if (pindex_was_in_chain) {
@@ -1233,11 +1441,19 @@ bool Chainstate::InvalidateBlock(BlockValidationState& state, CBlockIndex* const
             (void)m_chainman.GetNotifications().blockTip(
                 /*state=*/GetSynchronizationState(m_chainman.IsInitialBlockDownload(), m_chainman.m_blockman.m_blockfiles_indexed),
                 /*index=*/*to_mark_failed->pprev,
-                /*verification_progress=*/WITH_LOCK(m_chainman.GetMutex(), return m_chainman.GuessVerificationProgress(to_mark_failed->pprev)));
+                /*verification_progress=*/WITH_LOCK(m_chainman.GetMutex(), return m_chainman.GuessVerificationProgress(to_mark_failed->pprev, current_time)));
 
             // Fire ActiveTipChange now for the current chain tip to make sure clients are notified.
             // ActivateBestChain may call this as well, but not necessarily.
-            validation::CoreValidationEventQueue{m_chainman.m_options.signals}.ActiveTipChange(*Assert(m_chain.Tip()), m_chainman.IsInitialBlockDownload());
+            validation::ActiveTipChangedEvent active_tip_event;
+            {
+                LOCK(m_chainman.GetMutex());
+                active_tip_event = {
+                    .new_tip = validation::SnapshotCoreValidationBlockInfo(*Assert(m_chain.Tip())),
+                    .initial_download = m_chainman.IsInitialBlockDownload(),
+                };
+            }
+            validation::CoreValidationEventQueue{m_chainman.m_options.signals}.ActiveTipChange(active_tip_event);
         }
         return true;
     });
@@ -1354,7 +1570,7 @@ void ChainstateManager::ReceivedBlockTransactions(const CBlock& block, CBlockInd
 
 
 
-bool Chainstate::LoadChainTip()
+bool Chainstate::LoadChainTip(NodeSeconds current_time)
 {
     AssertLockHeld(cs_main);
     const CCoinsViewCache& coins_cache = CoinsTip();
@@ -1372,7 +1588,7 @@ bool Chainstate::LoadChainTip()
         return false;
     }
     SetActiveChainTip(*pindex);
-    m_chainman.UpdateIBDStatus();
+    m_chainman.UpdateIBDStatus(current_time);
     tip = m_chain.Tip();
 
     // nSequenceId is one of the keys used to sort setBlockIndexCandidates. Ensure the
@@ -1391,7 +1607,7 @@ bool Chainstate::LoadChainTip()
               tip->GetBlockHash().ToString(),
               m_chain.Height(),
               FormatISO8601DateTime(tip->GetBlockTime()),
-              m_chainman.GuessVerificationProgress(tip));
+              m_chainman.GuessVerificationProgress(tip, current_time));
 
     // Ensure KernelNotifications m_tip_block is set even if no new block arrives.
     {
@@ -1399,7 +1615,7 @@ bool Chainstate::LoadChainTip()
         (void)m_chainman.GetNotifications().blockTip(
             /*state=*/GetSynchronizationState(/*init=*/true, m_chainman.m_blockman.m_blockfiles_indexed),
             /*index=*/*pindex,
-            /*verification_progress=*/m_chainman.GuessVerificationProgress(tip));
+            /*verification_progress=*/m_chainman.GuessVerificationProgress(tip, current_time));
     }
 
     CheckForkWarningConditions();
@@ -1506,187 +1722,6 @@ bool Chainstate::LoadGenesisBlock()
     return true;
 }
 
-void ChainstateManager::LoadExternalBlockFile(
-    AutoFile& file_in,
-    FlatFilePos* dbp,
-    std::multimap<uint256, FlatFilePos>* blocks_with_unknown_parent)
-{
-    // Either both should be specified (-reindex), or neither (-loadblock).
-    assert(!dbp == !blocks_with_unknown_parent);
-
-    const auto start{SteadyClock::now()};
-    const CChainParams& params{GetParams()};
-    CoreBlockDataStore block_store{m_blockman};
-    CoreBlockIndexStore block_index{*this};
-
-    int nLoaded = 0;
-    try {
-        BufferedFile blkdat{file_in, 2 * MAX_BLOCK_SERIALIZED_SIZE, MAX_BLOCK_SERIALIZED_SIZE + 8};
-        // nRewind indicates where to resume scanning in case something goes wrong,
-        // such as a block fails to deserialize.
-        uint64_t nRewind = blkdat.GetPos();
-        while (!blkdat.eof()) {
-            if (m_interrupt) return;
-
-            blkdat.SetPos(nRewind);
-            nRewind++; // start one byte further next time, in case of failure
-            blkdat.SetLimit(); // remove former limit
-            unsigned int nSize = 0;
-            try {
-                // locate a header
-                MessageStartChars buf;
-                blkdat.FindByte(std::byte(params.MessageStart()[0]));
-                nRewind = blkdat.GetPos() + 1;
-                blkdat >> buf;
-                if (buf != params.MessageStart()) {
-                    continue;
-                }
-                // read size
-                blkdat >> nSize;
-                if (nSize < 80 || nSize > MAX_BLOCK_SERIALIZED_SIZE)
-                    continue;
-            } catch (const std::exception&) {
-                // no valid block header found; don't complain
-                // (this happens at the end of every blk.dat file)
-                break;
-            }
-            try {
-                // read block header
-                const uint64_t nBlockPos{blkdat.GetPos()};
-                if (dbp)
-                    dbp->nPos = nBlockPos;
-                blkdat.SetLimit(nBlockPos + nSize);
-                CBlockHeader header;
-                blkdat >> header;
-                const uint256 hash{header.GetHash()};
-                // Skip the rest of this block (this may read from disk into memory); position to the marker before the
-                // next block, but it's still possible to rewind to the start of the current block (without a disk read).
-                nRewind = nBlockPos + nSize;
-                blkdat.SkipTo(nRewind);
-
-                std::shared_ptr<CBlock> pblock{}; // needs to remain available after the cs_main lock is released to avoid duplicate reads from disk
-
-                {
-                    LOCK(cs_main);
-                    // detect out of order blocks, and store them for later
-                    if (hash != params.GetConsensus().hashGenesisBlock && !block_index.LookupBlockIndex(header.hashPrevBlock)) {
-                        LogDebug(BCLog::REINDEX, "%s: Out of order block %s, parent %s not known\n", __func__, hash.ToString(),
-                                 header.hashPrevBlock.ToString());
-                        if (dbp && blocks_with_unknown_parent) {
-                            blocks_with_unknown_parent->emplace(header.hashPrevBlock, *dbp);
-                        }
-                        continue;
-                    }
-
-                    // process in case the block isn't known yet
-                    const CBlockIndex* pindex = block_index.LookupBlockIndex(hash);
-                    if (!pindex || (pindex->nStatus & BLOCK_HAVE_DATA) == 0) {
-                        // This block can be processed immediately; rewind to its start, read and deserialize it.
-                        blkdat.SetPos(nBlockPos);
-                        pblock = std::make_shared<CBlock>();
-                        blkdat >> TX_WITH_WITNESS(*pblock);
-                        nRewind = blkdat.GetPos();
-
-                        BlockValidationState state;
-                        if (ChainValidationService{*this}.AcceptBlock(
-                                pblock,
-                                state,
-                                {.block_data_storage = BlockDataStorageMode::ForceStore, .existing_block_pos = dbp, .header = {.min_pow_checked = true}},
-                                CurrentBlockValidationTime())
-                                .accepted_for_processing()) {
-                            nLoaded++;
-                        }
-                        if (state.IsError()) {
-                            break;
-                        }
-                    } else if (hash != params.GetConsensus().hashGenesisBlock && pindex->nHeight % 1000 == 0) {
-                        LogDebug(BCLog::REINDEX, "Block Import: already had block %s at height %d\n", hash.ToString(), pindex->nHeight);
-                    }
-                }
-
-                // Activate the genesis block so normal node progress can continue
-                // During first -reindex, this will only connect Genesis since
-                // ActivateBestChain only connects blocks which are in the block tree db,
-                // which only contains blocks whose parents are in it.
-                // But do this only if genesis isn't activated yet, to avoid connecting many blocks
-                // without assumevalid in the case of a continuation of a reindex that
-                // was interrupted by the user.
-                if (hash == params.GetConsensus().hashGenesisBlock && WITH_LOCK(::cs_main, return ActiveHeight()) == -1) {
-                    BlockValidationState state;
-                    if (!ActiveChainstate().ActivateBestChain(state, nullptr)) {
-                        break;
-                    }
-                }
-
-                if (block_store.IsPruneMode() && block_store.HasIndexedBlockFiles() && pblock) {
-                    // must update the tip for pruning to work while importing with -loadblock.
-                    // this is a tradeoff to conserve disk space at the expense of time
-                    // spent updating the tip to be able to prune.
-                    // otherwise, ActivateBestChain won't be called by the import process
-                    // until after all of the block files are loaded. ActivateBestChain can be
-                    // called by concurrent network message processing. but, that is not
-                    // reliable for the purpose of pruning while importing.
-                    if (auto result{ActivateBestChains()}; !result) {
-                        LogDebug(BCLog::REINDEX, "%s\n", util::ErrorString(result).original);
-                        break;
-                    }
-                }
-
-                NotifyHeaderTip();
-
-                if (!blocks_with_unknown_parent) continue;
-
-                // Recursively process earlier encountered successors of this block
-                std::deque<uint256> queue;
-                queue.push_back(hash);
-                while (!queue.empty()) {
-                    uint256 head = queue.front();
-                    queue.pop_front();
-                    auto range = blocks_with_unknown_parent->equal_range(head);
-                    while (range.first != range.second) {
-                        std::multimap<uint256, FlatFilePos>::iterator it = range.first;
-                        std::shared_ptr<CBlock> pblockrecursive = std::make_shared<CBlock>();
-                        if (block_store.ReadBlockFromPosition(*pblockrecursive, it->second, {})) {
-                            const auto& block_hash{pblockrecursive->GetHash()};
-                            LogDebug(BCLog::REINDEX, "%s: Processing out of order child %s of %s", __func__, block_hash.ToString(), head.ToString());
-                            LOCK(cs_main);
-                            BlockValidationState dummy;
-                            if (ChainValidationService{*this}.AcceptBlock(
-                                    pblockrecursive,
-                                    dummy,
-                                    {.block_data_storage = BlockDataStorageMode::ForceStore, .existing_block_pos = &it->second, .header = {.min_pow_checked = true}},
-                                    CurrentBlockValidationTime())
-                                    .accepted_for_processing()) {
-                                nLoaded++;
-                                queue.push_back(block_hash);
-                            }
-                        }
-                        range.first++;
-                        blocks_with_unknown_parent->erase(it);
-                        NotifyHeaderTip();
-                    }
-                }
-            } catch (const std::exception& e) {
-                // historical bugs added extra data to the block files that does not deserialize cleanly.
-                // commonly this data is between readable blocks, but it does not really matter. such data is not fatal to the import process.
-                // the code that reads the block files deals with invalid data by simply ignoring it.
-                // it continues to search for the next {4 byte magic message start bytes + 4 byte length + block} that does deserialize cleanly
-                // and passes all of the other block validation checks dealing with POW and the merkle root, etc...
-                // we merely note with this informational log message when unexpected data is encountered.
-                // we could also be experiencing a storage system read error, or a read of a previous bad write. these are possible, but
-                // less likely scenarios. we don't have enough information to tell a difference here.
-                // the reindex process is not the place to attempt to clean and/or compact the block files. if so desired, a studious node operator
-                // may use knowledge of the fact that the block files are not entirely pristine in order to prepare a set of pristine, and
-                // perhaps ordered, block files for later reindexing.
-                LogDebug(BCLog::REINDEX, "%s: unexpected data at file offset 0x%x - %s. continuing\n", __func__, (nRewind - 1), e.what());
-            }
-        }
-    } catch (const std::runtime_error& e) {
-        GetNotifications().fatalError(strprintf(_("System error while loading external block file: %s"), e.what()));
-    }
-    LogInfo("Loaded %i blocks from external file in %dms", nLoaded, Ticks<std::chrono::milliseconds>(SteadyClock::now() - start));
-}
-
 bool ChainstateManager::ShouldCheckBlockIndex() const
 {
     // Assert to verify Flatten() has been called.
@@ -1704,261 +1739,17 @@ void ChainstateManager::CheckBlockIndex() const
     LOCK(cs_main);
     CoreBlockIndexView block_index_view{*this};
     const auto block_index_snapshot{block_index_view.SnapshotBlockIndices()};
-
-    // During a reindex, we read the genesis block and call CheckBlockIndex before ActivateBestChain,
-    // so we have the genesis block in the block index but no active chain. (A few of the
-    // tests when iterating the block tree require that m_chain has been initialized.)
-    if (ActiveChain().Height() < 0) {
-        assert(block_index_snapshot.size() <= 1);
-        return;
-    }
-
-    // Build forward-pointing data structure for the entire block tree.
-    // For performance reasons, indexes of the best header chain are stored in a vector (within CChain).
-    // All remaining blocks are stored in a multimap.
-    // The best header chain can differ from the active chain: E.g. its entries may belong to blocks that
-    // are not yet validated.
-    CChain best_hdr_chain;
-    assert(m_best_header);
-    assert(!(m_best_header->nStatus & BLOCK_FAILED_VALID));
-    best_hdr_chain.SetTip(*m_best_header);
-
-    std::multimap<const CBlockIndex*, const CBlockIndex*> forward;
-    for (const CBlockIndex* block_index : block_index_snapshot) {
-        // Only save indexes in forward that are not part of the best header chain.
-        if (!best_hdr_chain.Contains(*block_index)) {
-            // Only genesis, which must be part of the best header chain, can have a nullptr parent.
-            assert(block_index->pprev);
-            forward.emplace(block_index->pprev, block_index);
-        }
-    }
-    assert(forward.size() + best_hdr_chain.Height() + 1 == block_index_snapshot.size());
-
-    const CBlockIndex* pindex = best_hdr_chain[0];
-    assert(pindex);
-    // Iterate over the entire block tree, using depth-first search.
-    // Along the way, remember whether there are blocks on the path from genesis
-    // block being explored which are the first to have certain properties.
-    size_t nNodes = 0;
-    int nHeight = 0;
-    const CBlockIndex* pindexFirstInvalid = nullptr;              // Oldest ancestor of pindex which is invalid.
-    const CBlockIndex* pindexFirstMissing = nullptr;              // Oldest ancestor of pindex which does not have BLOCK_HAVE_DATA.
-    const CBlockIndex* pindexFirstNeverProcessed = nullptr;       // Oldest ancestor of pindex for which nTx == 0.
-    const CBlockIndex* pindexFirstNotTreeValid = nullptr;         // Oldest ancestor of pindex which does not have BLOCK_VALID_TREE (regardless of being valid or not).
-    const CBlockIndex* pindexFirstNotTransactionsValid = nullptr; // Oldest ancestor of pindex which does not have BLOCK_VALID_TRANSACTIONS (regardless of being valid or not).
-    const CBlockIndex* pindexFirstNotChainValid = nullptr;        // Oldest ancestor of pindex which does not have BLOCK_VALID_CHAIN (regardless of being valid or not).
-    const CBlockIndex* pindexFirstNotScriptsValid = nullptr;      // Oldest ancestor of pindex which does not have BLOCK_VALID_SCRIPTS (regardless of being valid or not).
-
-    while (pindex != nullptr) {
-        nNodes++;
-        if (pindexFirstInvalid == nullptr && pindex->nStatus & BLOCK_FAILED_VALID) pindexFirstInvalid = pindex;
-        if (pindexFirstMissing == nullptr && !(pindex->nStatus & BLOCK_HAVE_DATA)) {
-            pindexFirstMissing = pindex;
-        }
-        if (pindexFirstNeverProcessed == nullptr && pindex->nTx == 0) pindexFirstNeverProcessed = pindex;
-        if (pindex->pprev != nullptr && pindexFirstNotTreeValid == nullptr && (pindex->nStatus & BLOCK_VALID_MASK) < BLOCK_VALID_TREE) pindexFirstNotTreeValid = pindex;
-
-        if (pindex->pprev != nullptr) {
-            if (pindexFirstNotTransactionsValid == nullptr &&
-                    (pindex->nStatus & BLOCK_VALID_MASK) < BLOCK_VALID_TRANSACTIONS) {
-                pindexFirstNotTransactionsValid = pindex;
-            }
-
-            if (pindexFirstNotChainValid == nullptr &&
-                    (pindex->nStatus & BLOCK_VALID_MASK) < BLOCK_VALID_CHAIN) {
-                pindexFirstNotChainValid = pindex;
-            }
-
-            if (pindexFirstNotScriptsValid == nullptr &&
-                    (pindex->nStatus & BLOCK_VALID_MASK) < BLOCK_VALID_SCRIPTS) {
-                pindexFirstNotScriptsValid = pindex;
-            }
-        }
-
-        // Begin: actual consistency checks.
-        if (pindex->pprev == nullptr) {
-            // Genesis block checks.
-            assert(pindex->GetBlockHash() == GetConsensus().hashGenesisBlock); // Genesis block's hash must match.
-            if (m_chainstate && m_chainstate->m_chain.Genesis() != nullptr) {
-                assert(pindex == m_chainstate->m_chain.Genesis()); // The chain's genesis block must be this block.
-            }
-        }
-        // nSequenceId can't be set higher than SEQ_ID_INIT_FROM_DISK{1} for blocks that aren't linked
-        // (negative is used for preciousblock, SEQ_ID_BEST_CHAIN_FROM_DISK{0} for active chain when loaded from disk)
-        if (!pindex->HaveNumChainTxs()) assert(pindex->nSequenceId <= SEQ_ID_INIT_FROM_DISK);
-        // VALID_TRANSACTIONS is equivalent to nTx > 0 for all nodes (whether or not pruning has occurred).
-        // HAVE_DATA is only equivalent to nTx > 0 (or VALID_TRANSACTIONS) if no pruning has occurred.
-        if (!m_blockman.m_have_pruned) {
-            // If we've never pruned, then HAVE_DATA should be equivalent to nTx > 0
-            assert(!(pindex->nStatus & BLOCK_HAVE_DATA) == (pindex->nTx == 0));
-            assert(pindexFirstMissing == pindexFirstNeverProcessed);
-        } else {
-            // If we have pruned, then we can only say that HAVE_DATA implies nTx > 0
-            if (pindex->nStatus & BLOCK_HAVE_DATA) assert(pindex->nTx > 0);
-        }
-        if (pindex->nStatus & BLOCK_HAVE_UNDO) assert(pindex->nStatus & BLOCK_HAVE_DATA);
-        // There should only be an nTx value if we have
-        // actually seen a block's transactions.
-        assert(((pindex->nStatus & BLOCK_VALID_MASK) >= BLOCK_VALID_TRANSACTIONS) == (pindex->nTx > 0)); // This is pruning-independent.
-        // All parents having had data (at some point) is equivalent to all parents being VALID_TRANSACTIONS, which is equivalent to HaveNumChainTxs().
-        assert((pindexFirstNeverProcessed == nullptr) == pindex->HaveNumChainTxs());
-        assert((pindexFirstNotTransactionsValid == nullptr) == pindex->HaveNumChainTxs());
-        assert(pindex->nHeight == nHeight); // nHeight must be consistent.
-        assert(pindex->pprev == nullptr || pindex->nChainWork >= pindex->pprev->nChainWork); // For every block except the genesis block, the chainwork must be larger than the parent's.
-        assert(nHeight < 2 || (pindex->pskip && (pindex->pskip->nHeight < nHeight))); // The pskip pointer must point back for all but the first 2 blocks.
-        assert(pindexFirstNotTreeValid == nullptr); // All block index entries must at least be TREE valid
-        if ((pindex->nStatus & BLOCK_VALID_MASK) >= BLOCK_VALID_TREE) assert(pindexFirstNotTreeValid == nullptr); // TREE valid implies all parents are TREE valid
-        if ((pindex->nStatus & BLOCK_VALID_MASK) >= BLOCK_VALID_CHAIN) assert(pindexFirstNotChainValid == nullptr); // CHAIN valid implies all parents are CHAIN valid
-        if ((pindex->nStatus & BLOCK_VALID_MASK) >= BLOCK_VALID_SCRIPTS) assert(pindexFirstNotScriptsValid == nullptr); // SCRIPTS valid implies all parents are SCRIPTS valid
-        if (pindexFirstInvalid == nullptr) {
-            // Checks for not-invalid blocks.
-            assert((pindex->nStatus & BLOCK_FAILED_VALID) == 0); // The failed flag cannot be set for blocks without invalid parents.
-        } else {
-            assert(pindex->nStatus & BLOCK_FAILED_VALID); // Invalid blocks and their descendants must be marked as invalid
-        }
-        // Make sure m_chain_tx_count sum is correctly computed.
-        if (!pindex->pprev) {
-            // If no previous block, nTx and m_chain_tx_count must be the same.
-            assert(pindex->m_chain_tx_count == pindex->nTx);
-        } else if (pindex->pprev->m_chain_tx_count > 0 && pindex->nTx > 0) {
-            // If previous m_chain_tx_count is set and number of transactions in block is known, sum must be set.
-            assert(pindex->m_chain_tx_count == pindex->nTx + pindex->pprev->m_chain_tx_count);
-        } else {
-            // Otherwise m_chain_tx_count must not be set.
-            assert(pindex->m_chain_tx_count == 0);
-        }
-        // There should be no block with more work than m_best_header, unless it's known to be invalid
-        assert((pindex->nStatus & BLOCK_FAILED_VALID) || pindex->nChainWork <= m_best_header->nChainWork);
-
-        // Chainstate-specific checks on setBlockIndexCandidates
-        if (m_chainstate && m_chainstate->m_chain.Tip() != nullptr) {
-            const auto& c{*m_chainstate};
-            // Two main factors determine whether pindex is a candidate in
-            // setBlockIndexCandidates:
-            //
-            // - If pindex has less work than the chain tip, it should not be a
-            //   candidate, and this will be asserted below. Otherwise it is a
-            //   potential candidate.
-            //
-            // - If pindex or one of its parent blocks back to the genesis
-            //   block never downloaded transactions (pindexFirstNeverProcessed
-            //   is non-null), it should not be a candidate.
-            if (!CBlockIndexWorkComparator()(pindex, c.m_chain.Tip()) && pindexFirstNeverProcessed == nullptr) {
-                if (pindexFirstInvalid == nullptr) {
-                    // If pindex and all its parents back to the genesis block
-                    // downloaded transactions, and the transactions were not
-                    // pruned (pindexFirstMissing is null), it is a potential
-                    // candidate. If pindex is the chain tip, it also is a
-                    // potential candidate.
-                    if (pindexFirstMissing == nullptr || pindex == c.m_chain.Tip()) {
-                        assert(c.setBlockIndexCandidates.contains(pindex));
-                    }
-                    // If some parent is missing, then it could be that this block was in
-                    // setBlockIndexCandidates but had to be removed because of the missing data.
-                    // In this case it must be in m_blocks_unlinked -- see test below.
-                }
-            } else { // If this block sorts worse than the current tip or some ancestor's block has never been seen, it cannot be in setBlockIndexCandidates.
-                assert(!c.setBlockIndexCandidates.contains(pindex));
-            }
-        }
-        // Check whether this block is in m_blocks_unlinked.
-        auto rangeUnlinked{m_blockman.m_blocks_unlinked.equal_range(pindex->pprev)};
-        bool foundInUnlinked = false;
-        while (rangeUnlinked.first != rangeUnlinked.second) {
-            assert(rangeUnlinked.first->first == pindex->pprev);
-            if (rangeUnlinked.first->second == pindex) {
-                foundInUnlinked = true;
-                break;
-            }
-            rangeUnlinked.first++;
-        }
-        if (pindex->pprev && (pindex->nStatus & BLOCK_HAVE_DATA) && pindexFirstNeverProcessed != nullptr && pindexFirstInvalid == nullptr) {
-            // If this block has block data available, some parent was never received, and has no invalid parents, it must be in m_blocks_unlinked.
-            assert(foundInUnlinked);
-        }
-        if (!(pindex->nStatus & BLOCK_HAVE_DATA)) assert(!foundInUnlinked); // Can't be in m_blocks_unlinked if we don't HAVE_DATA
-        if (pindexFirstMissing == nullptr) assert(!foundInUnlinked); // We aren't missing data for any parent -- cannot be in m_blocks_unlinked.
-        if (pindex->pprev && (pindex->nStatus & BLOCK_HAVE_DATA) && pindexFirstNeverProcessed == nullptr && pindexFirstMissing != nullptr) {
-            // We HAVE_DATA for this block, have received data for all parents at some point, but we're currently missing data for some parent.
-            assert(m_blockman.m_have_pruned);
-            // This block may have entered m_blocks_unlinked if:
-            //  - it has a descendant that at some point had more work than the
-            //    tip, and
-            //  - we tried switching to that descendant but were missing
-            //    data for some intermediate block between m_chain and the
-            //    tip.
-            // So if this block is itself better than any m_chain.Tip() and it wasn't in
-            // setBlockIndexCandidates, then it must be in m_blocks_unlinked.
-            if (m_chainstate) {
-                const auto& c{*m_chainstate};
-                if (!CBlockIndexWorkComparator()(pindex, c.m_chain.Tip()) && !c.setBlockIndexCandidates.contains(pindex)) {
-                    if (pindexFirstInvalid == nullptr) {
-                        assert(foundInUnlinked);
-                    }
-                }
-            }
-        }
-        // assert(pindex->GetBlockHash() == pindex->GetBlockHeader().GetHash()); // Perhaps too slow
-        // End: actual consistency checks.
-
-
-        // Try descending into the first subnode. Always process forks first and the best header chain after.
-        auto range{forward.equal_range(pindex)};
-        if (range.first != range.second) {
-            // A subnode not part of the best header chain was found.
-            pindex = range.first->second;
-            nHeight++;
-            continue;
-        } else if (best_hdr_chain.Contains(*pindex)) {
-            // Descend further into best header chain.
-            nHeight++;
-            pindex = best_hdr_chain[nHeight];
-            if (!pindex) break; // we are finished, since the best header chain is always processed last
-            continue;
-        }
-        // This is a leaf node.
-        // Move upwards until we reach a node of which we have not yet visited the last child.
-        while (pindex) {
-            // We are going to either move to a parent or a sibling of pindex.
-            // If pindex was the first with a certain property, unset the corresponding variable.
-            if (pindex == pindexFirstInvalid) pindexFirstInvalid = nullptr;
-            if (pindex == pindexFirstMissing) pindexFirstMissing = nullptr;
-            if (pindex == pindexFirstNeverProcessed) pindexFirstNeverProcessed = nullptr;
-            if (pindex == pindexFirstNotTreeValid) pindexFirstNotTreeValid = nullptr;
-            if (pindex == pindexFirstNotTransactionsValid) pindexFirstNotTransactionsValid = nullptr;
-            if (pindex == pindexFirstNotChainValid) pindexFirstNotChainValid = nullptr;
-            if (pindex == pindexFirstNotScriptsValid) pindexFirstNotScriptsValid = nullptr;
-            // Find our parent.
-            CBlockIndex* pindexPar = pindex->pprev;
-            // Find which child we just visited.
-            auto rangePar{forward.equal_range(pindexPar)};
-            while (rangePar.first->second != pindex) {
-                assert(rangePar.first != rangePar.second); // Our parent must have at least the node we're coming from as child.
-                rangePar.first++;
-            }
-            // Proceed to the next one.
-            rangePar.first++;
-            if (rangePar.first != rangePar.second) {
-                // Move to a sibling not part of the best header chain.
-                pindex = rangePar.first->second;
-                break;
-            } else if (pindexPar == best_hdr_chain[nHeight - 1]) {
-                // Move to pindex's sibling on the best-chain, if it has one.
-                pindex = best_hdr_chain[nHeight];
-                // There will not be a next block if (and only if) parent block is the best header.
-                assert((pindex == nullptr) == (pindexPar == best_hdr_chain.Tip()));
-                break;
-            } else {
-                // Move up further.
-                pindex = pindexPar;
-                nHeight--;
-                continue;
-            }
-        }
-    }
-
-    // Check that we actually traversed the entire block index.
-    assert(nNodes == forward.size() + best_hdr_chain.Height() + 1);
+    const validation::CoreBlockIndexInvariantView invariant_view{
+        .block_indices = std::span<const CBlockIndex* const>{block_index_snapshot},
+        .best_header = m_best_header,
+        .active_chain = m_chainstate ? &m_chainstate->m_chain : nullptr,
+        .candidates = m_chainstate ? &m_chainstate->setBlockIndexCandidates : nullptr,
+        .unlinked_blocks = &m_blockman.m_blocks_unlinked,
+        .dirty_block_indices = &m_blockman.DirtyBlockIndex(),
+        .genesis_hash = GetConsensus().hashGenesisBlock,
+        .have_pruned = m_blockman.m_have_pruned,
+    };
+    validation::AssertCoreBlockIndexInvariants(invariant_view);
 }
 
 std::string Chainstate::ToString()
@@ -2000,7 +1791,7 @@ bool Chainstate::ResizeCoinsCaches(size_t coinstip_size, size_t coinsdb_size)
     return ret;
 }
 
-double ChainstateManager::GuessVerificationProgress(const CBlockIndex* pindex) const
+double ChainstateManager::GuessVerificationProgress(const CBlockIndex* pindex, NodeSeconds current_time) const
 {
     AssertLockHeld(GetMutex());
     const ChainTxData& data{GetParams().TxData()};
@@ -2013,7 +1804,7 @@ double ChainstateManager::GuessVerificationProgress(const CBlockIndex* pindex) c
         return 0.0;
     }
 
-    const int64_t nNow{TicksSinceEpoch<std::chrono::seconds>(NodeClock::now())};
+    const int64_t nNow{TicksSinceEpoch<std::chrono::seconds>(current_time)};
     const auto block_time{
         (Assume(m_best_header) && std::abs(nNow - pindex->GetBlockTime()) <= Ticks<std::chrono::seconds>(2h) &&
          Assume(m_best_header->nHeight >= pindex->nHeight)) ?
@@ -2159,6 +1950,7 @@ std::optional<ChainWorkBlockSnapshot> ChainstateManager::ActiveTipChainWorkBlock
     if (!snapshot) return std::nullopt;
     return ChainWorkBlockSnapshot{
         .hash = snapshot->hash,
+        .parent_hash = snapshot->parent_hash,
         .height = snapshot->height,
         .chain_work = snapshot->chain_work,
     };
@@ -2709,7 +2501,10 @@ ChainstateManager::RawBlockDataReadResult ChainstateManager::ReadRawBlockData(co
 bool ChainstateManager::ReadStoredBlock(CBlock& block, const FlatFilePos& pos, const uint256& expected_hash)
 {
     CoreBlockDataStore block_store{m_blockman};
-    return block_store.ReadBlockFromPosition(block, pos, expected_hash);
+    auto block_result{block_store.ReadBlockFromPosition(pos, expected_hash)};
+    if (!block_result) return false;
+    block = std::move(*block_result);
+    return true;
 }
 
 bool ChainstateManager::HasBlockIndex(const uint256& block_hash) const
@@ -2938,7 +2733,7 @@ ChainstateManager::~ChainstateManager()
 }
 
 
-void ChainstateManager::ReportHeadersPresync(int64_t height, int64_t timestamp)
+void ChainstateManager::ReportHeadersPresync(int64_t height, int64_t timestamp, NodeSeconds current_time)
 {
     AssertLockNotHeld(GetMutex());
     {
@@ -2956,7 +2751,7 @@ void ChainstateManager::ReportHeadersPresync(int64_t height, int64_t timestamp)
     bool initial_download = IsInitialBlockDownload();
     GetNotifications().headerTip(GetSynchronizationState(initial_download, m_blockman.m_blockfiles_indexed), height, timestamp, /*presync=*/true);
     if (initial_download) {
-        int64_t blocks_left{(NodeClock::now() - NodeSeconds{std::chrono::seconds{timestamp}}) / GetConsensus().PowTargetSpacing()};
+        int64_t blocks_left{(current_time - NodeSeconds{std::chrono::seconds{timestamp}}) / GetConsensus().PowTargetSpacing()};
         blocks_left = std::max<int64_t>(0, blocks_left);
         const double progress{100.0 * height / (height + blocks_left)};
         LogInfo("Pre-synchronizing blockheaders, height: %d (~%.2f%%)\n", height, progress);
@@ -2980,14 +2775,14 @@ void ChainstateManager::RecalculateBestHeader()
 double ChainstateManager::GuessVerificationProgressForActiveTip() const
 {
     LOCK(GetMutex());
-    return GuessVerificationProgress(ActiveTip());
+    return GuessVerificationProgress(ActiveTip(), CurrentNodeTime());
 }
 
 double ChainstateManager::GuessVerificationProgress(const uint256& block_hash) const
 {
     LOCK(GetMutex());
     CoreBlockIndexView block_index{*this};
-    return GuessVerificationProgress(block_index.LookupBlockIndex(block_hash));
+    return GuessVerificationProgress(block_index.LookupBlockIndex(block_hash), CurrentNodeTime());
 }
 
 std::optional<int> ChainstateManager::BlocksAheadOfTip() const
@@ -3017,7 +2812,7 @@ std::pair<int, int> Chainstate::GetPruneRange(int last_height_can_prune) const
     return {0, prune_end};
 }
 
-util::Result<void> ChainstateManager::ActivateBestChains(ChainstateEventSink* chain_events)
+util::Result<void> ChainstateManager::ActivateBestChains(NodeSeconds current_time, ChainstateEventSink* chain_events)
 {
     AssertLockNotHeld(cs_main);
     Chainstate* chainstate;
@@ -3027,9 +2822,9 @@ util::Result<void> ChainstateManager::ActivateBestChains(ChainstateEventSink* ch
         chainstate = m_chainstate.get();
     }
     BlockValidationState state;
-    if (!chainstate->ActivateBestChain(state, nullptr, chain_events)) {
+    if (!chainstate->ActivateBestChain(state, current_time, nullptr, chain_events).Succeeded()) {
         LOCK(GetMutex());
-        return util::Error{Untranslated(strprintf("%s Failed to connect best block (%s)", chainstate->ToString(), state.ToString()))};
+        return util::Error{Untranslated(strprintf("%s Failed to connect best block (%s)", chainstate->ToString(), FormatValidationStateForLog(state)))};
     }
     return {};
 }

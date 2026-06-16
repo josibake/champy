@@ -42,6 +42,28 @@ void CheckRejectReason(const Consensus::BlockSpendResult<void>& result, const st
     BOOST_CHECK_EQUAL(result.error().reject_reason, reason);
 }
 
+class RecordingBlockScriptChecker final : public Consensus::BlockScriptChecker {
+public:
+    [[nodiscard]] Consensus::BlockSpendResult<void> Check(const Consensus::TransactionScriptCheckPlan& check) override
+    {
+        m_checks.push_back(check);
+        return {};
+    }
+
+    [[nodiscard]] Consensus::BlockSpendResult<void> Complete() override
+    {
+        ++m_completions;
+        return {};
+    }
+
+    [[nodiscard]] const std::vector<Consensus::TransactionScriptCheckPlan>& Checks() const noexcept { return m_checks; }
+    [[nodiscard]] int Completions() const noexcept { return m_completions; }
+
+private:
+    std::vector<Consensus::TransactionScriptCheckPlan> m_checks;
+    int m_completions{0};
+};
+
 } // namespace
 
 BOOST_AUTO_TEST_SUITE(consensus_script_checker_tests)
@@ -81,6 +103,25 @@ BOOST_AUTO_TEST_CASE(direct_script_checker_returns_script_diagnostics)
     CheckRejectReason(
         checker.Check(check),
         "block-script-verify-flag-failed (Script evaluated without error but finished with a false/empty top stack element)");
+}
+
+BOOST_AUTO_TEST_CASE(recording_script_checker_captures_plans_until_complete)
+{
+    const CTransactionRef tx{MakeSpend()};
+    std::vector<Consensus::CoinSnapshot> input_coins{Coin(CScript{} << OP_TRUE)};
+    const auto check{Consensus::BuildTransactionScriptCheckPlan(tx, input_coins, SCRIPT_VERIFY_P2SH)};
+    RecordingBlockScriptChecker checker;
+
+    BOOST_CHECK(checker.Check(check));
+    BOOST_CHECK_EQUAL(checker.Completions(), 0);
+    BOOST_REQUIRE_EQUAL(checker.Checks().size(), 1U);
+    BOOST_CHECK(checker.Checks()[0].tx == tx);
+    BOOST_CHECK(checker.Checks()[0].flags == SCRIPT_VERIFY_P2SH);
+    BOOST_REQUIRE_EQUAL(checker.Checks()[0].spent_outputs.size(), 1U);
+    BOOST_CHECK_EQUAL(checker.Checks()[0].spent_outputs[0].nValue, 50);
+
+    BOOST_CHECK(checker.Complete());
+    BOOST_CHECK_EQUAL(checker.Completions(), 1);
 }
 
 BOOST_AUTO_TEST_CASE(script_check_owns_queued_block_inputs)

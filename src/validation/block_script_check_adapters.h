@@ -7,10 +7,10 @@
 
 #include <consensus/block_spend.h>
 #include <script/script_check.h>
-#include <validation/script_check_scheduler.h>
+#include <validation/script_task_executor.h>
 
-#include <memory>
 #include <optional>
+#include <vector>
 
 class CTransaction;
 class CoreChainLock;
@@ -35,7 +35,7 @@ private:
 class CoreBlockScriptChecker final : public Consensus::BlockScriptChecker
 {
 public:
-    CoreBlockScriptChecker(bool run_checks, bool cache_results, CoreScriptValidationCache& validation_cache, std::unique_ptr<validation::ScriptCheckBatch>& batch, CoreChainLock* chain_lock);
+    CoreBlockScriptChecker(bool run_checks, bool cache_results, CoreScriptValidationCache& validation_cache, validation::ScriptTaskExecutor& executor, CoreChainLock* chain_lock);
 
     [[nodiscard]] bool WantsChecks() const override { return m_run_checks; }
     [[nodiscard]] Consensus::BlockSpendResult<void> Check(const Consensus::TransactionScriptCheckPlan& check) override;
@@ -45,19 +45,19 @@ private:
     bool m_run_checks;
     bool m_cache_results;
     CoreScriptValidationCache& m_validation_cache;
-    std::unique_ptr<validation::ScriptCheckBatch>& m_batch;
+    validation::ScriptTaskExecutor& m_executor;
+    std::vector<validation::ScriptTask> m_deferred_tasks;
     CoreChainLock* m_chain_lock{nullptr};
 };
 
 class CoreBlockScriptChecks final
 {
 public:
-    CoreBlockScriptChecks(validation::ScriptCheckScheduler& scheduler, bool run_checks, bool cache_results, ValidationCache& validation_cache, CoreChainLock* chain_lock = nullptr);
+    CoreBlockScriptChecks(validation::ScriptTaskExecutor& executor, bool run_checks, bool cache_results, ValidationCache& validation_cache, CoreChainLock* chain_lock = nullptr);
 
     [[nodiscard]] CoreBlockScriptChecker& Checker();
 
 private:
-    std::unique_ptr<validation::ScriptCheckBatch> m_batch;
     CoreScriptValidationCache m_validation_cache;
     CoreBlockScriptChecker m_checker;
 };

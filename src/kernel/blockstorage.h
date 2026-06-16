@@ -321,6 +321,7 @@ public:
     std::unique_ptr<BlockTreeDB> m_block_tree_db GUARDED_BY(::cs_main);
 
     std::set<CBlockIndex*>& DirtyBlockIndex() EXCLUSIVE_LOCKS_REQUIRED(::cs_main) { return m_dirty_blockindex; }
+    const std::set<CBlockIndex*>& DirtyBlockIndex() const EXCLUSIVE_LOCKS_REQUIRED(::cs_main) { return m_dirty_blockindex; }
     void WriteBlockIndexDB() EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
     bool LoadBlockIndexDB()
         EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
@@ -440,6 +441,7 @@ public:
     bool ReadBlock(CBlock& block, const CBlockIndex& index) const;
     ReadRawBlockResult ReadRawBlock(const FlatFilePos& pos, std::optional<std::pair<size_t, size_t>> block_part = std::nullopt) const;
 
+    bool ReadBlockUndo(CBlockUndo& blockundo, const FlatFilePos& pos, const uint256& previous_block_hash) const;
     bool ReadBlockUndo(CBlockUndo& blockundo, const CBlockIndex& index) const;
 
     void CleanupBlockRevFiles() const;

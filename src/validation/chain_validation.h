@@ -7,55 +7,125 @@
 
 #include <kernel/cs_main.h>
 #include <validation/block_validation.h>
+#include <validation/core_chain_activation.h>
 
 #include <memory>
 #include <span>
 
-class Chainstate;
 class ChainstateEventSink;
 class ChainstateManager;
 
-class ChainValidationService
-{
-public:
-    explicit ChainValidationService(ChainstateManager& chainman) : m_chainman{chainman} {}
-
-    [[nodiscard]] NewBlockHeadersResult ProcessNewBlockHeaders(
-        std::span<const CBlockHeader> headers,
-        BlockHeaderAcceptanceOptions options,
-        BlockValidationTime time,
-        BlockValidationState& state) LOCKS_EXCLUDED(cs_main);
-
-    [[nodiscard]] BlockAcceptanceResult AcceptBlock(
-        const std::shared_ptr<const CBlock>& block,
-        BlockValidationState& state,
-        BlockAcceptanceOptions options,
-        BlockValidationTime time) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
-
-    [[nodiscard]] NewBlockProcessingResult ProcessNewBlock(
-        ChainstateEventSink* chain_events,
-        const std::shared_ptr<const CBlock>& block,
-        NewBlockProcessingOptions options,
-        BlockValidationTime time) LOCKS_EXCLUDED(cs_main);
-
-    [[nodiscard]] NewBlockProcessingResult ProcessNewBlock(
-        const std::shared_ptr<const CBlock>& block,
-        NewBlockProcessingOptions options,
-        BlockValidationTime time) LOCKS_EXCLUDED(cs_main);
-
-    [[nodiscard]] BlockValidationState TestBlockValidity(
-        Chainstate& chainstate,
-        const CBlock& block,
-        const Consensus::BlockCheckOptions& options,
-        BlockValidationTime time) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
-
-    [[nodiscard]] BlockValidationState TestActiveBlockValidity(
-        const CBlock& block,
-        const Consensus::BlockCheckOptions& options,
-        BlockValidationTime time) LOCKS_EXCLUDED(cs_main);
-
-private:
-    ChainstateManager& m_chainman;
+struct ProcessNewBlockHeadersRequest {
+    ChainstateManager& chainman;
+    std::span<const CBlockHeader> headers;
+    BlockHeaderAcceptanceOptions options{};
+    BlockValidationTime time;
+    BlockValidationState& state;
 };
+
+struct CheckNewBlockStructuralRequest {
+    ChainstateManager& chainman;
+    const std::shared_ptr<const CBlock>& block;
+    BlockValidationState& state;
+};
+
+struct AcceptBlockRequest {
+    ChainstateManager& chainman;
+    const std::shared_ptr<const CBlock>& block;
+    BlockValidationState& state;
+    BlockAcceptanceOptions options{};
+    BlockValidationTime time;
+};
+
+struct AcceptNewBlockDataRequest {
+    ChainstateManager& chainman;
+    const std::shared_ptr<const CBlock>& block;
+    BlockValidationState& state;
+    BlockAcceptanceOptions options{};
+    BlockValidationTime time;
+};
+
+struct SnapshotAcceptedBlockContextRequest {
+    ChainstateManager& chainman;
+    const uint256& block_hash;
+};
+
+struct PrepareAcceptedTipCommitWorkRequest {
+    ChainstateManager& chainman;
+    const NewBlockCandidateContextSnapshot& context;
+    const std::shared_ptr<const CBlock>& block;
+    BlockValidationState& state;
+};
+
+struct ActivateAcceptedBlockRequest {
+    ChainstateManager& chainman;
+    ChainstateEventSink* chain_events{nullptr};
+    const std::shared_ptr<const CBlock>& block;
+    BlockValidationState& state;
+    BlockValidationTime time;
+};
+
+struct ActivateAcceptedTipCandidateRequest {
+    ChainstateManager& chainman;
+    ChainstateEventSink* chain_events{nullptr};
+    const std::shared_ptr<const CBlock>& block;
+    BlockValidationState& state;
+    BlockValidationTime time;
+};
+
+struct CommitAcceptedTipCandidateRequest {
+    ChainstateManager& chainman;
+    ChainstateEventSink* chain_events{nullptr};
+    CoreBlockConnectionCommitWork work;
+    BlockValidationState& state;
+    BlockValidationTime time;
+};
+
+struct ReportBlockCheckedRequest {
+    ChainstateManager& chainman;
+    const std::shared_ptr<const CBlock>& block;
+    const BlockValidationState& state;
+};
+
+struct ProcessNewBlockRequest {
+    ChainstateManager& chainman;
+    ChainstateEventSink* chain_events{nullptr};
+    const std::shared_ptr<const CBlock>& block;
+    NewBlockProcessingOptions options{};
+    BlockValidationTime time;
+};
+
+struct TestActiveBlockValidityRequest {
+    ChainstateManager& chainman;
+    const CBlock& block;
+    Consensus::BlockCheckOptions options{};
+    BlockValidationTime time;
+};
+
+[[nodiscard]] NewBlockHeadersResult ProcessNewBlockHeaders(
+    ProcessNewBlockHeadersRequest request) LOCKS_EXCLUDED(cs_main);
+[[nodiscard]] NewBlockStructuralCheckResult CheckNewBlockStructural(
+    CheckNewBlockStructuralRequest request) LOCKS_EXCLUDED(cs_main);
+[[nodiscard]] BlockAcceptanceResult AcceptBlock(
+    AcceptBlockRequest request) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
+[[nodiscard]] BlockAcceptanceResult AcceptNewBlockData(
+    AcceptNewBlockDataRequest request) LOCKS_EXCLUDED(cs_main);
+[[nodiscard]] std::optional<NewBlockCandidateContextSnapshot> SnapshotAcceptedBlockContext(
+    SnapshotAcceptedBlockContextRequest request) LOCKS_EXCLUDED(cs_main);
+[[nodiscard]] std::optional<CoreBlockConnectionCommitWork> PrepareAcceptedTipCommitWork(
+    PrepareAcceptedTipCommitWorkRequest request) LOCKS_EXCLUDED(cs_main);
+[[nodiscard]] BlockActivationResult ActivateAcceptedBlock(
+    ActivateAcceptedBlockRequest request) LOCKS_EXCLUDED(cs_main);
+[[nodiscard]] BlockActivationResult ActivateAcceptedTipCandidate(
+    ActivateAcceptedTipCandidateRequest request) LOCKS_EXCLUDED(cs_main);
+[[nodiscard]] BlockActivationResult CommitAcceptedTipCandidate(
+    CommitAcceptedTipCandidateRequest request) LOCKS_EXCLUDED(cs_main);
+void ReportBlockChecked(ReportBlockCheckedRequest request) LOCKS_EXCLUDED(cs_main);
+[[nodiscard]] NewBlockProcessingResult ProcessNewBlock(
+    ProcessNewBlockRequest request) LOCKS_EXCLUDED(cs_main);
+[[nodiscard]] BlockValidationState TestActiveBlockValidity(
+    TestActiveBlockValidityRequest request) LOCKS_EXCLUDED(cs_main);
+[[nodiscard]] BlockValidationState TestActiveBlockValidityLocked(
+    TestActiveBlockValidityRequest request) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
 
 #endif // BITCOIN_CHAIN_VALIDATION_H

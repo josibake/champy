@@ -3,34 +3,309 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 //
 #include <chainparams.h>
+#include <consensus/serialization.h>
+#include <kernel/block_import_pipeline.h>
+#include <kernel/blockimport.h>
 #include <validation_state.h>
 #include <node/chainstatemanager_args.h>
 #include <node/kernel_notifications.h>
 #include <random.h>
 
+#include <streams.h>
 #include <sync.h>
 #include <test/util/common.h>
 #include <test/util/logging.h>
+#include <test/util/mining.h>
 #include <test/util/random.h>
 #include <test/util/setup_common.h>
 #include <test/util/validation.h>
 #include <uint256.h>
 #include <util/byte_units.h>
+#include <util/fs.h>
 #include <util/result.h>
+#include <util/syserror.h>
 #include <util/vector.h>
 #include <chainstate.h>
+#include <validation/runtime_time.h>
 #include <validationinterface.h>
 
 #include <tinyformat.h>
 
 #include <algorithm>
+#include <array>
+#include <atomic>
+#include <cerrno>
+#include <cstddef>
+#include <cstdint>
+#include <cstdio>
+#include <map>
 #include <memory>
+#include <span>
+#include <stdexcept>
 #include <utility>
 #include <vector>
 
 #include <boost/test/unit_test.hpp>
 
+namespace {
+
+constexpr NodeSeconds IMPORT_TEST_TIME{std::chrono::seconds{1'710'000'000}};
+
+void WriteToAutoFile(void* user_data, std::span<const std::byte> bytes)
+{
+    static_cast<AutoFile*>(user_data)->write(bytes);
+}
+
+void WriteBlkRecord(AutoFile& file, const CChainParams& params, const CBlock& block)
+{
+    const auto block_size{static_cast<uint32_t>(Consensus::SerializedSize(block))};
+    file << params.MessageStart() << block_size;
+    Consensus::SerializeBlock(block, Consensus::ByteSinkRef{&file, WriteToAutoFile});
+}
+
+void WriteMalformedGap(AutoFile& file)
+{
+    static constexpr std::array<std::byte, 9> NOISE{
+        std::byte{0x51}, std::byte{0x00}, std::byte{0xff}, std::byte{0x7e}, std::byte{0x19},
+        std::byte{0x33}, std::byte{0x08}, std::byte{0x44}, std::byte{0x91}};
+    file.write(NOISE);
+}
+
+void WriteTruncatedRecordTail(AutoFile& file, const CChainParams& params)
+{
+    file << params.MessageStart() << uint32_t{80};
+    static constexpr std::array<std::byte, 17> PARTIAL_HEADER{
+        std::byte{0x01}, std::byte{0x00}, std::byte{0x00}, std::byte{0x00}, std::byte{0x42},
+        std::byte{0x24}, std::byte{0x18}, std::byte{0x99}, std::byte{0xab}, std::byte{0xcd},
+        std::byte{0xef}, std::byte{0x01}, std::byte{0x55}, std::byte{0x66}, std::byte{0x77},
+        std::byte{0x88}, std::byte{0x99}};
+    file.write(PARTIAL_HEADER);
+}
+
+void CloseWrittenFile(AutoFile& file)
+{
+    if (file.fclose() != 0) {
+        throw std::runtime_error{strprintf("failed to close import test file: %s", SysErrorString(errno))};
+    }
+}
+
+void WriteExternalBlkFile(const fs::path& path, const CChainParams& params, std::span<const std::shared_ptr<CBlock>> blocks)
+{
+    AutoFile file{fsbridge::fopen(path, "wb+")};
+    if (file.IsNull()) throw std::runtime_error{strprintf("failed to open %s", fs::PathToString(path))};
+    for (const auto& block : blocks) {
+        WriteBlkRecord(file, params, *block);
+    }
+    CloseWrittenFile(file);
+}
+
+kernel::BlockImportResult ImportExternalBlkFile(ChainstateManager& chainman, const fs::path& path)
+{
+    chainman.m_blockman.m_blockfiles_indexed = true;
+    const std::array<fs::path, 1> import_files{path};
+    return kernel::ImportBlocks(chainman, import_files, IMPORT_TEST_TIME);
+}
+
+int ActiveHeight(ChainstateManager& chainman)
+{
+    return WITH_LOCK(chainman.GetMutex(), return chainman.ActiveHeight());
+}
+
+bool HasBlockIndex(ChainstateManager& chainman, const uint256& hash)
+{
+    return WITH_LOCK(chainman.GetMutex(), return chainman.m_blockman.LookupBlockIndex(hash) != nullptr);
+}
+
+} // namespace
+
 BOOST_FIXTURE_TEST_SUITE(validation_chainstatemanager_tests, TestingSetup)
+
+BOOST_FIXTURE_TEST_CASE(block_import_rejects_concurrent_import, ChainTestingSetup)
+{
+    ChainstateManager& chainman{*Assert(m_node.chainman)};
+    chainman.m_blockman.m_importing.store(true, std::memory_order_relaxed);
+
+    const kernel::BlockImportResult result{
+        kernel::ImportBlocks(chainman, {}, NodeSeconds{std::chrono::seconds{1'710'000'000}})};
+
+    BOOST_REQUIRE(result);
+    BOOST_CHECK(result->status == kernel::BlockImportStatus::AlreadyImporting);
+    BOOST_CHECK(chainman.m_blockman.m_importing.load(std::memory_order_relaxed));
+
+    chainman.m_blockman.m_importing.store(false, std::memory_order_relaxed);
+}
+
+BOOST_FIXTURE_TEST_CASE(block_import_releases_guard_after_failure, ChainTestingSetup)
+{
+    ChainstateManager& chainman{*Assert(m_node.chainman)};
+    chainman.m_blockman.m_blockfiles_indexed = true;
+    chainman.m_blockman.m_importing.store(false, std::memory_order_relaxed);
+
+    const fs::path missing_path{m_args.GetDataDirBase() / "missing-blk.dat"};
+    const kernel::BlockImportResult result{
+        kernel::ImportBlocks(chainman, {&missing_path, 1}, NodeSeconds{std::chrono::seconds{1'710'000'000}})};
+
+    BOOST_REQUIRE(!result);
+    BOOST_CHECK(result.error().kind == kernel::BlockImportErrorKind::IO);
+    BOOST_CHECK(!chainman.m_blockman.m_importing.load(std::memory_order_relaxed));
+}
+
+BOOST_FIXTURE_TEST_CASE(block_import_loadblock_accepts_ordered_blocks_across_duplicate_and_malformed_gap, RegTestingSetup)
+{
+    ChainstateManager& chainman{*Assert(m_node.chainman)};
+    const auto blocks{CreateBlockChain(/*total_height=*/2, Params())};
+    const fs::path import_path{m_path_root / "ordered-import-with-noise.dat"};
+
+    {
+        AutoFile file{fsbridge::fopen(import_path, "wb+")};
+        BOOST_REQUIRE(!file.IsNull());
+        WriteBlkRecord(file, Params(), *blocks[0]);
+        WriteBlkRecord(file, Params(), *blocks[0]);
+        WriteMalformedGap(file);
+        WriteBlkRecord(file, Params(), *blocks[1]);
+        CloseWrittenFile(file);
+    }
+
+    const kernel::BlockImportResult result{ImportExternalBlkFile(chainman, import_path)};
+
+    BOOST_REQUIRE(result);
+    BOOST_CHECK_EQUAL(ActiveHeight(chainman), 2);
+    BOOST_CHECK(HasBlockIndex(chainman, blocks[0]->GetHash()));
+    BOOST_CHECK(HasBlockIndex(chainman, blocks[1]->GetHash()));
+}
+
+BOOST_FIXTURE_TEST_CASE(block_import_loadblock_keeps_prior_block_when_truncated_record_ends_file, RegTestingSetup)
+{
+    ChainstateManager& chainman{*Assert(m_node.chainman)};
+    const auto block{CreateBlockChain(/*total_height=*/1, Params()).front()};
+    const fs::path import_path{m_path_root / "truncated-tail-import.dat"};
+
+    {
+        AutoFile file{fsbridge::fopen(import_path, "wb+")};
+        BOOST_REQUIRE(!file.IsNull());
+        WriteBlkRecord(file, Params(), *block);
+        WriteTruncatedRecordTail(file, Params());
+        CloseWrittenFile(file);
+    }
+
+    const kernel::BlockImportResult result{ImportExternalBlkFile(chainman, import_path)};
+
+    BOOST_REQUIRE(result);
+    BOOST_CHECK_EQUAL(ActiveHeight(chainman), 1);
+    BOOST_CHECK(HasBlockIndex(chainman, block->GetHash()));
+}
+
+BOOST_FIXTURE_TEST_CASE(block_import_loadblock_skips_unknown_parent_without_failing, RegTestingSetup)
+{
+    ChainstateManager& chainman{*Assert(m_node.chainman)};
+    const auto blocks{CreateBlockChain(/*total_height=*/2, Params())};
+    const fs::path import_path{m_path_root / "unknown-parent-import.dat"};
+    const std::array<std::shared_ptr<CBlock>, 1> child_only{blocks[1]};
+
+    WriteExternalBlkFile(import_path, Params(), child_only);
+
+    const kernel::BlockImportResult result{ImportExternalBlkFile(chainman, import_path)};
+
+    BOOST_REQUIRE(result);
+    BOOST_CHECK(result->status == kernel::BlockImportStatus::Completed);
+    BOOST_CHECK_EQUAL(ActiveHeight(chainman), 0);
+    BOOST_CHECK(!HasBlockIndex(chainman, blocks[1]->GetHash()));
+}
+
+BOOST_FIXTURE_TEST_CASE(import_external_block_file_reindex_replays_child_before_parent, RegTestingSetup)
+{
+    ChainstateManager& chainman{*Assert(m_node.chainman)};
+    const auto blocks{CreateBlockChain(/*total_height=*/2, Params())};
+    const FlatFilePos start_pos{0, 0};
+
+    {
+        AutoFile file{chainman.m_blockman.OpenBlockFile(start_pos, /*fReadOnly=*/false)};
+        BOOST_REQUIRE(!file.IsNull());
+        BOOST_REQUIRE(file.Truncate(0));
+        WriteBlkRecord(file, Params(), *blocks[1]);
+        WriteBlkRecord(file, Params(), *blocks[0]);
+        CloseWrittenFile(file);
+    }
+
+    FlatFilePos scan_pos{start_pos};
+    kernel::UnknownParentIndex blocks_with_unknown_parent;
+    {
+        AutoFile file{chainman.m_blockman.OpenBlockFile(scan_pos, /*fReadOnly=*/true)};
+        BOOST_REQUIRE(!file.IsNull());
+        const auto result{kernel::ImportExternalBlockFile({
+            .chainman = chainman,
+            .file = file,
+            .mode = kernel::ExternalBlockFileReindex{
+                .file_number = scan_pos.nFile,
+                .unknown_parent_index = blocks_with_unknown_parent,
+            },
+            .current_time = IMPORT_TEST_TIME,
+        })};
+        BOOST_REQUIRE(result);
+        BOOST_CHECK(result->status == kernel::BlockImportStatus::Completed);
+    }
+
+    BOOST_CHECK(blocks_with_unknown_parent.Empty());
+    BOOST_REQUIRE(chainman.ActivateBestChains(IMPORT_TEST_TIME));
+    BOOST_CHECK_EQUAL(ActiveHeight(chainman), 2);
+    BOOST_CHECK(HasBlockIndex(chainman, blocks[0]->GetHash()));
+    BOOST_CHECK(HasBlockIndex(chainman, blocks[1]->GetHash()));
+}
+
+BOOST_FIXTURE_TEST_CASE(import_external_block_file_reindex_enforces_unknown_parent_limit, RegTestingSetup)
+{
+    ChainstateManager& chainman{*Assert(m_node.chainman)};
+    const auto blocks{CreateBlockChain(/*total_height=*/2, Params())};
+    const FlatFilePos start_pos{0, 0};
+
+    {
+        AutoFile file{chainman.m_blockman.OpenBlockFile(start_pos, /*fReadOnly=*/false)};
+        BOOST_REQUIRE(!file.IsNull());
+        BOOST_REQUIRE(file.Truncate(0));
+        WriteBlkRecord(file, Params(), *blocks[1]);
+        CloseWrittenFile(file);
+    }
+
+    FlatFilePos scan_pos{start_pos};
+    kernel::UnknownParentIndex blocks_with_unknown_parent{/*max_entries=*/0};
+    {
+        AutoFile file{chainman.m_blockman.OpenBlockFile(scan_pos, /*fReadOnly=*/true)};
+        BOOST_REQUIRE(!file.IsNull());
+        const auto result{kernel::ImportExternalBlockFile({
+            .chainman = chainman,
+            .file = file,
+            .mode = kernel::ExternalBlockFileReindex{
+                .file_number = scan_pos.nFile,
+                .unknown_parent_index = blocks_with_unknown_parent,
+            },
+            .current_time = IMPORT_TEST_TIME,
+        })};
+        BOOST_REQUIRE(result);
+        BOOST_CHECK(result->status == kernel::BlockImportStatus::ResourceLimit);
+    }
+
+    BOOST_CHECK(blocks_with_unknown_parent.Empty());
+    BOOST_CHECK(!HasBlockIndex(chainman, blocks[1]->GetHash()));
+}
+
+BOOST_FIXTURE_TEST_CASE(block_import_loadblock_interrupt_stops_before_scanning_file, RegTestingSetup)
+{
+    ChainstateManager& chainman{*Assert(m_node.chainman)};
+    const auto block{CreateBlockChain(/*total_height=*/1, Params()).front()};
+    const fs::path import_path{m_path_root / "interrupted-import.dat"};
+    const std::array<std::shared_ptr<CBlock>, 1> blocks{block};
+    WriteExternalBlkFile(import_path, Params(), blocks);
+
+    BOOST_REQUIRE(m_interrupt());
+    const kernel::BlockImportResult result{ImportExternalBlkFile(chainman, import_path)};
+
+    BOOST_REQUIRE(result);
+    BOOST_CHECK(result->status == kernel::BlockImportStatus::Interrupted);
+    BOOST_CHECK_EQUAL(ActiveHeight(chainman), 0);
+    BOOST_CHECK(!HasBlockIndex(chainman, block->GetHash()));
+    BOOST_CHECK(!chainman.m_blockman.m_importing.load(std::memory_order_relaxed));
+    BOOST_REQUIRE(m_interrupt.reset());
+}
 
 BOOST_FIXTURE_TEST_CASE(chainstatemanager_ibd_exit_after_loading_blocks, ChainTestingSetup)
 {
@@ -41,7 +316,8 @@ BOOST_FIXTURE_TEST_CASE(chainstatemanager_ibd_exit_after_loading_blocks, ChainTe
         chainman.ResetChainstates();
         chainman.InitializeChainstate();
 
-        const auto recent_time{Now<NodeSeconds>() - chainman.m_options.max_tip_age};
+        const NodeSeconds current_time{std::chrono::seconds{1'710'000'000}};
+        const auto recent_time{current_time - chainman.m_options.max_tip_age};
 
         chainman.m_cached_is_ibd.store(cached_is_ibd, std::memory_order_relaxed);
         chainman.m_blockman.m_importing = loading_blocks;
@@ -52,7 +328,7 @@ BOOST_FIXTURE_TEST_CASE(chainstatemanager_ibd_exit_after_loading_blocks, ChainTe
         } else {
             assert(!chainman.ActiveChain().Tip());
         }
-        chainman.UpdateIBDStatus();
+        chainman.UpdateIBDStatus(current_time);
     }};
 
     for (const bool cached_is_ibd : {false, true}) {
@@ -185,7 +461,7 @@ BOOST_FIXTURE_TEST_CASE(copied_block_index_queries_match_locked_state, TestChain
         block_height = block->nHeight;
         block_time = block->GetBlockTime();
         block_median_time_past = block->GetMedianTimePast();
-        progress = chainman.GuessVerificationProgress(block);
+        progress = chainman.GuessVerificationProgress(block, CurrentNodeTime());
         block_chain_work = block->nChainWork;
         segwit_active_at_block = DeploymentActiveAt(*block, chainman, Consensus::DEPLOYMENT_SEGWIT);
         segwit_active_after_block = DeploymentActiveAfter(block, chainman, Consensus::DEPLOYMENT_SEGWIT);
@@ -495,7 +771,7 @@ BOOST_FIXTURE_TEST_CASE(invalidate_block_and_reconsider_fork, TestChain100Setup)
     // by temporarily invalidating block99. the chain tip now falls to block98,
     // mine 2 new blocks on top of block 98 (block99' and block100') and then restore block99 and block 100.
     BlockValidationState state;
-    BOOST_REQUIRE(chainstate.InvalidateBlock(state, block99));
+    BOOST_REQUIRE(chainstate.InvalidateBlock(state, CurrentNodeTime(), block99));
     BOOST_REQUIRE(WITH_LOCK(cs_main, return chainman.ActiveChain().Tip()) == block98);
     CScript coinbase_script = CScript() << ToByteVector(coinbaseKey.GetPubKey()) << OP_CHECKSIG;
     for (int i = 0; i < 2; ++i) {
@@ -522,7 +798,7 @@ BOOST_FIXTURE_TEST_CASE(invalidate_block_and_reconsider_fork, TestChain100Setup)
         chainstate.ResetBlockFailureFlags(block99);
         chainman.RecalculateBestHeader();
     }
-    chainstate.ActivateBestChain(state);
+    chainstate.ActivateBestChain(state, CurrentNodeTime());
     BOOST_REQUIRE(WITH_LOCK(cs_main, return chainman.ActiveChain().Tip()) == block100);
 
     {
@@ -610,7 +886,7 @@ BOOST_FIXTURE_TEST_CASE(invalidate_block_and_reconsider_fork, TestChain100Setup)
     }
 
     // Invalidate block98
-    BOOST_REQUIRE(chainstate.InvalidateBlock(state, block98));
+    BOOST_REQUIRE(chainstate.InvalidateBlock(state, CurrentNodeTime(), block98));
 
     {
         LOCK(chainman.GetMutex());
@@ -630,7 +906,7 @@ BOOST_FIXTURE_TEST_CASE(invalidate_block_and_reconsider_fork, TestChain100Setup)
         chainstate.ResetBlockFailureFlags(block99);
         chainman.RecalculateBestHeader();
     }
-    chainstate.ActivateBestChain(state);
+    chainstate.ActivateBestChain(state, CurrentNodeTime());
     {
         LOCK(chainman.GetMutex());
         BOOST_CHECK(!(block98->nStatus & BLOCK_FAILED_VALID));

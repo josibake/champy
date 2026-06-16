@@ -19,8 +19,8 @@
 #include <util/fs.h>
 #include <util/log.h>
 #include <util/signalinterrupt.h>
-#include <util/time.h>
 #include <util/translation.h>
+#include <validation/verify_db.h>
 
 #include <algorithm>
 #include <cassert>
@@ -109,8 +109,11 @@ static ChainstateLoadResult CompleteChainstateInitialization(
     assert(chainstate.CanFlushToDisk());
 
     if (!is_coinsview_empty(chainstate)) {
+        if (!options.current_time) {
+            return {ChainstateLoadStatus::FAILURE, _("Chainstate load current time was not set")};
+        }
         // LoadChainTip initializes the chain based on CoinsTip()'s best block
-        if (!chainstate.LoadChainTip()) {
+        if (!chainstate.LoadChainTip(*options.current_time)) {
             return {ChainstateLoadStatus::FAILURE, _("Error initializing block database")};
         }
         assert(chainstate.m_chain.Tip() != nullptr);
@@ -172,8 +175,11 @@ ChainstateLoadResult VerifyLoadedChainstate(ChainstateManager& chainman, const C
     if (chainman.m_chainstate) {
         Chainstate& chainstate{*chainman.m_chainstate};
         if (!is_coinsview_empty(chainstate)) {
+            if (!options.current_time) {
+                return {ChainstateLoadStatus::FAILURE, _("Chainstate verification current time was not set")};
+            }
             const CBlockIndex* tip = chainstate.m_chain.Tip();
-            if (tip && tip->nTime > GetTime() + MAX_FUTURE_BLOCK_TIME) {
+            if (tip && tip->Time() > *options.current_time + std::chrono::seconds{MAX_FUTURE_BLOCK_TIME}) {
                 return {ChainstateLoadStatus::FAILURE, _("The block database contains a block which appears to be from the future. "
                                                          "This may be due to your computer's date and time being set incorrectly. "
                                                          "Only rebuild the block database if you are sure that your computer's date and time are correct")};

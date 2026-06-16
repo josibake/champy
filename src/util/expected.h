@@ -87,14 +87,14 @@ public:
     constexpr E& error() & noexcept LIFETIMEBOUND { return *Assert(std::get_if<1>(&m_data)); }
     constexpr E&& error() && noexcept LIFETIMEBOUND { return std::move(error()); }
 
-    constexpr void swap(Expected& other) noexcept { m_data.swap(other.m_data); }
+    constexpr void swap(Expected& other) noexcept(noexcept(m_data.swap(other.m_data))) { m_data.swap(other.m_data); }
 
-    constexpr T& operator*() & noexcept LIFETIMEBOUND { return value(); }
-    constexpr const T& operator*() const& noexcept LIFETIMEBOUND { return value(); }
-    constexpr T&& operator*() && noexcept LIFETIMEBOUND { return std::move(value()); }
+    constexpr T& operator*() & LIFETIMEBOUND { return value(); }
+    constexpr const T& operator*() const& LIFETIMEBOUND { return value(); }
+    constexpr T&& operator*() && LIFETIMEBOUND { return std::move(value()); }
 
-    constexpr T* operator->() noexcept LIFETIMEBOUND { return &value(); }
-    constexpr const T* operator->() const noexcept LIFETIMEBOUND { return &value(); }
+    constexpr T* operator->() LIFETIMEBOUND { return &value(); }
+    constexpr const T* operator->() const LIFETIMEBOUND { return &value(); }
 };
 
 template <class E>
@@ -113,7 +113,7 @@ public:
     constexpr bool has_value() const noexcept { return m_data.index() == 0; }
     constexpr explicit operator bool() const noexcept { return has_value(); }
 
-    constexpr void operator*() const noexcept { return value(); }
+    constexpr void operator*() const { return value(); }
     constexpr void value() const
     {
         if (!has_value()) {

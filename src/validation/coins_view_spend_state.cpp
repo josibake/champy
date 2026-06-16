@@ -5,9 +5,11 @@
 #include <validation/coins_view_spend_state.h>
 
 #include <chain.h>
+#include <chainstate.h>
 #include <coins.h>
-#include <validation/block_coin_effects.h>
 #include <undo.h>
+#include <validation/block_coin_effects.h>
+#include <validation/block_index_adapters.h>
 
 #include <algorithm>
 #include <cassert>
@@ -16,6 +18,7 @@
 #include <optional>
 #include <unordered_map>
 #include <utility>
+#include <vector>
 
 namespace validation {
 namespace {
@@ -153,7 +156,7 @@ CoinsViewBlockSpendWorkspace::CoinsViewBlockSpendWorkspace(CCoinsViewCache& pare
 
 CoinsViewBlockSpendWorkspace::~CoinsViewBlockSpendWorkspace() = default;
 
-const Consensus::SpendStateView& CoinsViewBlockSpendWorkspace::StagedSpendView() const
+const Consensus::SpendLookupBackend& CoinsViewBlockSpendWorkspace::StagedSpendView() const
 {
     return m_spend_view;
 }
@@ -186,10 +189,144 @@ CoinsViewBlockSpendBackend::CoinsViewBlockSpendBackend(
 {
 }
 
-Consensus::BlockSpendResult<std::unique_ptr<Consensus::BlockSpendWorkspace>> CoinsViewBlockSpendBackend::BeginBlockSpend(const Consensus::BlockSpendContext& context)
+Consensus::BlockSpendResult<std::unique_ptr<Consensus::SpendWorkspace>> CoinsViewBlockSpendBackend::BeginBlockSpend(const Consensus::BlockSpendContext& context)
 {
-    std::unique_ptr<Consensus::BlockSpendWorkspace> workspace{std::make_unique<CoinsViewBlockSpendWorkspace>(m_parent_coins, context.previous_median_time_past, m_previous_median_time_past_by_outpoint)};
+    std::unique_ptr<Consensus::SpendWorkspace> workspace{std::make_unique<CoinsViewBlockSpendWorkspace>(m_parent_coins, context.previous_median_time_past, m_previous_median_time_past_by_outpoint)};
     return std::move(workspace);
+}
+
+CoreSegmentUtxoSnapshotBackend::CoreSegmentUtxoSnapshotBackend(
+    std::vector<Consensus::SegmentSpentOutputLookupResult> spent_outputs,
+    std::vector<Consensus::SegmentCreatedOutputLookupResult> created_outputs)
+{
+    for (Consensus::SegmentSpentOutputLookupResult& spent_output : spent_outputs) {
+        m_spent_outputs.emplace(KeyFor(spent_output.lookup), std::move(spent_output.coin));
+    }
+    for (Consensus::SegmentCreatedOutputLookupResult& created_output : created_outputs) {
+        m_created_outputs.emplace(KeyFor(created_output.created_output), std::move(created_output.existing_coin));
+    }
+}
+
+CoreSegmentUtxoSnapshotBackend::SpentLookupKey CoreSegmentUtxoSnapshotBackend::KeyFor(const Consensus::SegmentSpentOutputLookup& lookup)
+{
+    return {
+        .outpoint = lookup.lookup.outpoint,
+        .block_index = lookup.block_index,
+        .transaction_index = lookup.lookup.transaction_index,
+        .input_index = lookup.lookup.input_index,
+    };
+}
+
+CoreSegmentUtxoSnapshotBackend::CreatedLookupKey CoreSegmentUtxoSnapshotBackend::KeyFor(const Consensus::SegmentCreatedOutput& output)
+{
+    return {
+        .outpoint = output.outpoint,
+        .block_index = output.block_index,
+        .transaction_index = output.transaction_index,
+        .output_index = output.output_index,
+    };
+}
+
+std::vector<Consensus::SegmentSpentOutputLookupResult> CoreSegmentUtxoSnapshotBackend::LookupSpentOutputs(
+    std::span<const Consensus::SegmentBlockView>,
+    std::span<const Consensus::SegmentSpentOutputLookup> lookups) const
+{
+    std::vector<Consensus::SegmentSpentOutputLookupResult> results;
+    results.reserve(lookups.size());
+
+    for (const Consensus::SegmentSpentOutputLookup& lookup : lookups) {
+        std::optional<Consensus::SegmentCoinSnapshot> coin;
+        if (const auto found{m_spent_outputs.find(KeyFor(lookup))}; found != m_spent_outputs.end()) {
+            coin = found->second;
+        }
+        results.push_back({
+            .lookup = lookup,
+            .coin = std::move(coin),
+        });
+    }
+    return results;
+}
+
+std::vector<Consensus::SegmentCreatedOutputLookupResult> CoreSegmentUtxoSnapshotBackend::LookupCreatedOutputs(
+    std::span<const Consensus::SegmentBlockView>,
+    std::span<const Consensus::SegmentCreatedOutput> created_outputs) const
+{
+    std::vector<Consensus::SegmentCreatedOutputLookupResult> results;
+    results.reserve(created_outputs.size());
+
+    for (const Consensus::SegmentCreatedOutput& created_output : created_outputs) {
+        std::optional<Consensus::CoinSnapshot> existing_coin;
+        if (const auto found{m_created_outputs.find(KeyFor(created_output))}; found != m_created_outputs.end()) {
+            existing_coin = found->second;
+        }
+        results.push_back({
+            .created_output = created_output,
+            .existing_coin = std::move(existing_coin),
+        });
+    }
+    return results;
+}
+
+std::vector<Consensus::SegmentSpentOutputLookupResult> SnapshotCoreSegmentSpentOutputs(
+    ChainstateManager& chainman,
+    std::span<const Consensus::SegmentBlockView> blocks,
+    std::span<const Consensus::SegmentSpentOutputLookup> lookups)
+{
+    AssertLockHeld(::cs_main);
+
+    CoreBlockIndexStore block_index{chainman};
+    const CoinsViewSpendState spend_state{chainman.ActiveChainstate().CoinsTip()};
+
+    std::vector<std::unique_ptr<const CoinsViewSequenceLockTimeView>> sequence_lock_times;
+    sequence_lock_times.reserve(blocks.size());
+    for (const Consensus::SegmentBlockView& block : blocks) {
+        if (const CBlockIndex* block_index_entry{block_index.LookupBlockIndex(block.context.hash)}) {
+            sequence_lock_times.push_back(std::make_unique<CoinsViewSequenceLockTimeView>(*block_index_entry));
+        } else {
+            sequence_lock_times.push_back(nullptr);
+        }
+    }
+
+    std::vector<Consensus::SegmentSpentOutputLookupResult> results;
+    results.reserve(lookups.size());
+
+    for (const Consensus::SegmentSpentOutputLookup& lookup : lookups) {
+        std::optional<Consensus::SegmentCoinSnapshot> result;
+        if (lookup.block_index < blocks.size()) {
+            if (const std::optional<Consensus::CoinSnapshot> coin{spend_state.GetCoin(lookup.lookup.outpoint)}) {
+                if (const auto& sequence_lock_time{sequence_lock_times[lookup.block_index]}) {
+                    result = Consensus::SegmentCoinSnapshot{
+                        .coin = *coin,
+                        .previous_median_time_past = sequence_lock_time->PreviousMedianTimePast(lookup.lookup.outpoint, coin->height),
+                    };
+                }
+            }
+        }
+        results.push_back({
+            .lookup = lookup,
+            .coin = std::move(result),
+        });
+    }
+    return results;
+}
+
+std::vector<Consensus::SegmentCreatedOutputLookupResult> SnapshotCoreSegmentCreatedOutputs(
+    ChainstateManager& chainman,
+    std::span<const Consensus::SegmentCreatedOutput> created_outputs)
+{
+    AssertLockHeld(::cs_main);
+
+    const CoinsViewSpendState spend_state{chainman.ActiveChainstate().CoinsTip()};
+    std::vector<Consensus::SegmentCreatedOutputLookupResult> results;
+    results.reserve(created_outputs.size());
+
+    for (const Consensus::SegmentCreatedOutput& created_output : created_outputs) {
+        results.push_back({
+            .created_output = created_output,
+            .existing_coin = spend_state.GetCoin(created_output.outpoint),
+        });
+    }
+    return results;
 }
 
 } // namespace validation

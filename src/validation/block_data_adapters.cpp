@@ -4,21 +4,41 @@
 
 #include <validation/block_data_adapters.h>
 
+#include <chain.h>
 #include <kernel/blockstorage.h>
+#include <util/check.h>
 
-bool CoreBlockDataStore::ReadBlock(CBlock& block, const CBlockIndex& index)
+#include <utility>
+
+BlockDataReadResult CoreBlockDataStore::ReadBlock(const BlockDataReadRequest& request)
 {
-    return m_blockman.ReadBlock(block, index);
+    CBlock block;
+    if (!m_blockman.ReadBlock(block, request.position, request.expected_hash)) {
+        return util::Unexpected{BlockDataReadError::IoError};
+    }
+    return std::move(block);
 }
 
-bool CoreBlockDataStore::ReadBlockFromPosition(CBlock& block, const FlatFilePos& pos, const std::optional<uint256>& expected_hash)
+BlockDataReadResult CoreBlockDataStore::ReadBlockFromPosition(const FlatFilePos& pos, const std::optional<uint256>& expected_hash)
 {
-    return m_blockman.ReadBlock(block, pos, expected_hash);
+    CBlock block;
+    if (!m_blockman.ReadBlock(block, pos, expected_hash)) {
+        return util::Unexpected{BlockDataReadError::IoError};
+    }
+    return std::move(block);
 }
 
-bool CoreBlockDataStore::ReadBlockUndo(CBlockUndo& blockundo, const CBlockIndex& index)
+BlockUndoReadResult CoreBlockDataStore::ReadBlockUndo(const BlockUndoReadRequest& request)
 {
-    return m_blockman.ReadBlockUndo(blockundo, index);
+    if (request.height == 0) {
+        return util::Unexpected{BlockUndoReadError::GenesisHasNoUndo};
+    }
+
+    CBlockUndo blockundo;
+    if (!m_blockman.ReadBlockUndo(blockundo, request.position, request.previous_block_hash)) {
+        return util::Unexpected{BlockUndoReadError::IoError};
+    }
+    return std::move(blockundo);
 }
 
 Consensus::BlockCommitResult<void> CoreBlockDataStore::WriteBlockUndo(const CBlockUndo& blockundo, CBlockIndex& index)
@@ -26,6 +46,8 @@ Consensus::BlockCommitResult<void> CoreBlockDataStore::WriteBlockUndo(const CBlo
 {
     if (const auto undo_write{m_blockman.WriteBlockUndo(blockundo, index)}; !undo_write) {
         return Consensus::Unexpected<Consensus::BlockCommitError>{Consensus::BlockCommitError{
+            .runtime_issue = Consensus::ValidationRuntimeIssue::SystemError,
+            .failure_state = Consensus::BlockCommitFailureState::Tainted,
             .reject_reason = undo_write.error().reject_reason,
         }};
     }
@@ -50,4 +72,25 @@ FlatFilePos CoreBlockDataStore::WriteBlock(const CBlock& block, int height)
 void CoreBlockDataStore::UpdateBlockInfo(const CBlock& block, unsigned int height, const FlatFilePos& pos)
 {
     m_blockman.UpdateBlockInfo(block, height, pos);
+}
+
+BlockDataReadRequest SnapshotBlockDataReadRequest(const CBlockIndex& index)
+{
+    AssertLockHeld(::cs_main);
+    return {
+        .position = index.GetBlockPos(),
+        .expected_hash = index.GetBlockHash(),
+        .height = index.nHeight,
+    };
+}
+
+BlockUndoReadRequest SnapshotBlockUndoReadRequest(const CBlockIndex& index)
+{
+    AssertLockHeld(::cs_main);
+    return {
+        .position = index.GetUndoPos(),
+        .block_hash = index.GetBlockHash(),
+        .previous_block_hash = Assert(index.pprev)->GetBlockHash(),
+        .height = index.nHeight,
+    };
 }

@@ -9,6 +9,7 @@
 #include <kernel/cs_main.h>
 #include <primitives/transaction.h>
 #include <sync.h>
+#include <validation/validation_event_queue.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -22,7 +23,6 @@ class TaskRunnerInterface;
 
 class BlockValidationState;
 class CBlock;
-class CBlockIndex;
 struct CBlockLocator;
 enum class MemPoolRemovalReason;
 struct RemovedMempoolTransactionInfo;
@@ -59,11 +59,11 @@ protected:
      *
      * Called on a background thread. Only called for the active chainstate.
      */
-    virtual void UpdatedBlockTip(const CBlockIndex *pindexNew, const CBlockIndex *pindexFork, bool fInitialDownload) {}
+    virtual void UpdatedBlockTip(const validation::TipUpdatedEvent& event) {}
     /**
      * Notifies listeners any time the block chain tip changes, synchronously.
      */
-    virtual void ActiveTipChange(const CBlockIndex& new_tip, bool is_ibd) {};
+    virtual void ActiveTipChange(const validation::ActiveTipChangedEvent& event) {};
     /**
      * Notifies listeners of a transaction having been added to mempool.
      *
@@ -116,14 +116,14 @@ protected:
      *
      * Called on a background thread.
      */
-    virtual void BlockConnected(const std::shared_ptr<const CBlock>& block, const CBlockIndex* pindex) {}
+    virtual void BlockConnected(const validation::BlockConnectedEvent& event) {}
     /**
      * Notifies listeners of a block being disconnected
      * Provides the block that was disconnected.
      *
      * Called on a background thread.
      */
-    virtual void BlockDisconnected(const std::shared_ptr<const CBlock> &block, const CBlockIndex* pindex) {}
+    virtual void BlockDisconnected(const validation::BlockDisconnectedEvent& event) {}
     /**
      * Notifies listeners of the new active block chain on-disk.
      *
@@ -140,19 +140,19 @@ protected:
      *
      * Called on a background thread.
      */
-    virtual void ChainStateFlushed(const CBlockLocator& locator) {}
+    virtual void ChainStateFlushed(const validation::ChainStateFlushedEvent& event) {}
     /**
      * Notifies listeners of a block validation result.
      * If the provided BlockValidationState IsValid, the provided block
      * is guaranteed to be the current best block at the time the
      * callback was generated (not necessarily now).
      */
-    virtual void BlockChecked(const std::shared_ptr<const CBlock>&, const BlockValidationState&) {}
+    virtual void BlockChecked(const validation::BlockCheckedEvent& event) {}
     /**
      * Notifies listeners that a block which builds directly on our current tip
      * has been received and connected to the headers tree, though not validated yet.
      */
-    virtual void NewPoWValidBlock(const CBlockIndex *pindex, const std::shared_ptr<const CBlock>& block) {};
+    virtual void NewPoWValidBlock(const validation::PoWValidBlockEvent& event) {};
     friend class ValidationSignals;
     friend class ValidationInterfaceTest;
 };
@@ -213,16 +213,16 @@ public:
      */
     void SyncWithValidationInterfaceQueue() LOCKS_EXCLUDED(cs_main);
 
-    void UpdatedBlockTip(const CBlockIndex *, const CBlockIndex *, bool fInitialDownload);
-    void ActiveTipChange(const CBlockIndex&, bool);
+    void UpdatedBlockTip(validation::TipUpdatedEvent event);
+    void ActiveTipChange(validation::ActiveTipChangedEvent event);
     void TransactionAddedToMempool(const NewMempoolTransactionInfo&, uint64_t mempool_sequence);
     void TransactionRemovedFromMempool(const CTransactionRef&, MemPoolRemovalReason, uint64_t mempool_sequence);
     void MempoolTransactionsRemovedForBlock(const std::vector<RemovedMempoolTransactionInfo>&, unsigned int nBlockHeight);
-    void BlockConnected(std::shared_ptr<const CBlock>, const CBlockIndex* pindex);
-    void BlockDisconnected(std::shared_ptr<const CBlock>, const CBlockIndex* pindex);
-    void ChainStateFlushed(const CBlockLocator&);
-    void BlockChecked(const std::shared_ptr<const CBlock>&, const BlockValidationState&);
-    void NewPoWValidBlock(const CBlockIndex *, const std::shared_ptr<const CBlock>&);
+    void BlockConnected(validation::BlockConnectedEvent event);
+    void BlockDisconnected(validation::BlockDisconnectedEvent event);
+    void ChainStateFlushed(validation::ChainStateFlushedEvent event);
+    void BlockChecked(validation::BlockCheckedEvent event);
+    void NewPoWValidBlock(validation::PoWValidBlockEvent event);
 };
 
 #endif // BITCOIN_VALIDATIONINTERFACE_H

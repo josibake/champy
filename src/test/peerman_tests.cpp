@@ -4,6 +4,7 @@
 
 #include <validation/block_validation.h>
 #include <validation/chain_validation.h>
+#include <validation/runtime_time.h>
 #include <chainparams.h>
 #include <node/miner.h>
 #include <net_processing.h>
@@ -27,11 +28,13 @@ static void mineBlock(const node::NodeContext& node, std::chrono::seconds block_
     node::RegenerateCommitments(block, *node.chainman);
     while (!CheckProofOfWork(block.GetHash(), block.nBits, node.chainman->GetConsensus())) ++block.nNonce;
     SetMockTime(curr_time); // process block at current time
-    Assert(ChainValidationService{*node.chainman}.ProcessNewBlock(
-        std::make_shared<const CBlock>(block),
-        {.block_data_storage = BlockDataStorageMode::ForceStore, .header = {.min_pow_checked = true}},
-        CurrentBlockValidationTime())
-        .processed());
+    Assert(ProcessNewBlock({
+        .chainman = *node.chainman,
+        .block = std::make_shared<const CBlock>(block),
+        .options = {.block_data_storage = BlockDataStorageMode::ForceStore, .header = {.min_pow_checked = true}},
+        .time = CurrentBlockValidationTime(),
+    })
+        .Processed());
     node.validation_signals->SyncWithValidationInterfaceQueue(); // drain events queue
 }
 

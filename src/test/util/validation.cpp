@@ -8,7 +8,10 @@
 #include <util/check.h>
 #include <util/time.h>
 #include <chainstate.h>
+#include <validation/core_validation_event_snapshot.h>
 #include <validationinterface.h>
+
+#include <utility>
 
 void TestBlockManager::CleanupForFuzzing()
 {
@@ -46,7 +49,16 @@ void ValidationInterfaceTest::BlockConnected(
     const std::shared_ptr<const CBlock>& block,
     const CBlockIndex* pindex)
 {
-    obj.BlockConnected(block, pindex);
+    Assert(pindex);
+    validation::ValidationBlockInfo block_info;
+    {
+        LOCK(::cs_main);
+        block_info = validation::SnapshotCoreValidationBlockInfo(*pindex);
+    }
+    obj.BlockConnected({
+        .block = block,
+        .block_info = std::move(block_info),
+    });
 }
 void TestChainstateManager::InvalidBlockFound(CBlockIndex* pindex, const BlockValidationState& state)
 {

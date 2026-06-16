@@ -22,7 +22,9 @@ set(BITCOIN_CONSENSUS_PUBLIC_API_HEADERS
   "consensus/predicates.h"
   "consensus/script_checker.h"
   "consensus/script_view.h"
+  "consensus/serialization.h"
   "consensus/snapshot_spend_state.h"
+  "consensus/spend_state_batch.h"
   "consensus/spend_state.h"
   "consensus/tx_check.h"
 )
@@ -30,6 +32,7 @@ set(BITCOIN_CONSENSUS_PUBLIC_API_HEADERS
 set(BITCOIN_CONSENSUS_SUPPORT_HEADERS
   "consensus/locktime.h"
   "consensus/pow.h"
+  "consensus/segment_spend.h"
   "consensus/sequence_locks.h"
   "consensus/sigops.h"
   "consensus/validation.h"
@@ -68,10 +71,4 @@ set(BITCOIN_CONSENSUS_INTERNAL_PROTOCOL_HEADERS
   "hash.h"
   "script/interpreter.h"
   "script/script_error.h"
-)
-
-set(BITCOIN_CONSENSUS_INSTALL_HEADERS
-  ${BITCOIN_CONSENSUS_PUBLIC_API_HEADERS}
-  ${BITCOIN_CONSENSUS_PUBLIC_PROTOCOL_HEADERS}
-  ${BITCOIN_CONSENSUS_PUBLIC_TRANSITIVE_HEADERS}
 )

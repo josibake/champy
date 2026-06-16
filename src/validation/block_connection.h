@@ -6,18 +6,21 @@
 #define BITCOIN_VALIDATION_BLOCK_CONNECTION_H
 
 #include <consensus/block_check.h>
+#include <consensus/block_commit.h>
 #include <consensus/block_consensus_pipeline.h>
 #include <consensus/block_spend.h>
 #include <kernel/cs_main.h>
+#include <validation/block_connection_state.h>
+#include <uint256.h>
 
 #include <memory>
+#include <optional>
+#include <utility>
 
 class CBlock;
 class CBlockIndex;
 class BlockValidationState;
-class BlockUndoWriter;
 class BlockConnectionTrace;
-class BlockIndexValidityCommitter;
 
 namespace kernel {
 class Notifications;
@@ -26,17 +29,14 @@ class Notifications;
 /**
  * Block connection options.
  *
- * These keep block-check policy and commit behavior explicit at the validation
- * boundary. Script-cache policy belongs to the script-checker capability.
+ * These keep block-check policy explicit at the validation boundary.
+ * Script-cache policy belongs to the script-checker capability.
  */
 struct BlockConnectionOptions {
     Consensus::BlockCheckOptions block_check_options{};
-    bool commit{true};
 };
 
 namespace validation {
-
-class BlockConnectionState;
 
 /**
  * Consensus and policy context for a block connection attempt.
@@ -60,26 +60,52 @@ struct BlockConnectionContext {
  */
 struct BlockConnectionRuntime {
     kernel::Notifications& notifications;
-    BlockUndoWriter& undo_writer;
-    BlockIndexValidityCommitter& block_index_committer;
     Consensus::BlockScriptChecker& script_checker;
     BlockConnectionTrace& trace;
+    const Consensus::BlockSpendJoiner* spend_joiner{nullptr};
 };
+
+struct BlockConnectionBlockPosition {
+    uint256 hash{};
+    uint256 parent_hash{};
+    int height{-1};
+};
+
+[[nodiscard]] BlockConnectionBlockPosition SnapshotBlockConnectionPosition(const CBlockIndex& block_index)
+    EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
 
 /**
  * Block-connection request.
  *
- * This is still a Core validation request because it carries Core's current
- * block index. Spend-state reads and commits are behind BlockConnectionState so
+ * Execution receives copied block-position facts, not Core's mutable block
+ * index. Spend-state reads and commits are behind BlockConnectionState so
  * alternate state implementations can run through the same engine.
  */
 struct BlockConnectionRequest {
     BlockConnectionRuntime runtime;
     BlockConnectionContext context;
     const CBlock& block;
-    CBlockIndex& block_index;
+    BlockConnectionBlockPosition block_position;
     BlockConnectionState& connection_state;
     BlockConnectionOptions options{};
+};
+
+struct BlockConnectionCommitRuntime {
+    Consensus::BlockRevertDataWriter& revert_data_writer;
+    Consensus::SpendCommitter& spend_state_committer;
+    Consensus::BlockMetadataCommitter& metadata_committer;
+    BlockConnectionTrace& trace;
+};
+
+struct BlockConnectionCommitContext {
+    const CBlock& block;
+    BlockConnectionBlockPosition block_position;
+    BlockConnectionState& connection_state;
+};
+
+struct BlockConnectionCommitRequest {
+    BlockConnectionCommitRuntime runtime;
+    BlockConnectionCommitContext context;
 };
 
 enum class BlockConnectionStatus {
@@ -87,17 +113,40 @@ enum class BlockConnectionStatus {
     Failed,
 };
 
+struct BlockConnectionCommitPackage {
+    uint256 expected_previous_block;
+    Consensus::BlockCommitContext commit_context;
+    std::optional<Consensus::BlockSpendEffects> effects;
+};
+
 struct BlockConnectionResult {
     BlockConnectionStatus status{BlockConnectionStatus::Failed};
+    std::optional<BlockConnectionCommitPackage> commit_package{};
+    // Present only when a commit boundary was reached and reported its failure
+    // postcondition. Plain validation/staleness failures leave this empty.
+    std::optional<Consensus::BlockCommitFailureState> commit_failure_state{};
 
     [[nodiscard]] static BlockConnectionResult Connected() { return {BlockConnectionStatus::Connected}; }
+    [[nodiscard]] static BlockConnectionResult Connected(BlockConnectionCommitPackage package) { return {BlockConnectionStatus::Connected, std::move(package)}; }
     [[nodiscard]] static BlockConnectionResult Failed() { return {BlockConnectionStatus::Failed}; }
+    [[nodiscard]] static BlockConnectionResult CommitFailed(Consensus::BlockCommitFailureState failure_state)
+    {
+        return {
+            .status = BlockConnectionStatus::Failed,
+            .commit_failure_state = failure_state,
+        };
+    }
     [[nodiscard]] bool Succeeded() const { return status == BlockConnectionStatus::Connected; }
+    [[nodiscard]] bool HasTaintedCommitFailure() const
+    {
+        return commit_failure_state && *commit_failure_state == Consensus::BlockCommitFailureState::Tainted;
+    }
 };
 
 class BlockConnectionEngine final {
 public:
-    [[nodiscard]] BlockConnectionResult Connect(const BlockConnectionRequest& request, BlockValidationState& state) const
+    [[nodiscard]] BlockConnectionResult ConnectPrepared(const BlockConnectionRequest& request, BlockValidationState& state) const;
+    [[nodiscard]] BlockConnectionResult Commit(const BlockConnectionCommitRequest& request, BlockConnectionCommitPackage package, BlockValidationState& state) const
         EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
 };
 

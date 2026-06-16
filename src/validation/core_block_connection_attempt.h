@@ -5,30 +5,16 @@
 #ifndef BITCOIN_CORE_BLOCK_CONNECTION_ATTEMPT_H
 #define BITCOIN_CORE_BLOCK_CONNECTION_ATTEMPT_H
 
-#include <consensus/block_commit.h>
 #include <consensus/block_consensus_pipeline.h>
 #include <consensus/block_spend.h>
-#include <kernel/cs_main.h>
-#include <validation/core_block_commit_adapters.h>
 
-class BlockUndoWriter;
 class CBlock;
-class CBlockIndex;
-class BlockIndexValidityCommitter;
-namespace validation {
-class BlockConnectionState;
-} // namespace validation
 
 class CoreBlockConnectionAttempt final {
 public:
     CoreBlockConnectionAttempt(
         const CBlock& block,
-        CBlockIndex& block_index,
-        BlockUndoWriter& undo_writer,
-        BlockIndexValidityCommitter& block_index_committer,
-        validation::BlockConnectionState& connection_state,
-        Consensus::BlockSpendWorkspace& spend_workspace,
-        Consensus::BlockSpendStateCommitter& spend_state_committer,
+        Consensus::SpendWorkspace& spend_workspace,
         Consensus::BlockConsensusContext consensus_context,
         Consensus::BlockSpendConsensusOptions spend_options);
 
@@ -37,22 +23,15 @@ public:
     CoreBlockConnectionAttempt(CoreBlockConnectionAttempt&&) = delete;
     CoreBlockConnectionAttempt& operator=(CoreBlockConnectionAttempt&&) = delete;
 
-    [[nodiscard]] Consensus::BlockSpendResult<Consensus::BlockSpendEffects> ValidateAndStageSpend(Consensus::BlockScriptChecker& script_checker)
-        EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
+    [[nodiscard]] Consensus::BlockSpendResult<Consensus::BlockSpendEffects> ValidateAndStageSpend(Consensus::BlockScriptChecker& script_checker);
+    [[nodiscard]] Consensus::BlockSpendResult<Consensus::BlockSpendEffects> ValidateAndStageSpend(const Consensus::BlockSpendJoiner& joiner, Consensus::BlockScriptChecker& script_checker);
     [[nodiscard]] Consensus::BlockSpendResult<Consensus::BlockSpendEffects> CompleteSpendStage(
         Consensus::BlockSpendResult<Consensus::BlockSpendEffects> spend_effects,
-        Consensus::BlockScriptChecker& script_checker) EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
-    [[nodiscard]] Consensus::BlockCommitResult<void> WriteUndoAndCommitSpendState(const Consensus::BlockSpendEffects& effects)
-        EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
-    [[nodiscard]] Consensus::BlockCommitResult<void> CommitBlockIndex(const Consensus::BlockSpendEffects& effects)
-        EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
+        Consensus::BlockScriptChecker& script_checker);
 
 private:
-    Consensus::BlockSpendWorkspace& m_spend_workspace;
-    Consensus::BlockCommitContext m_commit_context;
+    Consensus::SpendWorkspace& m_spend_workspace;
     Consensus::BlockConsensusPipeline m_pipeline;
-    Consensus::BlockSpendStateCommitter& m_spend_state_committer;
-    CoreBlockEffectsWriter m_effects_writer;
     Consensus::BlockSpendConsensusOptions m_spend_options;
 };
 

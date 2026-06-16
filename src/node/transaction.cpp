@@ -19,7 +19,7 @@
 namespace node {
 static TransactionError HandleATMPError(const MempoolValidationState& state, std::string& err_string_out)
 {
-    err_string_out = state.ToString();
+    err_string_out = FormatValidationStateForLog(state);
     if (state.IsInvalid()) {
         if (state.GetResult() == MempoolValidationResult::MISSING_INPUTS) {
             return TransactionError::MISSING_INPUTS;

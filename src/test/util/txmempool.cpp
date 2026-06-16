@@ -49,11 +49,11 @@ std::optional<std::string> CheckPackageMempoolAcceptResult(const Package& txns,
 {
     if (expect_valid) {
         if (result.m_state.IsInvalid()) {
-            return strprintf("Package validation unexpectedly failed: %s", result.m_state.ToString());
+            return strprintf("Package validation unexpectedly failed: %s", FormatValidationStateForLog(result.m_state));
         }
     } else {
         if (result.m_state.IsValid()) {
-            return strprintf("Package validation unexpectedly succeeded. %s", result.m_state.ToString());
+            return strprintf("Package validation unexpectedly succeeded. %s", FormatValidationStateForLog(result.m_state));
         }
     }
     if (result.m_state.GetResult() != PackageValidationResult::PCKG_POLICY && txns.size() != result.m_tx_results.size()) {
@@ -68,7 +68,7 @@ std::optional<std::string> CheckPackageMempoolAcceptResult(const Package& txns,
         const auto& atmp_result = result.m_tx_results.at(wtxid);
         const bool valid{atmp_result.m_result_type == MempoolAcceptResult::ResultType::VALID};
         if (expect_valid && atmp_result.m_state.IsInvalid()) {
-            return strprintf("tx %s unexpectedly failed: %s", wtxid.ToString(), atmp_result.m_state.ToString());
+            return strprintf("tx %s unexpectedly failed: %s", wtxid.ToString(), FormatValidationStateForLog(atmp_result.m_state));
         }
 
         // Each subpackage is allowed MAX_REPLACEMENT_CANDIDATES replacements (only checking individually here)

@@ -36,13 +36,6 @@ BlockSpendContext BuildBlockSpendContext(const BlockHeaderContext& headers)
     };
 }
 
-BlockCommitContext BuildBlockCommitContext(const uint256& new_best_block)
-{
-    return BlockCommitContext{
-        .new_best_block = new_best_block,
-    };
-}
-
 BlockCommitContext BuildBlockCommitContext(const BlockHeaderContext& headers, const uint256& new_best_block)
 {
     return BlockCommitContext{
@@ -142,6 +135,7 @@ BlockConsensusStageError BuildBlockConsensusStageError(BlockConsensusStage stage
     return BlockConsensusStageError{
         .stage = stage,
         .issue = std::make_optional(error.issue),
+        .runtime_issue = std::nullopt,
         .reject_reason = error.reject_reason,
         .debug_message = error.debug_message,
     };
@@ -152,6 +146,7 @@ BlockConsensusStageError BuildBlockConsensusStageError(BlockConsensusStage stage
     return BlockConsensusStageError{
         .stage = stage,
         .issue = std::make_optional(error.issue),
+        .runtime_issue = error.runtime_issue,
         .reject_reason = error.reject_reason,
         .debug_message = error.debug_message,
     };
@@ -162,6 +157,7 @@ BlockConsensusStageError BuildBlockConsensusStageError(BlockConsensusStage stage
     return BlockConsensusStageError{
         .stage = stage,
         .issue = std::nullopt,
+        .runtime_issue = error.runtime_issue,
         .reject_reason = error.reject_reason,
         .debug_message = {},
     };
@@ -235,7 +231,7 @@ BlockConsensusStageResult<BlockSpendEffects> ValidateBlockPrecommitStages(
     const BlockStructuralConsensusOptions& structural_options,
     const BlockContextualConsensusOptions& contextual_options,
     const BlockConsensusContext& consensus_context,
-    BlockSpendWorkspace& workspace,
+    SpendWorkspace& workspace,
     BlockScriptChecker& script_checker,
     const BlockSpendConsensusOptions& spend_options)
 {
@@ -269,7 +265,7 @@ BlockConsensusStageResult<BlockSpendEffects> ValidateBlockPrecommitStages(
     const BlockStructuralConsensusOptions& structural_options,
     const BlockContextualConsensusOptions& contextual_options,
     const BlockConsensusContext& consensus_context,
-    BlockSpendWorkspace& workspace,
+    SpendWorkspace& workspace,
     BlockScriptChecker& script_checker,
     const BlockSpendConsensusOptions& spend_options)
 {
@@ -289,7 +285,7 @@ BlockConsensusStageResult<BlockSpendEffects> ValidateBlockPrecommit(
     const BlockStructuralConsensusOptions& structural_options,
     const BlockContextualConsensusOptions& contextual_options,
     const BlockConsensusContext& consensus_context,
-    BlockSpendWorkspace& workspace,
+    SpendWorkspace& workspace,
     BlockScriptChecker& script_checker,
     const BlockSpendConsensusOptions& spend_options)
 {
@@ -308,7 +304,7 @@ BlockConsensusStageResult<BlockSpendEffects> ValidateBlockPrecommit(
     const BlockStructuralConsensusOptions& structural_options,
     const BlockContextualConsensusOptions& contextual_options,
     const BlockConsensusContext& consensus_context,
-    BlockSpendWorkspace& workspace,
+    SpendWorkspace& workspace,
     BlockScriptChecker& script_checker,
     const BlockSpendConsensusOptions& spend_options)
 {
@@ -322,7 +318,7 @@ BlockConsensusStageResult<BlockSpendEffects> ValidateBlockPrecommit(
         spend_options);
 }
 
-BlockConsensusStageResult<void> CommitBlockStageEffects(const BlockCommitContext& commit_context, const BlockSpendEffects& effects, BlockRevertDataWriter& revert_data_writer, BlockSpendStateCommitter& spend_state_committer, BlockMetadataCommitter& metadata_committer)
+BlockConsensusStageResult<void> CommitBlockStageEffects(const BlockCommitContext& commit_context, const BlockSpendEffects& effects, BlockRevertDataWriter& revert_data_writer, SpendCommitter& spend_state_committer, BlockMetadataCommitter& metadata_committer)
 {
     const auto commit{CommitBlockEffects(commit_context, effects, revert_data_writer, spend_state_committer, metadata_committer)};
     if (!commit) {
@@ -338,11 +334,11 @@ BlockConsensusStageResult<BlockSpendEffects> ValidateAndCommitBlockStages(
     const BlockStructuralConsensusOptions& structural_options,
     const BlockContextualConsensusOptions& contextual_options,
     const BlockConsensusContext& consensus_context,
-    BlockSpendWorkspace& workspace,
+    SpendWorkspace& workspace,
     BlockScriptChecker& script_checker,
     const BlockSpendConsensusOptions& spend_options,
     BlockRevertDataWriter& revert_data_writer,
-    BlockSpendStateCommitter& spend_state_committer,
+    SpendCommitter& spend_state_committer,
     BlockMetadataCommitter& metadata_committer)
 {
     auto effects{ValidateBlockPrecommitStages(
@@ -370,11 +366,11 @@ BlockConsensusStageResult<BlockSpendEffects> ValidateAndCommitBlockStages(
     const BlockStructuralConsensusOptions& structural_options,
     const BlockContextualConsensusOptions& contextual_options,
     const BlockConsensusContext& consensus_context,
-    BlockSpendWorkspace& workspace,
+    SpendWorkspace& workspace,
     BlockScriptChecker& script_checker,
     const BlockSpendConsensusOptions& spend_options,
     BlockRevertDataWriter& revert_data_writer,
-    BlockSpendStateCommitter& spend_state_committer,
+    SpendCommitter& spend_state_committer,
     BlockMetadataCommitter& metadata_committer)
 {
     const auto input{BuildBlockPrecommitValidationView(block)};
@@ -396,11 +392,11 @@ BlockConsensusStageResult<BlockSpendEffects> ValidateAndCommitBlock(
     const BlockStructuralConsensusOptions& structural_options,
     const BlockContextualConsensusOptions& contextual_options,
     const BlockConsensusContext& consensus_context,
-    BlockSpendWorkspace& workspace,
+    SpendWorkspace& workspace,
     BlockScriptChecker& script_checker,
     const BlockSpendConsensusOptions& spend_options,
     BlockRevertDataWriter& revert_data_writer,
-    BlockSpendStateCommitter& spend_state_committer,
+    SpendCommitter& spend_state_committer,
     BlockMetadataCommitter& metadata_committer)
 {
     return ValidateAndCommitBlockStages(
@@ -421,11 +417,11 @@ BlockConsensusStageResult<BlockSpendEffects> ValidateAndCommitBlock(
     const BlockStructuralConsensusOptions& structural_options,
     const BlockContextualConsensusOptions& contextual_options,
     const BlockConsensusContext& consensus_context,
-    BlockSpendWorkspace& workspace,
+    SpendWorkspace& workspace,
     BlockScriptChecker& script_checker,
     const BlockSpendConsensusOptions& spend_options,
     BlockRevertDataWriter& revert_data_writer,
-    BlockSpendStateCommitter& spend_state_committer,
+    SpendCommitter& spend_state_committer,
     BlockMetadataCommitter& metadata_committer)
 {
     return ValidateAndCommitBlockStages(
@@ -451,12 +447,17 @@ BlockConsensusPipeline::BlockConsensusPipeline(const CBlock& block, BlockConsens
 {
 }
 
-BlockSpendResult<BlockSpendEffects> BlockConsensusPipeline::ValidateAndStageSpend(BlockSpendWorkspace& workspace, BlockScriptChecker& script_checker, const BlockSpendConsensusOptions& options) const
+BlockSpendResult<BlockSpendEffects> BlockConsensusPipeline::ValidateAndStageSpend(SpendWorkspace& workspace, BlockScriptChecker& script_checker, const BlockSpendConsensusOptions& options) const
 {
     return ValidateAndStageBlockTransactions(m_transactions, workspace, script_checker, m_context.spend, options);
 }
 
-BlockSpendResult<BlockSpendEffects> BlockConsensusPipeline::ValidateAndCompleteSpendStage(BlockSpendWorkspace& workspace, BlockScriptChecker& script_checker, const BlockSpendConsensusOptions& options) const
+BlockSpendResult<BlockSpendEffects> BlockConsensusPipeline::ValidateAndStageSpend(SpendWorkspace& workspace, const BlockSpendJoiner& joiner, BlockScriptChecker& script_checker, const BlockSpendConsensusOptions& options) const
+{
+    return ValidateAndStageBlockTransactions(m_transactions, workspace, joiner, script_checker, m_context.spend, options);
+}
+
+BlockSpendResult<BlockSpendEffects> BlockConsensusPipeline::ValidateAndCompleteSpendStage(SpendWorkspace& workspace, BlockScriptChecker& script_checker, const BlockSpendConsensusOptions& options) const
 {
     auto spend_effects{ValidateAndStageSpend(workspace, script_checker, options)};
     return CompleteSpendStage(std::move(spend_effects), script_checker);

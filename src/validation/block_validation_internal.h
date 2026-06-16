@@ -7,6 +7,7 @@
 
 #include <kernel/cs_main.h>
 #include <validation/block_validation.h>
+#include <validation/test_block_validity.h>
 
 #include <memory>
 #include <optional>
@@ -14,47 +15,30 @@
 
 class BlockHeaderContextProvider;
 class BlockIndexLookup;
-class BlockIndexValidityCommitter;
-class BlockUndoWriter;
 class Chainstate;
 class ChainstateEventSink;
-class CCoinsViewCache;
-class CoreChainValidationContext;
+class CoreAcceptedContextReader;
+class CoreActivationRuntime;
+class CoreBlockDataAdmissionRuntime;
+class CoreHeaderAdmissionRuntime;
 namespace validation {
-class ActiveChainView;
-class ScriptCheckScheduler;
+class ValidationEventQueue;
 } // namespace validation
+namespace Consensus {
+struct Params;
+} // namespace Consensus
 
-[[nodiscard]] NewBlockHeadersResult ProcessNewBlockHeaders(CoreChainValidationContext& context, std::span<const CBlockHeader> headers, BlockHeaderAcceptanceOptions options, BlockValidationTime time, BlockValidationState& state) LOCKS_EXCLUDED(cs_main);
-[[nodiscard]] BlockAcceptanceResult AcceptBlock(CoreChainValidationContext& context, const std::shared_ptr<const CBlock>& pblock, BlockValidationState& state, BlockAcceptanceOptions options, BlockValidationTime time) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
-[[nodiscard]] NewBlockProcessingResult ProcessNewBlock(CoreChainValidationContext& context, ChainstateEventSink* chain_events, const std::shared_ptr<const CBlock>& block, NewBlockProcessingOptions options, BlockValidationTime time) LOCKS_EXCLUDED(cs_main);
-[[nodiscard]] NewBlockProcessingResult ProcessNewBlock(CoreChainValidationContext& context, const std::shared_ptr<const CBlock>& block, NewBlockProcessingOptions options, BlockValidationTime time) LOCKS_EXCLUDED(cs_main);
-
-struct TestBlockValidityRequest {
-    validation::ActiveChainView& active_chain;
-    const Consensus::Params& consensus_params;
-    BlockHeaderContextProvider& header_context;
-    CCoinsViewCache& coins_tip;
-    BlockUndoWriter& undo_writer;
-    BlockIndexLookup& block_index_lookup;
-    BlockIndexValidityCommitter& block_index_committer;
-    CoreChainValidationContext& validation_context;
-    validation::ScriptCheckScheduler& script_check_scheduler;
-    std::optional<const char*>& last_script_check_reason_logged;
-};
-
-/**
- * Verify a block, including transactions. The block must connect to the current
- * tip of the supplied active chain.
- *
- * Returns a valid or invalid state. This does not currently return an error
- * state unless something is wrong with the existing chain state.
- */
-BlockValidationState TestBlockValidity(
-    TestBlockValidityRequest request,
-    const CBlock& block,
-    const Consensus::BlockCheckOptions& options,
-    BlockValidationTime time) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
+[[nodiscard]] NewBlockHeadersResult ProcessNewBlockHeaders(CoreHeaderAdmissionRuntime& runtime, std::span<const CBlockHeader> headers, BlockHeaderAcceptanceOptions options, BlockValidationTime time, BlockValidationState& state) LOCKS_EXCLUDED(cs_main);
+[[nodiscard]] NewBlockStructuralCheckResult CheckNewBlockStructural(const Consensus::Params& consensus_params, const std::shared_ptr<const CBlock>& block, BlockValidationState& state) LOCKS_EXCLUDED(cs_main);
+[[nodiscard]] BlockAcceptanceResult AcceptBlock(CoreBlockDataAdmissionRuntime& runtime, const std::shared_ptr<const CBlock>& pblock, BlockValidationState& state, BlockAcceptanceOptions options, BlockValidationTime time) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
+[[nodiscard]] BlockAcceptanceResult AcceptNewBlockData(CoreBlockDataAdmissionRuntime& runtime, const std::shared_ptr<const CBlock>& block, BlockValidationState& state, BlockAcceptanceOptions options, BlockValidationTime time) LOCKS_EXCLUDED(cs_main);
+[[nodiscard]] std::optional<NewBlockCandidateContextSnapshot> SnapshotAcceptedBlockContext(const Consensus::Params& consensus_params, BlockIndexLookup& block_index, const BlockHeaderContextProvider& header_context, const uint256& block_hash) LOCKS_EXCLUDED(cs_main);
+[[nodiscard]] std::optional<NewBlockCandidateContextSnapshot> SnapshotAcceptedBlockContext(CoreAcceptedContextReader& reader, const uint256& block_hash) LOCKS_EXCLUDED(cs_main);
+[[nodiscard]] BlockActivationResult ActivateAcceptedTipCandidate(CoreActivationRuntime& runtime, ChainstateEventSink* chain_events, const std::shared_ptr<const CBlock>& block, BlockValidationState& state, BlockValidationTime time) LOCKS_EXCLUDED(cs_main);
+[[nodiscard]] BlockActivationResult ActivateAcceptedBlock(CoreActivationRuntime& runtime, ChainstateEventSink* chain_events, const std::shared_ptr<const CBlock>& block, BlockValidationState& state, BlockValidationTime time) LOCKS_EXCLUDED(cs_main);
+void ReportBlockChecked(validation::ValidationEventQueue& events, const std::shared_ptr<const CBlock>& block, const BlockValidationState& state) LOCKS_EXCLUDED(cs_main);
+[[nodiscard]] NewBlockProcessingResult ProcessNewBlock(CoreBlockDataAdmissionRuntime& admission_runtime, CoreAcceptedContextReader& context_reader, CoreActivationRuntime& activation_runtime, ChainstateEventSink* chain_events, const std::shared_ptr<const CBlock>& block, NewBlockProcessingOptions options, BlockValidationTime time) LOCKS_EXCLUDED(cs_main);
+[[nodiscard]] NewBlockProcessingResult ProcessNewBlock(CoreBlockDataAdmissionRuntime& admission_runtime, CoreAcceptedContextReader& context_reader, CoreActivationRuntime& activation_runtime, const std::shared_ptr<const CBlock>& block, NewBlockProcessingOptions options, BlockValidationTime time) LOCKS_EXCLUDED(cs_main);
 
 BlockValidationState TestBlockValidity(
     Chainstate& chainstate,

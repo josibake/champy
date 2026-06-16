@@ -3,6 +3,7 @@
 # file COPYING or https://opensource.org/license/mit/.
 
 include(AddWindowsResources)
+include(CMakePackageConfigHelpers)
 include(GNUInstallDirs)
 
 configure_file(${PROJECT_SOURCE_DIR}/cmake/bitcoin-build-config.h.in bitcoin-build-config.h USE_SOURCE_PERMISSIONS @ONLY)
@@ -63,8 +64,217 @@ add_dependencies(bitcoin_clientversion generate_build_info)
 add_subdirectory(crypto)
 add_subdirectory(util)
 add_subdirectory(ipc)
+target_include_directories(bitcoin_crypto
+  PRIVATE
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
+)
 
 include(${PROJECT_SOURCE_DIR}/cmake/BitcoinConsensusApi.cmake)
+include(${PROJECT_SOURCE_DIR}/cmake/BitcoinApiManifest.cmake)
+
+add_library(bitcoin_protocol STATIC EXCLUDE_FROM_ALL
+  bitcoin/protocol/codec.cpp
+  crypto/sha256.cpp
+  ${BITCOIN_PROTOCOL_PUBLIC_HEADERS}
+)
+target_compile_features(bitcoin_protocol
+  PUBLIC
+    cxx_std_20
+)
+set(bitcoin_protocol_private_sha256_definitions
+  DISABLE_OPTIMIZED_SHA256
+  CSHA256=BitcoinProtocolCSHA256
+  SHA256AutoDetect=BitcoinProtocolSHA256AutoDetect
+  SHA256D64=BitcoinProtocolSHA256D64
+  sha256_implementation=bitcoin_protocol_sha256_implementation
+)
+target_compile_definitions(bitcoin_protocol
+  PRIVATE
+    ${bitcoin_protocol_private_sha256_definitions}
+)
+target_include_directories(bitcoin_protocol
+  PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
+    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+)
+
+add_library(bitcoin_chain_graph STATIC EXCLUDE_FROM_ALL
+  bitcoin/chain_graph/chain_graph.cpp
+  ${BITCOIN_CHAIN_GRAPH_PUBLIC_HEADERS}
+)
+target_compile_features(bitcoin_chain_graph
+  PUBLIC
+    cxx_std_20
+)
+target_include_directories(bitcoin_chain_graph
+  PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
+    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+)
+target_link_libraries(bitcoin_chain_graph
+  PUBLIC
+    bitcoin_protocol
+)
+
+add_library(bitcoin_validation STATIC EXCLUDE_FROM_ALL
+  bitcoin/validation/block.cpp
+  bitcoin/validation/header.cpp
+  bitcoin/validation/script.cpp
+  bitcoin/validation/spend.cpp
+  bitcoin/validation/transaction.cpp
+  bitcoin/validation/verify.cpp
+  ${BITCOIN_VALIDATION_PUBLIC_HEADERS}
+)
+target_compile_features(bitcoin_validation
+  PUBLIC
+    cxx_std_20
+)
+target_include_directories(bitcoin_validation
+  PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
+    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+)
+add_library(bitcoin_validation_script_engine_objects OBJECT
+  crypto/hex_base.cpp
+  crypto/hmac_sha512.cpp
+  crypto/ripemd160.cpp
+  crypto/sha1.cpp
+  crypto/sha256.cpp
+  crypto/sha512.cpp
+  script/interpreter.cpp
+  script/script.cpp
+  script/script_error.cpp
+  primitives/transaction.cpp
+  pubkey.cpp
+  hash.cpp
+  uint256.cpp
+)
+target_compile_features(bitcoin_validation_script_engine_objects
+  PRIVATE
+    cxx_std_20
+)
+target_compile_definitions(bitcoin_validation_script_engine_objects
+  PRIVATE
+    DISABLE_OPTIMIZED_SHA256
+    CSHA256=BitcoinValidationScriptEngineCSHA256
+    SHA256AutoDetect=BitcoinValidationScriptEngineSHA256AutoDetect
+    SHA256D64=BitcoinValidationScriptEngineSHA256D64
+    sha256_implementation=bitcoin_validation_script_engine_sha256_implementation
+)
+target_include_directories(bitcoin_validation_script_engine_objects
+  PRIVATE
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
+)
+target_link_libraries(bitcoin_validation_script_engine_objects
+  PRIVATE
+    libsecp256k1::secp256k1
+)
+target_sources(bitcoin_validation
+  PRIVATE
+    $<TARGET_OBJECTS:bitcoin_validation_script_engine_objects>
+)
+
+target_link_libraries(bitcoin_validation
+  PUBLIC
+    bitcoin_protocol
+  PRIVATE
+    libsecp256k1::secp256k1
+)
+
+add_library(bitcoin_kernel STATIC EXCLUDE_FROM_ALL
+  bitcoin/kernel/chainstate.cpp
+  bitcoin/kernel/context.cpp
+  ${BITCOIN_KERNEL_PUBLIC_HEADERS}
+)
+# Build-tree-only draft: do not install or export bitcoin_kernel until the
+# Core-backed chainstate operations are implemented by the C++ API instead of
+# returning unsupported_operation.
+target_compile_features(bitcoin_kernel
+  PUBLIC
+    cxx_std_20
+)
+target_include_directories(bitcoin_kernel
+  PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
+    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
+)
+target_link_libraries(bitcoin_kernel
+  PUBLIC
+    bitcoin_protocol
+)
+
+install(TARGETS bitcoin_protocol bitcoin_validation
+  EXPORT BitcoinValidationTargets
+  RUNTIME
+    DESTINATION ${CMAKE_INSTALL_BINDIR}
+    COMPONENT bitcoin_validation
+  LIBRARY
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    COMPONENT bitcoin_validation
+  ARCHIVE
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    COMPONENT bitcoin_validation
+)
+
+install(EXPORT BitcoinValidationTargets
+  NAMESPACE Bitcoin::
+  DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/BitcoinValidation"
+  COMPONENT bitcoin_validation
+)
+
+configure_package_config_file(
+  "${PROJECT_SOURCE_DIR}/cmake/BitcoinValidationConfig.cmake.in"
+  "${PROJECT_BINARY_DIR}/BitcoinValidationConfig.cmake"
+  INSTALL_DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/BitcoinValidation"
+)
+write_basic_package_version_file(
+  "${PROJECT_BINARY_DIR}/BitcoinValidationConfigVersion.cmake"
+  VERSION "${PROJECT_VERSION}"
+  COMPATIBILITY SameMajorVersion
+)
+install(FILES
+    "${PROJECT_BINARY_DIR}/BitcoinValidationConfig.cmake"
+    "${PROJECT_BINARY_DIR}/BitcoinValidationConfigVersion.cmake"
+  DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/BitcoinValidation"
+  COMPONENT bitcoin_validation
+)
+
+foreach(header IN LISTS BITCOIN_PROTOCOL_PUBLIC_HEADERS BITCOIN_VALIDATION_PUBLIC_HEADERS)
+  get_filename_component(header_dir "${header}" DIRECTORY)
+  install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/${header}"
+    DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/${header_dir}"
+    COMPONENT bitcoin_validation
+  )
+endforeach()
+
+add_library(bitcoin_validation_core_adapter STATIC EXCLUDE_FROM_ALL
+  bitcoin/core_adapter/api.h
+  bitcoin/core_adapter/block.cpp
+  bitcoin/core_adapter/block.h
+  bitcoin/core_adapter/coin.cpp
+  bitcoin/core_adapter/coin.h
+  bitcoin/core_adapter/transaction.cpp
+  bitcoin/core_adapter/transaction.h
+)
+target_compile_features(bitcoin_validation_core_adapter
+  PUBLIC
+    cxx_std_20
+)
+target_include_directories(bitcoin_validation_core_adapter
+  PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
+)
+target_link_libraries(bitcoin_validation_core_adapter
+  PUBLIC
+    bitcoin_validation
+    bitcoin_chain_graph
+  PRIVATE
+    core_interface
+    bitcoin_consensus
+)
 
 add_library(bitcoin_consensus STATIC EXCLUDE_FROM_ALL
   arith_uint256.cpp
@@ -79,10 +289,13 @@ add_library(bitcoin_consensus STATIC EXCLUDE_FROM_ALL
   consensus/predicates.cpp
   consensus/pow.cpp
   consensus/sequence_locks.cpp
+  consensus/segment_spend.cpp
+  consensus/serialization.cpp
   consensus/script_view.cpp
   consensus/script_checker.cpp
   consensus/sigops.cpp
   consensus/snapshot_spend_state.cpp
+  consensus/spend_state_batch.cpp
   consensus/tx_check.cpp
   consensus/block_consensus_pipeline.cpp
   hash.cpp
@@ -125,24 +338,7 @@ set_target_properties(bitcoin_consensus PROPERTIES
   BITCOIN_CONSENSUS_PUBLIC_TRANSITIVE_HEADERS "${BITCOIN_CONSENSUS_PUBLIC_TRANSITIVE_HEADERS}"
   BITCOIN_CONSENSUS_SUPPORT_HEADERS "${BITCOIN_CONSENSUS_SUPPORT_HEADERS}"
   BITCOIN_CONSENSUS_INTERNAL_PROTOCOL_HEADERS "${BITCOIN_CONSENSUS_INTERNAL_PROTOCOL_HEADERS}"
-  BITCOIN_CONSENSUS_INSTALL_HEADERS "${BITCOIN_CONSENSUS_INSTALL_HEADERS}"
 )
-install(TARGETS bitcoin_consensus
-  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR} COMPONENT bitcoin_consensus
-  LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR} COMPONENT bitcoin_consensus
-  ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR} COMPONENT bitcoin_consensus
-)
-configure_file(${PROJECT_SOURCE_DIR}/libbitcoinconsensus.pc.in ${PROJECT_BINARY_DIR}/libbitcoinconsensus.pc @ONLY)
-install(FILES ${PROJECT_BINARY_DIR}/libbitcoinconsensus.pc DESTINATION "${CMAKE_INSTALL_LIBDIR}/pkgconfig" COMPONENT bitcoin_consensus)
-foreach(header IN LISTS BITCOIN_CONSENSUS_INSTALL_HEADERS)
-  get_filename_component(header_directory "${header}" DIRECTORY)
-  if(header_directory STREQUAL "")
-    set(header_destination "${CMAKE_INSTALL_INCLUDEDIR}")
-  else()
-    set(header_destination "${CMAKE_INSTALL_INCLUDEDIR}/${header_directory}")
-  endif()
-  install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/${header}" DESTINATION "${header_destination}" COMPONENT bitcoin_consensus)
-endforeach()
 
 # Home for common functionality shared by different executables and libraries.
 # Similar to `bitcoin_util` library, but higher-level.
@@ -245,14 +441,20 @@ set(BITCOIN_CHAIN_VALIDATION_SOURCES
   ${CMAKE_CURRENT_SOURCE_DIR}/validation/block_validation_policy.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/validation/chain_validation.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/validation/block_connection_trace.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/validation/core_block_index_invariants.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/validation/core_chain_activation.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/validation/core_chain_validation_context.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/validation/core_chain_validation_runtimes.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/validation/core_block_connection_context.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/validation/core_block_connection_snapshot.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/validation/core_block_connection_setup.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/validation/core_block_connection_attempt.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/validation/core_block_policy.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/validation/core_check_queue_script_task_executor.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/validation/sequence_locks_adapters.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/validation/script_check_scheduler.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/validation/script_task_executor.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/validation/runtime_time.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/script/script_check.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/validation/snapshot_block_connection_state.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/validation/validation_event_queue.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/validation/tx_check_adapters.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/validation/tx_verify.cpp
@@ -266,6 +468,7 @@ target_link_libraries(bitcoin_chain_validation
     core_interface
     bitcoin_consensus
     bitcoin_core_storage_adapters
+    bitcoin_util
     Boost::headers
     $<TARGET_NAME_IF_EXISTS:USDT::headers>
 )
@@ -306,6 +509,8 @@ add_library(bitcoin_node STATIC EXCLUDE_FROM_ALL
   headerssync.cpp
   i2p.cpp
   init.cpp
+  kernel/block_import_pipeline.cpp
+  kernel/blk_file_scanner.cpp
   kernel/chain.cpp
   kernel/checks.cpp
   kernel/coinstats.cpp
@@ -319,6 +524,10 @@ add_library(bitcoin_node STATIC EXCLUDE_FROM_ALL
   net_processing.cpp
   netgroup.cpp
   node/abort.cpp
+  node/block_download_tracker.cpp
+  node/block_inflight_index.cpp
+  node/block_download_planner.cpp
+  node/ibd_block_processor.cpp
   node/blockmanager_args.cpp
   node/caches.cpp
   node/chainstatemanager_args.cpp
@@ -349,7 +558,6 @@ add_library(bitcoin_node STATIC EXCLUDE_FROM_ALL
   policy/fees/block_policy_estimator_args.cpp
   policy/settings.cpp
   private_broadcast.cpp
-  script/script_check.cpp
   script/sigcache.cpp
   signet.cpp
   torcontrol.cpp
@@ -463,6 +671,8 @@ if(BUILD_KERNEL_LIB)
   endif()
 endif()
 
+set_property(TARGET bitcoin_crypto PROPERTY LINK_LIBRARIES "")
+set_property(TARGET bitcoin_crypto PROPERTY INTERFACE_LINK_LIBRARIES "")
 
 add_subdirectory(test/util)
 if(BUILD_BENCH)

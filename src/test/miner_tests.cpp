@@ -5,6 +5,7 @@
 #include <addresstype.h>
 #include <validation/block_validation.h>
 #include <validation/chain_validation.h>
+#include <validation/runtime_time.h>
 #include <coins.h>
 #include <common/system.h>
 #include <consensus/consensus.h>
@@ -871,15 +872,17 @@ BOOST_AUTO_TEST_CASE(CreateNewBlock_validity)
             block.nNonce = bi.nonce;
         }
         std::shared_ptr<const CBlock> shared_pblock = std::make_shared<const CBlock>(block);
-        // Alternate calls between ChainValidationService and submitSolution via
+        // Alternate calls between direct block processing and submitSolution via
         // the Mining interface. The former is used by net_processing as well as
         // the submitblock RPC.
         if (current_height % 2 == 0) {
-            BOOST_REQUIRE(ChainValidationService{*Assert(m_node.chainman)}.ProcessNewBlock(
-                shared_pblock,
-                {.block_data_storage = BlockDataStorageMode::ForceStore, .header = {.min_pow_checked = true}},
-                CurrentBlockValidationTime())
-                .processed());
+            BOOST_REQUIRE(ProcessNewBlock({
+                .chainman = *Assert(m_node.chainman),
+                .block = shared_pblock,
+                .options = {.block_data_storage = BlockDataStorageMode::ForceStore, .header = {.min_pow_checked = true}},
+                .time = CurrentBlockValidationTime(),
+            })
+                .Processed());
         } else {
             BOOST_REQUIRE(SubmitSolution(*block_template, block.nVersion, block.nTime, block.nNonce, MakeTransactionRef(txCoinbase)));
         }

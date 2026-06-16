@@ -39,17 +39,23 @@
 #include <validation/block_validation_error.h>
 #include <validation/block_validation_internal.h>
 #include <validation/block_validation_policy.h>
+#include <validation/coins_view_spend_state.h>
+#include <validation/core_block_commit_adapters.h>
 #include <validation/core_block_connection_setup.h>
-#include <validation/core_chain_validation_context.h>
+#include <validation/core_block_policy.h>
+#include <validation/core_chain_validation_runtimes.h>
+#include <validation/core_validation_event_snapshot.h>
 #include <validation/core_coins_block_connection_state.h>
-#include <validation/script_check_scheduler.h>
+#include <validation/script_task_executor.h>
 #include <validation/validation_event_queue.h>
+#include <validation/verify_db.h>
 #include <validation_state.h>
 
 #include <algorithm>
 #include <cassert>
 #include <chrono>
 #include <cstddef>
+#include <exception>
 #include <memory>
 #include <optional>
 #include <ranges>
@@ -70,6 +76,7 @@ ChainWorkBlockSnapshot MakeChainWorkBlockSnapshot(const CBlockIndex& block)
 {
     return {
         .hash = block.GetBlockHash(),
+        .parent_hash = block.pprev ? block.pprev->GetBlockHash() : uint256{},
         .height = block.nHeight,
         .chain_work = block.nChainWork,
     };
@@ -144,21 +151,15 @@ private:
 
 } // namespace
 
+template <typename CoreRuntime>
 static CoreBlockConnectionRuntimeInputs MakeCoreBlockConnectionRuntimeInputs(
-    CoreChainValidationContext& context,
-    BlockUndoWriter& undo_writer,
-    BlockIndexValidityCommitter& block_index_committer,
-    validation::ScriptCheckScheduler& script_check_scheduler) EXCLUSIVE_LOCKS_REQUIRED(cs_main)
+    CoreRuntime& runtime,
+    validation::ScriptTaskExecutor& script_task_executor)
 {
-    AssertLockHeld(cs_main);
-
     return {
-        .notifications = context.Notifications(),
-        .undo_writer = undo_writer,
-        .block_index_committer = block_index_committer,
-        .script_check_scheduler = script_check_scheduler,
-        .validation_cache = context.ScriptValidationCache(),
-        .trace_counters = context.TraceCounters(),
+        .notifications = runtime.Notifications(),
+        .script_task_executor = script_task_executor,
+        .validation_cache = runtime.ScriptValidationCache(),
     };
 }
 
@@ -232,7 +233,7 @@ bool IsBlockMutated(const CBlock& block, BlockMutationOptions options)
     BlockValidationState state;
     const Consensus::BlockFacts facts{Consensus::ComputeBlockFacts(block)};
     if (!CheckMerkleRoot(block, facts.structure, state)) {
-        LogDebug(BCLog::VALIDATION, "Block mutated: %s\n", state.ToString());
+        LogDebug(BCLog::VALIDATION, "Block mutated: %s\n", FormatValidationStateForLog(state));
         return true;
     }
 
@@ -252,7 +253,7 @@ bool IsBlockMutated(const CBlock& block, BlockMutationOptions options)
     }
 
     if (!CheckWitnessMalleation(block, facts, options.check_witness_root, state)) {
-        LogDebug(BCLog::VALIDATION, "Block mutated: %s\n", state.ToString());
+        LogDebug(BCLog::VALIDATION, "Block mutated: %s\n", FormatValidationStateForLog(state));
         return true;
     }
 
@@ -266,33 +267,6 @@ arith_uint256 CalculateClaimedHeadersWork(std::span<const CBlockHeader> headers)
         total_work += GetBlockProof(header);
     }
     return total_work;
-}
-
-/** Context-dependent validity checks.
- *  By "context", we mean only the previous block headers, but not the UTXO
- *  set; UTXO-related validity checks are done during block connection.
- *  NOTE: This function is not currently invoked by block connection, so we
- *  should consider upgrade issues if we change which consensus rules are
- *  enforced in this function (eg by adding a new consensus rule). See comment
- *  during block connection.
- *  Note that -reindex-chainstate skips the validation that happens here!
- *
- *  NOTE: failing to check the header's height against the last checkpoint's opened a DoS vector between
- *  v0.12 and v0.15 (when no additional protection was in place) whereby an attacker could unboundedly
- *  grow our in-memory block index. See https://bitcoincore.org/en/2024/07/03/disclose-header-spam.
- */
-static int64_t MaxFutureBlockTime(NodeClock::time_point now)
-{
-    return TicksSinceEpoch<std::chrono::seconds>(now + std::chrono::seconds{MAX_FUTURE_BLOCK_TIME});
-}
-
-BlockValidationTime CurrentBlockValidationTime()
-{
-    const auto now{NodeClock::now()};
-    return {
-        .current_time_seconds = TicksSinceEpoch<std::chrono::seconds>(now),
-        .max_future_block_time = MaxFutureBlockTime(now),
-    };
 }
 
 static bool ContextualCheckBlockHeader(
@@ -365,7 +339,7 @@ static BlockHeaderAcceptanceResult AcceptBlockHeader(
 
         if (const auto header_check{Consensus::CheckBlockHeader(block, consensus_params, {.check_pow = true})}; !header_check) {
             ApplyBlockCheckError(state, header_check.error());
-            LogDebug(BCLog::VALIDATION, "%s: Consensus::CheckBlockHeader: %s, %s\n", __func__, hash.ToString(), state.ToString());
+            LogDebug(BCLog::VALIDATION, "%s: Consensus::CheckBlockHeader: %s, %s\n", __func__, hash.ToString(), FormatValidationStateForLog(state));
             return {};
         }
 
@@ -382,7 +356,7 @@ static BlockHeaderAcceptanceResult AcceptBlockHeader(
             return {};
         }
         if (!ContextualCheckBlockHeader(block, state, consensus_params, header_context_provider, pindexPrev, max_future_block_time)) {
-            LogDebug(BCLog::VALIDATION, "%s: Consensus::ContextualCheckBlockHeader: %s, %s\n", __func__, hash.ToString(), state.ToString());
+            LogDebug(BCLog::VALIDATION, "%s: Consensus::ContextualCheckBlockHeader: %s, %s\n", __func__, hash.ToString(), FormatValidationStateForLog(state));
             return {};
         }
     }
@@ -397,18 +371,18 @@ static BlockHeaderAcceptanceResult AcceptBlockHeader(
 }
 
 // Exposed wrapper for AcceptBlockHeader
-NewBlockHeadersResult ProcessNewBlockHeaders(CoreChainValidationContext& context, std::span<const CBlockHeader> headers, BlockHeaderAcceptanceOptions options, BlockValidationTime time, BlockValidationState& state)
+NewBlockHeadersResult ProcessNewBlockHeaders(CoreHeaderAdmissionRuntime& runtime, std::span<const CBlockHeader> headers, BlockHeaderAcceptanceOptions options, BlockValidationTime time, BlockValidationState& state)
 {
     AssertLockNotHeld(cs_main);
     NewBlockHeadersResult result{.accepted = true};
     {
         LOCK(cs_main);
-        CoreBlockIndexStore block_index{context.MakeBlockIndexStore()};
-        const CoreBlockHeaderContextProvider header_context{context.MakeHeaderContextProvider()};
-        const Consensus::Params& consensus_params{context.ConsensusParams()};
+        CoreBlockIndexStore block_index{runtime.MakeBlockIndexStore()};
+        const CoreBlockHeaderContextProvider header_context{runtime.MakeHeaderContextProvider()};
+        const Consensus::Params& consensus_params{runtime.ConsensusParams()};
         for (const CBlockHeader& header : headers) {
-            const BlockHeaderAcceptanceResult accepted_header{AcceptBlockHeader(block_index, consensus_params, header_context, header, state, options, time.max_future_block_time)};
-            context.CheckBlockIndex();
+            const BlockHeaderAcceptanceResult accepted_header{AcceptBlockHeader(block_index, consensus_params, header_context, header, state, options, time.MaxFutureBlockTimeSeconds())};
+            runtime.CheckBlockIndex();
 
             if (!accepted_header.accepted) {
                 return {.last_accepted = result.last_accepted};
@@ -416,12 +390,12 @@ NewBlockHeadersResult ProcessNewBlockHeaders(CoreChainValidationContext& context
             result.last_accepted = MakeAcceptedBlockHeaderSnapshot(*Assert(accepted_header.block_index));
         }
     }
-    if (context.NotifyHeaderTip()) {
-        if (context.IsInitialBlockDownload() && result.last_accepted) {
+    if (runtime.NotifyHeaderTip()) {
+        if (runtime.IsInitialBlockDownload() && result.last_accepted) {
             const AcceptedBlockHeaderSnapshot& last_accepted{*result.last_accepted};
-            const NodeSeconds current_time{std::chrono::seconds{time.current_time_seconds}};
+            const NodeSeconds current_time{time.CurrentTime()};
             const NodeSeconds last_accepted_time{std::chrono::seconds{last_accepted.block_time}};
-            int64_t blocks_left{(current_time - last_accepted_time) / context.ConsensusParams().PowTargetSpacing()};
+            int64_t blocks_left{(current_time - last_accepted_time) / runtime.ConsensusParams().PowTargetSpacing()};
             blocks_left = std::max<int64_t>(0, blocks_left);
             const double progress{100.0 * last_accepted.block.height / (last_accepted.block.height + blocks_left)};
             LogInfo("Synchronizing blockheaders, height: %d (~%.2f%%)\n", last_accepted.block.height, progress);
@@ -430,21 +404,21 @@ NewBlockHeadersResult ProcessNewBlockHeaders(CoreChainValidationContext& context
     return result;
 }
 
-static BlockAcceptanceStatus BlockAcceptanceStatusFromDataAdmission(BlockDataAdmissionResult result)
+static BlockAcceptanceResult BlockAcceptanceResultFromDataAdmission(BlockDataAdmissionResult result, ChainWorkBlockSnapshot block)
 {
     switch (result) {
     case BlockDataAdmissionResult::STORE_BLOCK_DATA:
-        return BlockAcceptanceStatus::BlockDataStored;
+        return BlockAcceptanceResult::Stored(std::move(block));
     case BlockDataAdmissionResult::ALREADY_HAVE_DATA:
-        return BlockAcceptanceStatus::BlockDataAlreadyKnown;
+        return BlockAcceptanceResult::AlreadyKnown(std::move(block));
     case BlockDataAdmissionResult::UNREQUESTED_PREVIOUSLY_PROCESSED:
-        return BlockAcceptanceStatus::BlockDataUnrequestedPreviouslyProcessed;
+        return BlockAcceptanceResult::UnrequestedPreviouslyProcessed(std::move(block));
     case BlockDataAdmissionResult::UNREQUESTED_LESS_WORK_THAN_TIP:
-        return BlockAcceptanceStatus::BlockDataUnrequestedLessWorkThanTip;
+        return BlockAcceptanceResult::UnrequestedLessWorkThanTip(std::move(block));
     case BlockDataAdmissionResult::UNREQUESTED_TOO_FAR_AHEAD:
-        return BlockAcceptanceStatus::BlockDataUnrequestedTooFarAhead;
+        return BlockAcceptanceResult::UnrequestedTooFarAhead(std::move(block));
     case BlockDataAdmissionResult::UNREQUESTED_BELOW_MINIMUM_CHAIN_WORK:
-        return BlockAcceptanceStatus::BlockDataUnrequestedBelowMinimumChainWork;
+        return BlockAcceptanceResult::UnrequestedBelowMinimumChainWork(std::move(block));
     }
     assert(false);
 }
@@ -472,138 +446,264 @@ static bool StoreBlockData(
             }
         }
         block_index_data.MarkBlockDataReceived(block, block_index, block_pos);
-    } catch (const std::runtime_error& e) {
+    } catch (const std::exception& e) {
         FatalError(notifications, state, strprintf(_("System error while saving block to disk: %s"), e.what()));
+        return false;
+    } catch (...) {
+        FatalError(notifications, state, _("Unknown system error while saving block to disk"));
         return false;
     }
     return true;
 }
 
-BlockAcceptanceResult AcceptBlock(CoreChainValidationContext& context, const std::shared_ptr<const CBlock>& pblock, BlockValidationState& state, BlockAcceptanceOptions options, BlockValidationTime time)
+NewBlockStructuralCheckResult CheckNewBlockStructural(const Consensus::Params& consensus_params, const std::shared_ptr<const CBlock>& block, BlockValidationState& state)
+{
+    AssertLockNotHeld(cs_main);
+    assert(block);
+
+    if (!CheckBlock(*block, state, consensus_params)) {
+        return {};
+    }
+    return {.proof = BlockStructuralCheckProof{.block_hash = block->GetHash()}};
+}
+
+BlockAcceptanceResult AcceptBlock(CoreBlockDataAdmissionRuntime& runtime, const std::shared_ptr<const CBlock>& pblock, BlockValidationState& state, BlockAcceptanceOptions options, BlockValidationTime time)
 {
     const CBlock& block = *pblock;
 
     AssertLockHeld(cs_main);
 
-    CoreBlockIndexStore block_index{context.MakeBlockIndexStore()};
-    const CoreBlockHeaderContextProvider header_context{context.MakeHeaderContextProvider()};
-    const Consensus::Params& consensus_params{context.ConsensusParams()};
-    const BlockHeaderAcceptanceResult accepted_header{AcceptBlockHeader(block_index, consensus_params, header_context, block, state, options.header, time.max_future_block_time)};
-    context.CheckBlockIndex();
+    CoreBlockIndexStore block_index{runtime.MakeBlockIndexStore()};
+    const CoreBlockHeaderContextProvider header_context{runtime.MakeHeaderContextProvider()};
+    const Consensus::Params& consensus_params{runtime.ConsensusParams()};
+    const BlockHeaderAcceptanceResult accepted_header{AcceptBlockHeader(block_index, consensus_params, header_context, block, state, options.header, time.MaxFutureBlockTimeSeconds())};
+    runtime.CheckBlockIndex();
 
     if (!accepted_header.accepted) {
-        return {.block = MaybeChainWorkBlockSnapshot(accepted_header.block_index)};
+        return BlockAcceptanceResult::HeaderRejected(MaybeChainWorkBlockSnapshot(accepted_header.block_index));
     }
     CBlockIndex& block_index_entry{*Assert(accepted_header.block_index)};
     const ChainWorkBlockSnapshot accepted_block{MakeChainWorkBlockSnapshot(block_index_entry)};
 
-    // Compatibility note: node code still decides when to force block-data
+    // Core adapter note: node code still decides when to force block-data
     // storage for downloaded blocks; see doc/legacy-compatibility.md.
     // Keep ForceStore until node can ask validation whether a block is in a
     // chain leading to a candidate tip without breaking getblockfrompeer.
 
-    const CBlockIndex* active_tip{context.ActiveTip()};
+    const CBlockIndex* active_tip{runtime.ActiveTip()};
     const BlockDataAdmissionResult block_data_admission{GetBlockDataAdmissionResult({
         .already_have_data = bool(block_index_entry.nStatus & BLOCK_HAVE_DATA),
         .storage_mode = options.block_data_storage,
         .block_data_previously_processed = block_index_entry.nTx != 0,
         .block_height = block_index_entry.nHeight,
-        .max_unrequested_height = context.ActiveHeight() + int(MIN_BLOCKS_TO_KEEP),
+        .max_unrequested_height = runtime.ActiveHeight() + int(MIN_BLOCKS_TO_KEEP),
         .block_chain_work = block_index_entry.nChainWork,
         .active_tip_chain_work = active_tip ? std::optional{active_tip->nChainWork} : std::nullopt,
-        .minimum_chain_work = context.MinimumChainWork(),
+        .minimum_chain_work = runtime.MinimumChainWork(),
     })};
     if (!ShouldStoreBlockData(block_data_admission)) {
-        return {.status = BlockAcceptanceStatusFromDataAdmission(block_data_admission), .block = accepted_block};
+        return BlockAcceptanceResultFromDataAdmission(block_data_admission, accepted_block);
     }
 
-    if (!CheckBlock(block, state, consensus_params) ||
+    const bool structural_check_required{!options.structural_check || !options.structural_check->Matches(block)};
+    if ((structural_check_required && !CheckBlock(block, state, consensus_params)) ||
         !ContextualCheckBlock(block, state, header_context, block_index_entry.pprev)) {
         if (Assume(state.IsInvalid())) {
-            context.MarkInvalidBlockFound(block_index_entry, state);
+            runtime.MarkInvalidBlockFound(block_index_entry, state);
         }
-        LogError("%s: %s\n", __func__, state.ToString());
-        return {.status = BlockAcceptanceStatus::BlockRejected, .block = accepted_block};
+        LogError("%s: %s\n", __func__, FormatValidationStateForLog(state));
+        return BlockAcceptanceResult::BlockRejected(accepted_block);
     }
 
     // Header is valid/has work, merkle tree and segwit merkle tree are good...RELAY NOW
     // (but if it does not build on our best tip, let the SendMessages loop relay it)
-    auto& validation_events{context.ValidationEvents()};
-    if (!context.IsInitialBlockDownload() && context.ActiveTip() == block_index_entry.pprev) {
-        validation_events.NewPoWValidBlock(&block_index_entry, pblock);
+    auto& validation_events{runtime.ValidationEvents()};
+    if (!runtime.IsInitialBlockDownload() && runtime.ActiveTip() == block_index_entry.pprev) {
+        validation_events.NewPoWValidBlock({
+            .block = pblock,
+            .block_info = validation::SnapshotCoreValidationBlockInfo(block_index_entry),
+        });
     }
 
-    CoreBlockDataStore block_store{context.MakeBlockDataStore()};
-    if (!StoreBlockData(context.Notifications(), block_store, block_index, block, block_index_entry, options.existing_block_pos, state)) {
-        return {.status = BlockAcceptanceStatus::StorageFailed, .block = accepted_block};
+    CoreBlockDataStore block_store{runtime.MakeBlockDataStore()};
+    if (!StoreBlockData(runtime.Notifications(), block_store, block_index, block, block_index_entry, options.existing_block_pos, state)) {
+        return BlockAcceptanceResult::StorageFailed(accepted_block);
     }
 
-    // Compatibility note: Core's runtime still handles mixed block and
+    // Core adapter note: Core's runtime still handles mixed block and
     // chainstate flush decisions; see doc/legacy-compatibility.md.
     // For now, since FlushStateMode::NONE is used, all that can happen is that
     // the block files may be pruned, so we can just call this on one
     // chainstate (particularly if we haven't implemented pruning with
     // background validation yet).
-    context.FlushActiveChainstateToDisk(state, FlushStateMode::NONE);
+    runtime.FlushActiveChainstateToDisk(state, FlushStateMode::NONE);
 
-    context.CheckBlockIndex();
+    runtime.CheckBlockIndex();
 
-    return {.status = BlockAcceptanceStatus::BlockDataStored, .block = accepted_block};
+    return BlockAcceptanceResult::Stored(accepted_block);
 }
 
-NewBlockProcessingResult ProcessNewBlock(CoreChainValidationContext& context, ChainstateEventSink* chain_events, const std::shared_ptr<const CBlock>& block, NewBlockProcessingOptions options, BlockValidationTime time)
+BlockAcceptanceResult AcceptNewBlockData(CoreBlockDataAdmissionRuntime& runtime, const std::shared_ptr<const CBlock>& block, BlockValidationState& state, BlockAcceptanceOptions options, BlockValidationTime time)
+{
+    AssertLockNotHeld(cs_main);
+    assert(block);
+    LOCK(cs_main);
+    return AcceptBlock(runtime, block, state, options, time);
+}
+
+std::optional<NewBlockCandidateContextSnapshot> SnapshotAcceptedBlockContext(
+    const Consensus::Params& consensus_params,
+    BlockIndexLookup& block_index,
+    const BlockHeaderContextProvider& header_context,
+    const uint256& block_hash)
+{
+    AssertLockNotHeld(cs_main);
+    LOCK(cs_main);
+
+    const CBlockIndex* block_index_entry{block_index.LookupBlockIndex(block_hash)};
+    if (!block_index_entry) return std::nullopt;
+
+    const Consensus::BlockHeaderContext headers{header_context.BuildContext(block_index_entry->pprev)};
+    const bool has_spend_stage{block_index_entry->pprev != nullptr};
+    return NewBlockCandidateContextSnapshot{
+        .block = MakeChainWorkBlockSnapshot(*block_index_entry),
+        .previous_block_hash = block_index_entry->pprev ? block_index_entry->pprev->GetBlockHash() : uint256{},
+        .previous_block_height = block_index_entry->pprev ? block_index_entry->pprev->nHeight : -1,
+        .previous_median_time_past = headers.PreviousMedianTimePast(),
+        .previous_block_time = headers.PreviousBlockTime(),
+        .deployments = headers.Deployments(),
+        .spend_options = has_spend_stage ? BuildCoreBlockSpendConsensusOptions(*block_index_entry, consensus_params, headers.Deployments()) : Consensus::BlockSpendConsensusOptions{},
+        .block_subsidy = Consensus::CalculateBlockSubsidy(block_index_entry->nHeight, consensus_params),
+        .has_spend_stage = has_spend_stage,
+    };
+}
+
+std::optional<NewBlockCandidateContextSnapshot> SnapshotAcceptedBlockContext(CoreAcceptedContextReader& reader, const uint256& block_hash)
+{
+    CoreBlockIndexStore block_index{reader.MakeBlockIndexStore()};
+    const CoreBlockHeaderContextProvider header_context{reader.MakeHeaderContextProvider()};
+    return SnapshotAcceptedBlockContext(reader.ConsensusParams(), block_index, header_context, block_hash);
+}
+
+BlockActivationResult ActivateAcceptedBlock(CoreActivationRuntime& runtime, ChainstateEventSink* chain_events, const std::shared_ptr<const CBlock>& block, BlockValidationState& state, BlockValidationTime time)
+{
+    AssertLockNotHeld(cs_main);
+    assert(block);
+
+    (void)runtime.NotifyHeaderTip();
+    return runtime.ActivateBestChain(state, time.CurrentTime(), block, chain_events);
+}
+
+BlockActivationResult ActivateAcceptedTipCandidate(CoreActivationRuntime& runtime, ChainstateEventSink* chain_events, const std::shared_ptr<const CBlock>& block, BlockValidationState& state, BlockValidationTime time)
+{
+    AssertLockNotHeld(cs_main);
+    assert(block);
+
+    (void)runtime.NotifyHeaderTip();
+
+    CBlockIndex* block_index{nullptr};
+    {
+        LOCK(cs_main);
+        CoreBlockIndexStore block_index_store{runtime.MakeBlockIndexStore()};
+        block_index = block_index_store.LookupBlockIndex(block->GetHash());
+    }
+    if (!block_index) return BlockActivationResult::Completed();
+
+    return runtime.ActivateMostWorkTipBlock(state, time.CurrentTime(), *block_index, block, chain_events);
+}
+
+void ReportBlockChecked(validation::ValidationEventQueue& events, const std::shared_ptr<const CBlock>& block, const BlockValidationState& state)
+{
+    LOCK(cs_main);
+    events.BlockChecked({.block = block, .state = state});
+}
+
+static void FinishNewBlockProcessingTiming(NewBlockProcessingResult& result, std::chrono::steady_clock::time_point start) noexcept
+{
+    result.timings.total = std::chrono::steady_clock::now() - start;
+}
+
+NewBlockProcessingResult ProcessNewBlock(
+    CoreBlockDataAdmissionRuntime& admission_runtime,
+    CoreAcceptedContextReader& context_reader,
+    CoreActivationRuntime& activation_runtime,
+    ChainstateEventSink* chain_events,
+    const std::shared_ptr<const CBlock>& block,
+    NewBlockProcessingOptions options,
+    BlockValidationTime time)
 {
     AssertLockNotHeld(cs_main);
 
+    const auto total_start{std::chrono::steady_clock::now()};
     NewBlockProcessingResult result{};
-    {
-        BlockValidationState state;
-        LOCK(cs_main);
-
-        // Skipping AcceptBlock() for CheckBlock() failures means that we will never mark a block as invalid if
-        // CheckBlock() fails.  This is protective against consensus failure if there are any unknown forms of block
-        // malleability that cause CheckBlock() to fail; see e.g. CVE-2012-2459 and
-        // https://lists.linuxfoundation.org/pipermail/bitcoin-dev/2019-February/016697.html.  Because CheckBlock() is
-        // not very expensive, the anti-DoS benefits of caching failure (of a definitely-invalid block) are not substantial.
-        bool ret = CheckBlock(*block, state, context.ConsensusParams());
-        if (ret) {
-            // Store to disk
-            const BlockAcceptanceResult acceptance{AcceptBlock(
-                context,
-                block,
-                state,
-                {.block_data_storage = options.block_data_storage, .header = options.header},
-                time)};
-            result.block_acceptance_status = acceptance.status;
-            ret = acceptance.accepted_for_processing();
-            if (!ret) {
-                result.status = NewBlockProcessingStatus::BlockNotAccepted;
-            }
-        }
-        if (!ret) {
-            auto& validation_events{context.ValidationEvents()};
-            validation_events.BlockChecked(block, state);
-            LogError("%s: AcceptBlock FAILED (%s)\n", __func__, state.ToString());
-            return result;
-        }
-        result.status = NewBlockProcessingStatus::ActivationFailed;
-    }
-
-    context.NotifyHeaderTip();
-
-    BlockValidationState state; // Only used to report errors, not invalidity - ignore it
-    if (!context.ActivateBestChain(state, block, chain_events)) {
-        LogError("%s: ActivateBestChain failed (%s)\n", __func__, state.ToString());
+    BlockValidationState state;
+    // Skipping AcceptBlock() for CheckBlock() failures means that we will never mark a block as invalid if
+    // CheckBlock() fails.  This is protective against consensus failure if there are any unknown forms of block
+    // malleability that cause CheckBlock() to fail; see e.g. CVE-2012-2459 and
+    // https://lists.linuxfoundation.org/pipermail/bitcoin-dev/2019-February/016697.html.  Because CheckBlock() is
+    // not very expensive, the anti-DoS benefits of caching failure (of a definitely-invalid block) are not substantial.
+    const bool has_structural_proof{options.structural_check && options.structural_check->Matches(*block)};
+    const auto structural_start{std::chrono::steady_clock::now()};
+    const NewBlockStructuralCheckResult structural_check{
+        has_structural_proof ? NewBlockStructuralCheckResult{.proof = options.structural_check} :
+                               CheckNewBlockStructural(admission_runtime.ConsensusParams(), block, state)};
+    result.timings.structural_check = has_structural_proof ? std::chrono::nanoseconds{0} :
+                                                             std::chrono::steady_clock::now() - structural_start;
+    if (!structural_check.passed()) {
+        result.MarkStructuralRejected(state);
+        ReportBlockChecked(activation_runtime.ValidationEvents(), block, state);
+        LogError("%s: AcceptBlock FAILED (%s)\n", __func__, FormatValidationStateForLog(state));
+        FinishNewBlockProcessingTiming(result, total_start);
         return result;
     }
 
-    result.status = NewBlockProcessingStatus::Processed;
+    const auto accept_start{std::chrono::steady_clock::now()};
+    const BlockAcceptanceResult acceptance{AcceptNewBlockData(
+        admission_runtime,
+        block,
+        state,
+        {
+            .block_data_storage = options.block_data_storage,
+            .header = options.header,
+            .structural_check = structural_check.proof,
+        },
+        time)};
+    result.timings.block_acceptance = std::chrono::steady_clock::now() - accept_start;
+    if (!acceptance.ShouldAttemptActivation()) {
+        result.MarkNotAccepted(acceptance, state);
+        ReportBlockChecked(activation_runtime.ValidationEvents(), block, state);
+        LogError("%s: AcceptBlock FAILED (%s)\n", __func__, FormatValidationStateForLog(state));
+        FinishNewBlockProcessingTiming(result, total_start);
+        return result;
+    }
+    result.MarkAcceptedCandidate(acceptance);
+
+    const auto snapshot_start{std::chrono::steady_clock::now()};
+    result.SetCandidateContext(SnapshotAcceptedBlockContext(context_reader, block->GetHash()));
+    result.timings.context_snapshot = std::chrono::steady_clock::now() - snapshot_start;
+
+    BlockValidationState activate_state; // Only used to report errors, not invalidity - ignore it
+    const auto activation_start{std::chrono::steady_clock::now()};
+    const BlockActivationResult activation{ActivateAcceptedBlock(activation_runtime, chain_events, block, activate_state, time)};
+    result.timings.activation = std::chrono::steady_clock::now() - activation_start;
+    result.timings.spend_join = activation.timings.spend_join;
+    result.timings.script_validation = activation.timings.script_validation;
+    result.activated_blocks = activation.connected_blocks;
+    if (!activation.Succeeded()) {
+        result.MarkActivationFailed(activate_state);
+        LogError("%s: ActivateBestChain failed (%s)\n", __func__, FormatValidationStateForLog(activate_state));
+        FinishNewBlockProcessingTiming(result, total_start);
+        return result;
+    }
+
+    result.MarkProcessed();
+    FinishNewBlockProcessingTiming(result, total_start);
     return result;
 }
 
-NewBlockProcessingResult ProcessNewBlock(CoreChainValidationContext& context, const std::shared_ptr<const CBlock>& block, NewBlockProcessingOptions options, BlockValidationTime time)
+NewBlockProcessingResult ProcessNewBlock(CoreBlockDataAdmissionRuntime& admission_runtime, CoreAcceptedContextReader& context_reader, CoreActivationRuntime& activation_runtime, const std::shared_ptr<const CBlock>& block, NewBlockProcessingOptions options, BlockValidationTime time)
 {
-    return ProcessNewBlock(context, /*chain_events=*/nullptr, block, options, time);
+    return ProcessNewBlock(admission_runtime, context_reader, activation_runtime, /*chain_events=*/nullptr, block, options, time);
 }
 
 BlockValidationState TestBlockValidity(
@@ -646,7 +746,7 @@ BlockValidationState TestBlockValidity(
      * - do run ContextualCheckBlock()
      */
 
-    if (!ContextualCheckBlockHeader(block, state, request.consensus_params, request.header_context, tip, time.max_future_block_time)) {
+    if (!ContextualCheckBlockHeader(block, state, request.consensus_params, request.header_context, tip, time.MaxFutureBlockTimeSeconds())) {
         if (state.IsValid()) NONFATAL_UNREACHABLE();
         return state;
     }
@@ -656,36 +756,53 @@ BlockValidationState TestBlockValidity(
         return state;
     }
 
-    // We don't want test validation to update the actual chainstate, so create
-    // a cache on top of it, along with a dummy block index.
+    // Test validation uses a dummy block index. The caller supplies the
+    // block-local connection state so this path is not tied to Core's coins
+    // cache implementation.
     CBlockIndex index_dummy{block};
     uint256 block_hash(block.GetHash());
     index_dummy.pprev = tip;
     index_dummy.nHeight = tip->nHeight + 1;
     index_dummy.phashBlock = &block_hash;
-    CCoinsViewCache view_dummy(&request.coins_tip);
-    validation::CoreCoinsBlockConnectionState connection_state{view_dummy};
 
-    // Test validation uses the normal connection path with commit disabled. It
-    // may update reusable script caches, but staged coin effects stay local to
-    // view_dummy.
+    // Test validation uses the normal connection path and discards the commit
+    // package. It may update reusable script caches, but staged coin effects
+    // stay local to the caller-supplied connection attempt.
     const BlockConnectionOptions connect_options{
         .block_check_options = Consensus::BlockCheckOptions{
             .check_pow = false,
             .check_merkle_root = false,
         },
-        .commit = false,
     };
-    const CoreBlockConnectionRuntimeInputs runtime_inputs{
-        MakeCoreBlockConnectionRuntimeInputs(request.validation_context, request.undo_writer, request.block_index_committer, request.script_check_scheduler)};
-    CoreBlockConnectionSetup connection_setup{
-        runtime_inputs,
-        PlanCoreBlockConnection(SnapshotCoreBlockConnectionPolicy(request.validation_context, index_dummy), request.block_index_lookup, index_dummy),
-        index_dummy,
-        /*cache_script_results=*/true};
-    connection_setup.MaybeLogScriptPolicy(request.last_script_check_reason_logged, block_hash);
-    const validation::BlockConnectionRequest connection_request{connection_setup.Request(block, connection_state, connect_options)};
-    if (!validation::BlockConnectionEngine{}.Connect(connection_request, state).Succeeded()) {
+
+    const Consensus::BlockHeaderContext headers{request.header_context.BuildContext(tip)};
+    const validation::BlockConnectionContext connection_context{
+        .consensus_params = request.consensus_params,
+        .consensus_context = Consensus::BuildBlockConsensusContext(
+            headers,
+            block_hash,
+            Consensus::CalculateBlockSubsidy(index_dummy.nHeight, request.consensus_params)),
+        .sequence_lock_times = request.sequence_lock_times ? request.sequence_lock_times : std::make_shared<validation::CoinsViewSequenceLockTimeView>(index_dummy),
+        .spend_options = BuildCoreBlockSpendConsensusOptions(index_dummy, request.consensus_params, headers.Deployments()),
+    };
+    const validation::BlockConnectionRequest connection_request{
+        .runtime = {
+            .notifications = request.notifications,
+            .script_checker = request.script_checker,
+            .trace = request.trace,
+        },
+        .context = connection_context,
+        .block = block,
+        .block_position = {
+            .hash = block_hash,
+            .parent_hash = tip->GetBlockHash(),
+            .height = index_dummy.nHeight,
+        },
+        .connection_state = request.connection_state,
+        .options = connect_options,
+    };
+    const validation::BlockConnectionResult connected{validation::BlockConnectionEngine{}.ConnectPrepared(connection_request, state)};
+    if (!connected.Succeeded()) {
         if (state.IsValid()) NONFATAL_UNREACHABLE();
         return state;
     }
@@ -705,23 +822,45 @@ BlockValidationState TestBlockValidity(
     // Keep the tip stable while the block is checked against the current chain.
     AssertLockHeld(chainstate.m_chainman.GetMutex());
 
-    CoreBlockHeaderContextProvider header_context{chainstate.m_chainman};
-    CoreBlockDataStore block_store{chainstate.m_blockman};
-    CoreBlockIndexStore block_index_store{chainstate.m_chainman};
-    CoreChainValidationRuntime runtime{chainstate.m_chainman};
-    CoreChainValidationContext context{chainstate.m_chainman, runtime};
+    CoreTestBlockValidityRuntime runtime{chainstate.m_chainman};
+    CoreBlockHeaderContextProvider header_context{runtime.MakeHeaderContextProvider()};
+    CoreBlockIndexStore block_index_store{runtime.MakeBlockIndexStore()};
     CoreActiveChainView active_chain{chainstate.m_chain};
+    bool run_script_checks{true};
+    CBlockIndex* tip{Assert(active_chain.Tip())};
+    if (block.hashPrevBlock == *Assert(tip->phashBlock)) {
+        uint256 block_hash{block.GetHash()};
+        CBlockIndex script_policy_index{block};
+        script_policy_index.pprev = tip;
+        script_policy_index.nHeight = tip->nHeight + 1;
+        script_policy_index.phashBlock = &block_hash;
+        run_script_checks = DetermineCoreBlockScriptChecks(
+                                {
+                                    .assumed_valid_block = runtime.AssumedValidBlock(),
+                                    .best_header = runtime.BestHeader(),
+                                    .minimum_chain_work = runtime.MinimumChainWork(),
+                                },
+                                block_index_store,
+                                script_policy_index,
+                                chainstate.m_chainman.GetConsensus())
+                                .run_script_checks;
+    }
+    CCoinsViewCache view_dummy(&chainstate.CoinsTip());
+    validation::CoreCoinsBlockConnectionState connection_state{view_dummy};
+    CoreBlockScriptChecks script_checks{
+        runtime.ScriptTaskExecutor(),
+        run_script_checks,
+        /*cache_results=*/true,
+        runtime.ScriptValidationCache()};
+    BlockConnectionTrace trace{runtime.TraceCounters()};
     TestBlockValidityRequest request{
         .active_chain = active_chain,
-        .consensus_params = chainstate.m_chainman.GetConsensus(),
+        .consensus_params = runtime.ConsensusParams(),
         .header_context = header_context,
-        .coins_tip = chainstate.CoinsTip(),
-        .undo_writer = block_store,
-        .block_index_lookup = block_index_store,
-        .block_index_committer = block_index_store,
-        .validation_context = context,
-        .script_check_scheduler = context.ScriptCheckScheduler(),
-        .last_script_check_reason_logged = chainstate.LastScriptCheckReasonLogged(),
+        .connection_state = connection_state,
+        .notifications = runtime.Notifications(),
+        .script_checker = script_checks.Checker(),
+        .trace = trace,
     };
     return TestBlockValidity(request, block, options, time);
 }
@@ -737,83 +876,168 @@ CVerifyDB::~CVerifyDB()
     m_notifications.progress(bilingual_str{}, 100, false);
 }
 
+CoreVerifyDBCoins::CoreVerifyDBCoins(
+    CCoinsView& coins_view,
+    CCoinsViewCache& coins_tip,
+    size_t coins_tip_cache_size_bytes)
+    : m_coins_view{coins_view},
+      m_coins_tip{coins_tip},
+      m_coins_tip_cache_size_bytes{coins_tip_cache_size_bytes}
+{
+}
+
+std::unique_ptr<CCoinsViewCache> CoreVerifyDBCoins::MakeCache()
+{
+    return std::make_unique<CCoinsViewCache>(&m_coins_view);
+}
+
+size_t CoreVerifyDBCoins::TipMemoryUsage() const
+{
+    return m_coins_tip.DynamicMemoryUsage();
+}
+
+size_t CoreVerifyDBCoins::CacheBudgetBytes() const
+{
+    return m_coins_tip_cache_size_bytes;
+}
+
+namespace {
+
+VerifyDBBlock SnapshotVerifyDBBlock(const CBlockIndex& block_index)
+    EXCLUSIVE_LOCKS_REQUIRED(::cs_main)
+{
+    AssertLockHeld(::cs_main);
+    return {
+        .replay = SnapshotCoreBlockReplayBlock(block_index),
+        .status = block_index.nStatus,
+    };
+}
+
+bool SameVerifyDBBlock(const std::optional<VerifyDBBlock>& a, const std::optional<VerifyDBBlock>& b)
+{
+    if (!a || !b) return !a && !b;
+    return a->replay.hash == b->replay.hash;
+}
+
+} // namespace
+
+CoreVerifyDBChain::CoreVerifyDBChain(const CChain& chain)
+    : m_chain{chain}
+{
+}
+
+std::optional<VerifyDBBlock> CoreVerifyDBChain::Tip() const
+{
+    if (const CBlockIndex* tip{m_chain.Tip()}) return SnapshotVerifyDBBlock(*tip);
+    return std::nullopt;
+}
+
+int CoreVerifyDBChain::Height() const
+{
+    return m_chain.Height();
+}
+
+std::optional<VerifyDBBlock> CoreVerifyDBChain::Previous(const VerifyDBBlock& block) const
+{
+    const CBlockIndex* block_index{m_chain[block.replay.height]};
+    if (!block_index || block_index->GetBlockHash() != block.replay.hash || !block_index->pprev) return std::nullopt;
+    return SnapshotVerifyDBBlock(*block_index->pprev);
+}
+
+std::optional<VerifyDBBlock> CoreVerifyDBChain::Next(const VerifyDBBlock& block) const
+{
+    const CBlockIndex* block_index{m_chain[block.replay.height]};
+    if (!block_index || block_index->GetBlockHash() != block.replay.hash) return std::nullopt;
+    if (const CBlockIndex* next{m_chain.Next(*block_index)}) return SnapshotVerifyDBBlock(*next);
+    return std::nullopt;
+}
+
+CBlockIndex* CoreVerifyDBChain::CoreBlockIndexForConnection(const VerifyDBBlock& block) const
+{
+    CBlockIndex* block_index{m_chain[block.replay.height]};
+    if (!block_index || block_index->GetBlockHash() != block.replay.hash) return nullptr;
+    return block_index;
+}
+
 VerifyDBResult CVerifyDB::VerifyDB(
     VerifyDBRequest request,
     int nCheckLevel, int nCheckDepth)
 {
     AssertLockHeld(cs_main);
 
-    const CBlockIndex* tip{request.active_chain.Tip()};
-    if (tip == nullptr || tip->pprev == nullptr) {
+    std::optional<VerifyDBBlock> tip{request.chain.Tip()};
+    if (!tip || tip->replay.height <= 0) {
         return VerifyDBResult::SUCCESS;
     }
 
     // Verify blocks in the best chain
-    if (nCheckDepth <= 0 || nCheckDepth > request.active_chain.Height()) {
-        nCheckDepth = request.active_chain.Height();
+    const int chain_height{request.chain.Height()};
+    if (nCheckDepth <= 0 || nCheckDepth > chain_height) {
+        nCheckDepth = chain_height;
     }
     nCheckLevel = std::max(0, std::min(4, nCheckLevel));
     LogInfo("Verifying last %i blocks at level %i", nCheckDepth, nCheckLevel);
-    CCoinsViewCache coins(&request.coins_view);
-    CBlockIndex* pindex;
-    CBlockIndex* pindexFailure = nullptr;
+    std::unique_ptr<CCoinsViewCache> coins{request.coins.MakeCache()};
+    std::optional<VerifyDBBlock> pindex;
+    std::optional<VerifyDBBlock> pindexFailure;
     int nGoodTransactions = 0;
     BlockValidationState state;
     int reportDone = 0;
     bool skipped_no_block_data{false};
     bool skipped_l3_checks{false};
     const CoreBlockConnectionRuntimeInputs runtime_inputs{
-        MakeCoreBlockConnectionRuntimeInputs(request.validation_context, request.undo_writer, request.block_index_committer, request.script_check_scheduler)};
+        MakeCoreBlockConnectionRuntimeInputs(request.replay_runtime, request.replay_runtime.ScriptTaskExecutor())};
     LogInfo("Verification progress: 0%%");
 
-    for (pindex = request.active_chain.Tip(); pindex && pindex->pprev; pindex = pindex->pprev) {
-        const int percentageDone = std::max(1, std::min(99, (int)(((double)(request.active_chain.Height() - pindex->nHeight)) / (double)nCheckDepth * (nCheckLevel >= 4 ? 50 : 100))));
+    for (pindex = tip; pindex && pindex->replay.height > 0; pindex = request.chain.Previous(*pindex)) {
+        const int percentageDone = std::max(1, std::min(99, (int)(((double)(chain_height - pindex->replay.height)) / (double)nCheckDepth * (nCheckLevel >= 4 ? 50 : 100))));
         if (reportDone < percentageDone / 10) {
             // report every 10% step
             LogInfo("Verification progress: %d%%", percentageDone);
             reportDone = percentageDone / 10;
         }
         m_notifications.progress(_("Verifying blocks…"), percentageDone, false);
-        if (pindex->nHeight <= request.active_chain.Height() - nCheckDepth) {
+        if (pindex->replay.height <= chain_height - nCheckDepth) {
             break;
         }
-        if (request.block_data_availability.IsPruneMode() && !(pindex->nStatus & BLOCK_HAVE_DATA)) {
+        if (request.block_data_availability.IsPruneMode() && !(pindex->status & BLOCK_HAVE_DATA)) {
             // If pruning, only go back as far as we have data.
-            LogInfo("Block verification stopping at height %d (no data). This could be due to pruning.", pindex->nHeight);
+            LogInfo("Block verification stopping at height %d (no data). This could be due to pruning.", pindex->replay.height);
             skipped_no_block_data = true;
             break;
         }
-        CBlock block;
         // check level 0: read from disk
-        if (!request.block_reader.ReadBlock(block, *pindex)) {
-            LogError("Verification error: ReadBlock failed at %d, hash=%s", pindex->nHeight, pindex->GetBlockHash().ToString());
+        auto block_result{request.block_reader.ReadBlock(pindex->replay.block_read)};
+        if (!block_result) {
+            LogError("Verification error: ReadBlock failed at %d, hash=%s", pindex->replay.height, pindex->replay.hash.ToString());
             return VerifyDBResult::CORRUPTED_BLOCK_DB;
         }
+        CBlock block{std::move(*block_result)};
         // check level 1: verify block validity
         if (nCheckLevel >= 1 && !CheckBlock(block, state, request.consensus_params)) {
             LogError("Verification error: found bad block at %d, hash=%s (%s)",
-                     pindex->nHeight, pindex->GetBlockHash().ToString(), state.ToString());
+                     pindex->replay.height, pindex->replay.hash.ToString(), FormatValidationStateForLog(state));
             return VerifyDBResult::CORRUPTED_BLOCK_DB;
         }
         // check level 2: verify undo validity
         if (nCheckLevel >= 2) {
-            CBlockUndo undo;
-            if (!pindex->GetUndoPos().IsNull()) {
-                if (!request.undo_reader.ReadBlockUndo(undo, *pindex)) {
-                    LogError("Verification error: found bad undo data at %d, hash=%s", pindex->nHeight, pindex->GetBlockHash().ToString());
+            if (pindex->replay.undo_read && !pindex->replay.undo_read->position.IsNull()) {
+                auto undo_result{request.undo_reader.ReadBlockUndo(*pindex->replay.undo_read)};
+                if (!undo_result) {
+                    LogError("Verification error: found bad undo data at %d, hash=%s", pindex->replay.height, pindex->replay.hash.ToString());
                     return VerifyDBResult::CORRUPTED_BLOCK_DB;
                 }
             }
         }
         // check level 3: check for inconsistencies during memory-only disconnect of tip blocks
-        const size_t curr_coins_usage{coins.DynamicMemoryUsage() + request.coins_tip.DynamicMemoryUsage()};
+        const size_t curr_coins_usage{coins->DynamicMemoryUsage() + request.coins.TipMemoryUsage()};
 
         if (nCheckLevel >= 3) {
-            if (curr_coins_usage <= request.coins_tip_cache_size_bytes) {
-                assert(coins.GetBestBlock() == pindex->GetBlockHash());
-                DisconnectResult res = DisconnectBlock(request.undo_reader, block, pindex, coins);
+            if (curr_coins_usage <= request.coins.CacheBudgetBytes()) {
+                assert(coins->GetBestBlock() == pindex->replay.hash);
+                DisconnectResult res = DisconnectBlock(request.undo_reader, block, pindex->replay, *coins);
                 if (res == DISCONNECT_FAILED) {
-                    LogError("Verification error: irrecoverable inconsistency in block data at %d, hash=%s", pindex->nHeight, pindex->GetBlockHash().ToString());
+                    LogError("Verification error: irrecoverable inconsistency in block data at %d, hash=%s", pindex->replay.height, pindex->replay.hash.ToString());
                     return VerifyDBResult::CORRUPTED_BLOCK_DB;
                 }
                 if (res == DISCONNECT_UNCLEAN) {
@@ -829,7 +1053,7 @@ VerifyDBResult CVerifyDB::VerifyDB(
         if (request.interrupt) return VerifyDBResult::INTERRUPTED;
     }
     if (pindexFailure) {
-        LogError("Verification error: coin database inconsistencies found (last %i blocks, %i good transactions before that)", request.active_chain.Height() - pindexFailure->nHeight + 1, nGoodTransactions);
+        LogError("Verification error: coin database inconsistencies found (last %i blocks, %i good transactions before that)", chain_height - pindexFailure->replay.height + 1, nGoodTransactions);
         return VerifyDBResult::CORRUPTED_BLOCK_DB;
     }
     if (skipped_l3_checks) {
@@ -837,34 +1061,83 @@ VerifyDBResult CVerifyDB::VerifyDB(
     }
 
     // store block count as we move pindex at check level >= 4
-    int block_count = request.active_chain.Height() - pindex->nHeight;
+    int block_count = chain_height - (pindex ? pindex->replay.height : 0);
 
     // check level 4: try reconnecting blocks
     if (nCheckLevel >= 4 && !skipped_l3_checks) {
-        while (pindex != request.active_chain.Tip()) {
-            const int percentageDone = std::max(1, std::min(99, 100 - (int)(((double)(request.active_chain.Height() - pindex->nHeight)) / (double)nCheckDepth * 50)));
+        while (!SameVerifyDBBlock(pindex, tip)) {
+            if (!pindex) {
+                LogError("Verification error: missing reconnect start block");
+                return VerifyDBResult::CORRUPTED_BLOCK_DB;
+            }
+            const int percentageDone = std::max(1, std::min(99, 100 - (int)(((double)(chain_height - pindex->replay.height)) / (double)nCheckDepth * 50)));
             if (reportDone < percentageDone / 10) {
                 // report every 10% step
                 LogInfo("Verification progress: %d%%", percentageDone);
                 reportDone = percentageDone / 10;
             }
             m_notifications.progress(_("Verifying blocks…"), percentageDone, false);
-            pindex = request.active_chain.Next(*pindex);
-            CBlock block;
-            if (!request.block_reader.ReadBlock(block, *pindex)) {
-                LogError("Verification error: ReadBlock failed at %d, hash=%s", pindex->nHeight, pindex->GetBlockHash().ToString());
+            pindex = request.chain.Next(*pindex);
+            if (!pindex) {
+                LogError("Verification error: missing next block during reconnect");
                 return VerifyDBResult::CORRUPTED_BLOCK_DB;
             }
+            auto block_result{request.block_reader.ReadBlock(pindex->replay.block_read)};
+            if (!block_result) {
+                LogError("Verification error: ReadBlock failed at %d, hash=%s", pindex->replay.height, pindex->replay.hash.ToString());
+                return VerifyDBResult::CORRUPTED_BLOCK_DB;
+            }
+            CBlock block{std::move(*block_result)};
+            CBlockIndex* block_index{request.chain.CoreBlockIndexForConnection(*pindex)};
+            if (!block_index) {
+                LogError("Verification error: missing Core block index at %d, hash=%s", pindex->replay.height, pindex->replay.hash.ToString());
+                return VerifyDBResult::CORRUPTED_BLOCK_DB;
+            }
+            BlockConnectionTrace trace{request.replay_runtime.TraceCounters()};
+            CoreBlockConnectionPlan connection_plan{PlanCoreBlockConnection(
+                request.replay_runtime.SnapshotConnectionPolicy(*block_index),
+                request.block_index_lookup,
+                *block_index)};
+            MaybeLogCoreBlockConnectionScriptPolicy(
+                request.last_script_check_reason_logged,
+                *block_index,
+                block.GetHash(),
+                connection_plan);
             CoreBlockConnectionSetup connection_setup{
                 runtime_inputs,
-                PlanCoreBlockConnection(SnapshotCoreBlockConnectionPolicy(request.validation_context, *pindex), request.block_index_lookup, *pindex),
-                *pindex,
+                std::move(connection_plan),
+                trace,
                 /*cache_script_results=*/false};
-            connection_setup.MaybeLogScriptPolicy(request.last_script_check_reason_logged, block.GetHash());
-            validation::CoreCoinsBlockConnectionState connection_state{coins};
+            validation::CoreCoinsBlockConnectionState connection_state{*coins};
+            CoreBlockSpendEffectsCommitter spend_state_committer{*coins};
+            CoreBlockConnectionCommitTarget commit_target{
+                request.undo_writer,
+                request.block_index_committer,
+                connection_state,
+                *block_index};
             const validation::BlockConnectionRequest connection_request{connection_setup.Request(block, connection_state)};
-            if (!validation::BlockConnectionEngine{}.Connect(connection_request, state).Succeeded()) {
-                LogError("Verification error: found unconnectable block at %d, hash=%s (%s)", pindex->nHeight, pindex->GetBlockHash().ToString(), state.ToString());
+            validation::BlockConnectionEngine engine;
+            auto connected{engine.ConnectPrepared(connection_request, state)};
+            if (!connected.Succeeded()) {
+                LogError("Verification error: found unconnectable block at %d, hash=%s (%s)", pindex->replay.height, pindex->replay.hash.ToString(), FormatValidationStateForLog(state));
+                return VerifyDBResult::CORRUPTED_BLOCK_DB;
+            }
+            assert(connected.commit_package);
+            const validation::BlockConnectionCommitRequest commit_request{
+                .runtime = {
+                    .revert_data_writer = commit_target.RevertDataWriter(),
+                    .spend_state_committer = spend_state_committer,
+                    .metadata_committer = commit_target.MetadataCommitter(),
+                    .trace = trace,
+                },
+                .context = {
+                    .block = block,
+                    .block_position = commit_target.BlockPosition(),
+                    .connection_state = connection_state,
+                },
+            };
+            if (!engine.Commit(commit_request, std::move(*connected.commit_package), state).Succeeded()) {
+                LogError("Verification error: failed to commit block at %d, hash=%s (%s)", pindex->replay.height, pindex->replay.hash.ToString(), FormatValidationStateForLog(state));
                 return VerifyDBResult::CORRUPTED_BLOCK_DB;
             }
             if (request.interrupt) return VerifyDBResult::INTERRUPTED;
@@ -892,23 +1165,23 @@ VerifyDBResult CVerifyDB::VerifyDB(
 
     CoreBlockDataStore block_store{chainstate.m_blockman};
     CoreBlockIndexStore block_index_store{chainstate.m_chainman};
-    CoreChainValidationRuntime runtime{chainstate.m_chainman};
-    CoreChainValidationContext context{chainstate.m_chainman, runtime};
-    CoreActiveChainView active_chain{chainstate.m_chain};
+    CoreReplayRuntime runtime{chainstate.m_chainman};
+    CoreVerifyDBChain verify_chain{chainstate.m_chain};
+    CoreVerifyDBCoins verify_coins{
+        coinsview,
+        chainstate.CoinsTip(),
+        chainstate.m_coinstip_cache_size_bytes};
     VerifyDBRequest request{
-        .active_chain = active_chain,
+        .chain = verify_chain,
         .consensus_params = consensus_params,
-        .coins_view = coinsview,
-        .coins_tip = chainstate.CoinsTip(),
-        .coins_tip_cache_size_bytes = chainstate.m_coinstip_cache_size_bytes,
+        .coins = verify_coins,
         .block_reader = block_store,
         .undo_reader = block_store,
         .undo_writer = block_store,
         .block_data_availability = block_store,
         .block_index_lookup = block_index_store,
         .block_index_committer = block_index_store,
-        .validation_context = context,
-        .script_check_scheduler = context.ScriptCheckScheduler(),
+        .replay_runtime = runtime,
         .last_script_check_reason_logged = chainstate.LastScriptCheckReasonLogged(),
         .interrupt = chainstate.m_chainman.m_interrupt,
     };

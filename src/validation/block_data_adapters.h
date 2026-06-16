@@ -18,9 +18,9 @@ class CoreBlockDataStore final : public BlockDataReader, public BlockUndoReader,
 public:
     explicit CoreBlockDataStore(kernel::BlockManager& blockman) : m_blockman{blockman} {}
 
-    bool ReadBlock(CBlock& block, const CBlockIndex& index) override;
-    bool ReadBlockFromPosition(CBlock& block, const FlatFilePos& pos, const std::optional<uint256>& expected_hash) override;
-    bool ReadBlockUndo(CBlockUndo& blockundo, const CBlockIndex& index) override;
+    BlockDataReadResult ReadBlock(const BlockDataReadRequest& request) override;
+    BlockDataReadResult ReadBlockFromPosition(const FlatFilePos& pos, const std::optional<uint256>& expected_hash) override;
+    BlockUndoReadResult ReadBlockUndo(const BlockUndoReadRequest& request) override;
     Consensus::BlockCommitResult<void> WriteBlockUndo(const CBlockUndo& blockundo, CBlockIndex& index) override EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
     bool IsPruneMode() const override;
     bool HasIndexedBlockFiles() const;
@@ -30,5 +30,8 @@ public:
 private:
     kernel::BlockManager& m_blockman;
 };
+
+[[nodiscard]] BlockDataReadRequest SnapshotBlockDataReadRequest(const CBlockIndex& index) EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
+[[nodiscard]] BlockUndoReadRequest SnapshotBlockUndoReadRequest(const CBlockIndex& index) EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
 
 #endif // BITCOIN_BLOCK_DATA_ADAPTERS_H

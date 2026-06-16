@@ -5,9 +5,12 @@
 #include <test/util/setup_common.h>
 #include <test/util/time.h>
 #include <chainstate.h>
+#include <validation/runtime_time.h>
 #include <validationinterface.h>
 
 #include <boost/test/unit_test.hpp>
+
+#include <optional>
 
 // Taken from validation.cpp
 static constexpr auto DATABASE_WRITE_INTERVAL_MIN{50min};
@@ -19,7 +22,7 @@ BOOST_FIXTURE_TEST_CASE(chainstate_write_interval, TestingSetup)
 {
     struct TestSubscriber final : CValidationInterface {
         bool m_did_flush{false};
-        void ChainStateFlushed(const CBlockLocator&) override
+        void ChainStateFlushed(const validation::ChainStateFlushedEvent&) override
         {
             m_did_flush = true;
         }
@@ -55,14 +58,14 @@ BOOST_FIXTURE_TEST_CASE(write_during_multiblock_activation, TestChain100Setup)
 {
     struct TestSubscriber final : CValidationInterface
     {
-        const CBlockIndex* m_tip{nullptr};
-        const CBlockIndex* m_flushed_at_block{nullptr};
-        void ChainStateFlushed(const CBlockLocator&) override
+        std::optional<uint256> m_tip;
+        std::optional<uint256> m_flushed_at_block;
+        void ChainStateFlushed(const validation::ChainStateFlushedEvent&) override
         {
             m_flushed_at_block = m_tip;
         }
-        void UpdatedBlockTip(const CBlockIndex* block_index, const CBlockIndex*, bool) override {
-            m_tip = block_index;
+        void UpdatedBlockTip(const validation::TipUpdatedEvent& event) override {
+            m_tip = event.new_tip.hash;
         }
     };
 
@@ -72,11 +75,12 @@ BOOST_FIXTURE_TEST_CASE(write_during_multiblock_activation, TestChain100Setup)
     // Pop two blocks from the tip
     const CBlockIndex* tip{chainstate.m_chain.Tip()};
     CBlockIndex* second_from_tip{tip->pprev};
+    const uint256 second_from_tip_hash{second_from_tip->GetBlockHash()};
 
     {
         LOCK(m_node.chainman->GetMutex());
-        chainstate.DisconnectTip(state_dummy, nullptr);
-        chainstate.DisconnectTip(state_dummy, nullptr);
+        chainstate.DisconnectTip(state_dummy, CurrentNodeTime(), nullptr);
+        chainstate.DisconnectTip(state_dummy, CurrentNodeTime(), nullptr);
     }
 
     BOOST_CHECK_EQUAL(second_from_tip->pprev, chainstate.m_chain.Tip());
@@ -92,13 +96,14 @@ BOOST_FIXTURE_TEST_CASE(write_during_multiblock_activation, TestChain100Setup)
     m_node.validation_signals->RegisterSharedValidationInterface(sub);
 
     // ActivateBestChain back to tip
-    chainstate.ActivateBestChain(state_dummy, nullptr);
+    chainstate.ActivateBestChain(state_dummy, CurrentNodeTime(), nullptr);
     BOOST_CHECK_EQUAL(tip, chainstate.m_chain.Tip());
     // Check that we flushed inside ActivateBestChain while we were at the
     // second block from tip, since FlushStateToDisk is called with PERIODIC
     // inside the outer loop.
     m_node.validation_signals->SyncWithValidationInterfaceQueue();
-    BOOST_CHECK_EQUAL(sub->m_flushed_at_block, second_from_tip);
+    BOOST_REQUIRE(sub->m_flushed_at_block.has_value());
+    BOOST_CHECK(sub->m_flushed_at_block.value() == second_from_tip_hash);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

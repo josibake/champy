@@ -5,6 +5,7 @@
 #ifndef BITCOIN_VALIDATION_CORE_COINS_BLOCK_CONNECTION_STATE_H
 #define BITCOIN_VALIDATION_CORE_COINS_BLOCK_CONNECTION_STATE_H
 
+#include <kernel/cs_main.h>
 #include <validation/block_connection_state.h>
 
 class CCoinsViewCache;

@@ -7,7 +7,6 @@
 #include <coins.h>
 #include <consensus/expected.h>
 #include <validation/coins_view_spend_state.h>
-#include <validation/core_block_commit_adapters.h>
 
 #include <cassert>
 #include <memory>
@@ -23,6 +22,8 @@ public:
     void Commit() override
     {
         assert(!m_committed);
+        // Flush can throw after publishing a prefix to the base view. The
+        // activation boundary must translate such failures as tainted commits.
         m_coins.Flush(/*reallocate_cache=*/false);
         m_committed = true;
     }
@@ -36,17 +37,14 @@ private:
 class CoreCoinsBlockConnectionSpendState final : public BlockConnectionSpendState {
 public:
     CoreCoinsBlockConnectionSpendState(CCoinsViewCache& coins, std::shared_ptr<const Consensus::SequenceLockTimeView> sequence_lock_times)
-        : m_workspace{coins, std::move(sequence_lock_times)},
-          m_committer{m_workspace.StagedCoins(), coins}
+        : m_workspace{coins, std::move(sequence_lock_times)}
     {
     }
 
-    [[nodiscard]] Consensus::BlockSpendWorkspace& Workspace() override { return m_workspace; }
-    [[nodiscard]] Consensus::BlockSpendStateCommitter& Committer() override { return m_committer; }
+    [[nodiscard]] Consensus::SpendWorkspace& Workspace() override { return m_workspace; }
 
 private:
     CoinsViewBlockSpendWorkspace m_workspace;
-    CoreBlockSpendStateCommitter m_committer;
 };
 
 } // namespace

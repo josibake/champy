@@ -14,14 +14,17 @@
 #include <script/interpreter.h>
 #include <script/script_check.h>
 #include <script/script_error.h>
-#include <validation/core_chain_lock.h>
-#include <validation/script_validation.h>
 #include <span.h>
 #include <tinyformat.h>
+#include <validation/core_chain_lock.h>
+#include <validation/script_validation.h>
 #include <validation_state.h>
 
 #include <cassert>
+#include <exception>
 #include <memory>
+#include <string>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -55,8 +58,18 @@ SignatureCache& CoreScriptValidationCache::SignatureCacheStore()
 
 namespace {
 
-template <typename PrepareSpentOutputs>
-bool CheckInputScriptsWithPreparedOutputs(const CTransaction& tx, TxValidationState& state, script_verify_flags flags, bool cacheSigStore, bool cacheFullScriptStore, PrecomputedTransactionData& txdata, CoreScriptValidationCache& validation_cache, std::vector<CScriptCheck>* pvChecks, PrepareSpentOutputs&& prepare_spent_outputs, const CTransactionRef* tx_ref = nullptr)
+template <typename ScriptCheckContainer, typename PrepareSpentOutputs>
+bool CheckInputScriptsWithPreparedOutputs(
+    const CTransaction& tx,
+    TxValidationState& state,
+    script_verify_flags flags,
+    bool cacheSigStore,
+    bool cacheFullScriptStore,
+    PrecomputedTransactionData& txdata,
+    CoreScriptValidationCache& validation_cache,
+    ScriptCheckContainer* pvChecks,
+    PrepareSpentOutputs&& prepare_spent_outputs,
+    const CTransactionRef* tx_ref = nullptr)
 {
     if (tx.IsCoinBase()) return true;
 
@@ -94,10 +107,16 @@ bool CheckInputScriptsWithPreparedOutputs(const CTransaction& tx, TxValidationSt
 
         // Verify signature
         if (pvChecks) {
-            if (tx_ref) {
+            using Check = typename ScriptCheckContainer::value_type;
+            if constexpr (std::is_same_v<Check, validation::ScriptTask>) {
+                assert(tx_ref);
                 pvChecks->emplace_back(txdata.m_spent_outputs[i], *tx_ref, validation_cache.SignatureCacheStore(), i, flags, cacheSigStore, queued_txdata);
             } else {
-                pvChecks->emplace_back(txdata.m_spent_outputs[i], tx, validation_cache.SignatureCacheStore(), i, flags, cacheSigStore, &txdata);
+                if (tx_ref) {
+                    pvChecks->emplace_back(txdata.m_spent_outputs[i], *tx_ref, validation_cache.SignatureCacheStore(), i, flags, cacheSigStore, queued_txdata);
+                } else {
+                    pvChecks->emplace_back(txdata.m_spent_outputs[i], tx, validation_cache.SignatureCacheStore(), i, flags, cacheSigStore, &txdata);
+                }
             }
         } else {
             CScriptCheck check{txdata.m_spent_outputs[i], tx, validation_cache.SignatureCacheStore(), i, flags, cacheSigStore, &txdata};
@@ -126,7 +145,14 @@ bool CheckInputScriptsWithPreparedOutputs(const CTransaction& tx, TxValidationSt
     return true;
 }
 
-bool CheckInputScriptsFromPlan(const Consensus::TransactionScriptCheckPlan& check, TxValidationState& state, bool cacheSigStore, bool cacheFullScriptStore, PrecomputedTransactionData& txdata, CoreScriptValidationCache& validation_cache, std::vector<CScriptCheck>* pvChecks)
+bool CheckInputScriptsFromPlan(
+    const Consensus::TransactionScriptCheckPlan& check,
+    TxValidationState& state,
+    bool cacheSigStore,
+    bool cacheFullScriptStore,
+    PrecomputedTransactionData& txdata,
+    CoreScriptValidationCache& validation_cache,
+    std::vector<validation::ScriptTask>* pvChecks)
 {
     const CTransactionRef& tx_ref{check.tx};
     const CTransaction& tx{*tx_ref};
@@ -139,7 +165,75 @@ bool CheckInputScriptsFromPlan(const Consensus::TransactionScriptCheckPlan& chec
     return CheckInputScriptsWithPreparedOutputs(tx, state, check.flags, cacheSigStore, cacheFullScriptStore, txdata, validation_cache, pvChecks, prepare_spent_outputs, &tx_ref);
 }
 
-Consensus::BlockSpendResult<void> CheckTransactionScriptsForBlock(const Consensus::TransactionScriptCheckPlan& check, bool cache_results, CoreScriptValidationCache& validation_cache, validation::ScriptCheckBatch* batch)
+Consensus::BlockSpendResult<void> BlockScriptError(const TxValidationState& tx_state)
+{
+    return Consensus::Unexpected<Consensus::BlockSpendError>{Consensus::BlockSpendError{
+        .issue = Consensus::BlockConsensusIssue::Consensus,
+        .reject_reason = tx_state.GetRejectReason(),
+        .debug_message = tx_state.GetDebugMessage(),
+    }};
+}
+
+Consensus::BlockSpendResult<void> BlockScriptTaskError(const validation::ScriptTaskError& task_error)
+{
+    return Consensus::Unexpected<Consensus::BlockSpendError>{Consensus::BlockSpendError{
+        .issue = Consensus::BlockConsensusIssue::Consensus,
+        .reject_reason = strprintf("block-script-verify-flag-failed (%s)", ScriptErrorString(task_error.first)),
+        .debug_message = task_error.second,
+    }};
+}
+
+Consensus::BlockSpendResult<void> BlockScriptExecutionError(validation::ScriptExecutionError error)
+{
+    return Consensus::Unexpected<Consensus::BlockSpendError>{Consensus::BlockSpendError{
+        .issue = Consensus::BlockConsensusIssue::ValidationRuntime,
+        .runtime_issue = error.runtime_issue,
+        .reject_reason = std::move(error.reject_reason),
+        .debug_message = std::move(error.debug_message),
+    }};
+}
+
+Consensus::BlockSpendResult<void> ScriptPreparationExceptionError(const std::exception& e)
+{
+    return BlockScriptExecutionError(validation::ScriptExecutionError{
+        .runtime_issue = Consensus::ValidationRuntimeIssue::SystemError,
+        .reject_reason = "script-task-preparation-failed",
+        .debug_message = e.what(),
+    });
+}
+
+Consensus::BlockSpendResult<void> UnknownScriptPreparationExceptionError()
+{
+    return BlockScriptExecutionError(validation::ScriptExecutionError{
+        .runtime_issue = Consensus::ValidationRuntimeIssue::SystemError,
+        .reject_reason = "script-task-preparation-failed",
+        .debug_message = "unknown exception",
+    });
+}
+
+validation::ScriptExecutionResult ExecutorExceptionError(const std::exception& e)
+{
+    return util::Unexpected{validation::ScriptExecutionError{
+        .runtime_issue = Consensus::ValidationRuntimeIssue::SystemError,
+        .reject_reason = "script-task-execution-failed",
+        .debug_message = e.what(),
+    }};
+}
+
+validation::ScriptExecutionResult UnknownExecutorExceptionError()
+{
+    return util::Unexpected{validation::ScriptExecutionError{
+        .runtime_issue = Consensus::ValidationRuntimeIssue::SystemError,
+        .reject_reason = "script-task-execution-failed",
+        .debug_message = "unknown exception",
+    }};
+}
+
+Consensus::BlockSpendResult<void> CheckTransactionScriptsForBlock(
+    const Consensus::TransactionScriptCheckPlan& check,
+    bool cache_results,
+    CoreScriptValidationCache& validation_cache,
+    std::vector<validation::ScriptTask>* deferred_tasks)
 {
     bool tx_ok;
     TxValidationState tx_state;
@@ -147,20 +241,21 @@ Consensus::BlockSpendResult<void> CheckTransactionScriptsForBlock(const Consensu
 
     // If CheckInputScripts is called with a checks vector, the checks are
     // appended and must be added to the control for asynchronous execution.
-    if (batch) {
-        std::vector<CScriptCheck> checks;
-        tx_ok = CheckInputScriptsFromPlan(check, tx_state, cache_results, cache_results, txdata, validation_cache, &checks);
-        if (tx_ok) batch->Add(std::move(checks));
+    if (deferred_tasks) {
+        tx_ok = CheckInputScriptsFromPlan(check, tx_state, cache_results, cache_results, txdata, validation_cache, deferred_tasks);
     } else {
-        tx_ok = CheckInputScriptsFromPlan(check, tx_state, cache_results, cache_results, txdata, validation_cache, nullptr);
+        tx_ok = CheckInputScriptsFromPlan(
+            check,
+            tx_state,
+            cache_results,
+            cache_results,
+            txdata,
+            validation_cache,
+            static_cast<std::vector<validation::ScriptTask>*>(nullptr));
     }
     if (!tx_ok) {
         // Any transaction validation failure during block connection is a block consensus failure.
-        return Consensus::Unexpected<Consensus::BlockSpendError>{Consensus::BlockSpendError{
-            .issue = Consensus::BlockConsensusIssue::Consensus,
-            .reject_reason = tx_state.GetRejectReason(),
-            .debug_message = tx_state.GetDebugMessage(),
-        }};
+        return BlockScriptError(tx_state);
     }
 
     return {};
@@ -168,41 +263,66 @@ Consensus::BlockSpendResult<void> CheckTransactionScriptsForBlock(const Consensu
 
 } // namespace
 
-CoreBlockScriptChecker::CoreBlockScriptChecker(bool run_checks, bool cache_results, CoreScriptValidationCache& validation_cache, std::unique_ptr<validation::ScriptCheckBatch>& batch, CoreChainLock* chain_lock)
-    : m_run_checks{run_checks}, m_cache_results{cache_results}, m_validation_cache{validation_cache}, m_batch{batch}, m_chain_lock{chain_lock}
+CoreBlockScriptChecker::CoreBlockScriptChecker(bool run_checks, bool cache_results, CoreScriptValidationCache& validation_cache, validation::ScriptTaskExecutor& executor, CoreChainLock* chain_lock)
+    : m_run_checks{run_checks}, m_cache_results{cache_results}, m_validation_cache{validation_cache}, m_executor{executor}, m_chain_lock{chain_lock}
 {
 }
 
 Consensus::BlockSpendResult<void> CoreBlockScriptChecker::Check(const Consensus::TransactionScriptCheckPlan& check)
 {
     if (!m_run_checks) return {};
-    return CheckTransactionScriptsForBlock(check, m_cache_results, m_validation_cache, m_batch.get());
+
+    const auto check_scripts = [&]() {
+        return CheckTransactionScriptsForBlock(
+            check,
+            m_cache_results,
+            m_validation_cache,
+            m_executor.ExecutesInline() ? nullptr : &m_deferred_tasks);
+    };
+    try {
+        if (!m_chain_lock) return check_scripts();
+
+        return m_chain_lock->RunUnlocked(check_scripts);
+    } catch (const std::exception& e) {
+        m_deferred_tasks.clear();
+        return ScriptPreparationExceptionError(e);
+    } catch (...) {
+        m_deferred_tasks.clear();
+        return UnknownScriptPreparationExceptionError();
+    }
 }
 
 Consensus::BlockSpendResult<void> CoreBlockScriptChecker::Complete()
 {
     if (!m_run_checks) return {};
-    if (!m_batch) return {};
+    if (m_executor.ExecutesInline()) return {};
 
     const auto complete_checks = [&]() {
-        return m_batch->Complete();
+        std::vector<validation::ScriptTask> tasks;
+        tasks.swap(m_deferred_tasks);
+        return m_executor.Execute(std::move(tasks));
     };
     const auto parallel_result = [&] {
-        if (!m_chain_lock) return complete_checks();
+        try {
+            if (!m_chain_lock) return complete_checks();
 
-        return m_chain_lock->RunUnlocked(complete_checks);
+            return m_chain_lock->RunUnlocked(complete_checks);
+        } catch (const std::exception& e) {
+            return ExecutorExceptionError(e);
+        } catch (...) {
+            return UnknownExecutorExceptionError();
+        }
     }();
-    if (!parallel_result) return {};
+    if (!parallel_result) return BlockScriptExecutionError(std::move(parallel_result).error());
 
-    return Consensus::Unexpected<Consensus::BlockSpendError>{Consensus::BlockSpendError{
-        .issue = Consensus::BlockConsensusIssue::Consensus,
-        .reject_reason = strprintf("block-script-verify-flag-failed (%s)", ScriptErrorString(parallel_result->first)),
-        .debug_message = parallel_result->second,
-    }};
+    const validation::ScriptTaskResult task_result{std::move(parallel_result).value()};
+    if (!task_result) return {};
+
+    return BlockScriptTaskError(*task_result);
 }
 
-CoreBlockScriptChecks::CoreBlockScriptChecks(validation::ScriptCheckScheduler& scheduler, bool run_checks, bool cache_results, ValidationCache& validation_cache, CoreChainLock* chain_lock)
-    : m_batch{scheduler.StartBatch(run_checks)}, m_validation_cache{validation_cache}, m_checker{run_checks, cache_results, m_validation_cache, m_batch, chain_lock}
+CoreBlockScriptChecks::CoreBlockScriptChecks(validation::ScriptTaskExecutor& executor, bool run_checks, bool cache_results, ValidationCache& validation_cache, CoreChainLock* chain_lock)
+    : m_validation_cache{validation_cache}, m_checker{run_checks, cache_results, m_validation_cache, executor, chain_lock}
 {
 }
 

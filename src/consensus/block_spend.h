@@ -14,11 +14,15 @@
 #include <script/verify_flags.h>
 
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <vector>
 
 namespace Consensus {
+
+class SpendLookupBatchBackend;
+struct BlockSpentOutputJoin;
 
 struct TransactionSpendContext {
     int block_height;
@@ -59,14 +63,30 @@ struct TransactionScriptCheckPlan {
 };
 
 struct BlockSpendEffects {
+    // Ordered one-to-one with the block transaction list. Entry 0 is the
+    // coinbase. Commit adapters use this as the portable proof of spent coins,
+    // created coins, fees, input count, and sigop accounting.
     std::vector<TransactionCoinEffects> transaction_effects;
     CAmount fees{0};
     int inputs{0};
     int64_t sigop_cost{0};
 };
 
+struct BlockSpendStageResult {
+    // Spend effects are attempt-local until a committer publishes them.
+    // Script checks are value plans and may be executed by a separate runtime.
+    BlockSpendEffects effects;
+    std::vector<TransactionScriptCheckPlan> script_checks;
+};
+
+enum class ScriptCheckPlanCollection {
+    Skip,
+    Collect,
+};
+
 struct BlockSpendError {
     BlockConsensusIssue issue{BlockConsensusIssue::Consensus};
+    std::optional<ValidationRuntimeIssue> runtime_issue{};
     std::string reject_reason;
     std::string debug_message;
 };
@@ -74,7 +94,8 @@ struct BlockSpendError {
 template <typename T>
 using BlockSpendResult = Consensus::Expected<T, BlockSpendError>;
 
-class BlockScriptChecker {
+class BlockScriptChecker
+{
 public:
     virtual ~BlockScriptChecker() = default;
 
@@ -83,37 +104,74 @@ public:
     [[nodiscard]] virtual BlockSpendResult<void> Complete() = 0;
 };
 
-class BlockSpendWorkspace {
+class SpendWorkspace
+{
 public:
-    virtual ~BlockSpendWorkspace() = default;
+    virtual ~SpendWorkspace() = default;
 
-    [[nodiscard]] virtual const SpendStateView& StagedSpendView() const = 0;
+    [[nodiscard]] virtual const SpendLookupBackend& StagedSpendView() const = 0;
     [[nodiscard]] virtual const SequenceLockTimeView& SequenceLockTimes() const = 0;
     // Updates this validation attempt's intra-block view only. Final
-    // persistence is handled later by BlockSpendStateCommitter.
+    // persistence is handled later by SpendCommitter. Failure must
+    // leave the workspace in a state that can be discarded without changing the
+    // parent backend.
     [[nodiscard]] virtual BlockSpendResult<void> StageTransactionEffectsForIntraBlockView(const TransactionCoinEffects& coin_effects, unsigned int transaction_index) = 0;
 };
 
-class BlockSpendBackend {
+using BlockSpendWorkspace = SpendWorkspace;
+
+class BlockSpendJoiner
+{
 public:
-    virtual ~BlockSpendBackend() = default;
+    virtual ~BlockSpendJoiner() = default;
+
+    [[nodiscard]] virtual BlockSpentOutputJoin Join(std::span<const CTransactionRef> transactions, int block_height) const = 0;
+};
+
+class BatchViewBlockSpendJoiner final : public BlockSpendJoiner
+{
+public:
+    explicit BatchViewBlockSpendJoiner(const SpendLookupBatchBackend& spend_state) : m_spend_state{spend_state} {}
+
+    [[nodiscard]] BlockSpentOutputJoin Join(std::span<const CTransactionRef> transactions, int block_height) const override;
+
+private:
+    const SpendLookupBatchBackend& m_spend_state;
+};
+
+class SpendWorkspaceProvider
+{
+public:
+    virtual ~SpendWorkspaceProvider() = default;
 
     // Creates a block-local workspace before any transaction reads or
     // intra-block staging happen. Dropping the workspace must leave the parent
-    // spend state unchanged.
-    [[nodiscard]] virtual BlockSpendResult<std::unique_ptr<BlockSpendWorkspace>> BeginBlockSpend(const BlockSpendContext& context) = 0;
+    // spend state unchanged. Backends may choose any internal state model as
+    // long as the workspace exposes the same spend, sequence-lock, and staging
+    // semantics.
+    [[nodiscard]] virtual BlockSpendResult<std::unique_ptr<SpendWorkspace>> BeginBlockSpend(const BlockSpendContext& context) = 0;
 };
 
-[[nodiscard]] BlockSpendResult<void> CheckBlockNoUnspentOutputOverwrite(std::span<const CTransactionRef> transactions, const SpendStateView& spend_state);
+using BlockSpendBackend = SpendWorkspaceProvider;
+
+[[nodiscard]] BlockSpendResult<void> CheckBlockNoUnspentOutputOverwrite(std::span<const CTransactionRef> transactions, const SpendLookupBackend& spend_state);
 [[nodiscard]] BlockSpendResult<void> CheckCoinbasePaysNoMoreThan(const CTransaction& coinbase, CAmount max_reward);
-[[nodiscard]] BlockSpendResult<TransactionInputCheck> CheckTransactionInputsForBlock(const CTransaction& tx, const SpendStateView& spend_state, const TransactionSpendContext& context, int locktime_flags);
+[[nodiscard]] BlockSpendResult<CAmount> CheckTransactionInputCoinsForBlock(const CTransaction& tx, std::span<const CoinSnapshot> input_coins, const TransactionSpendContext& context, int locktime_flags);
+[[nodiscard]] BlockSpendResult<TransactionInputCheck> CheckTransactionInputsForBlock(const CTransaction& tx, const SpendLookupBackend& spend_state, const TransactionSpendContext& context, int locktime_flags);
 [[nodiscard]] BlockSpendResult<CAmount> AddTransactionFeeForBlock(CAmount block_fees, CAmount tx_fee);
 [[nodiscard]] BlockSpendResult<int64_t> AddTransactionSigOpCostForBlock(const CTransaction& tx, std::span<const CoinSnapshot> input_coins, script_verify_flags flags, int64_t block_sigop_cost);
 [[nodiscard]] TransactionScriptCheckPlan BuildTransactionScriptCheckPlan(const CTransactionRef& tx, std::span<const CoinSnapshot> input_coins, script_verify_flags flags);
-[[nodiscard]] BlockSpendResult<TransactionSpendResult> ValidateTransactionSpendForBlock(const CTransactionRef& tx, const SpendStateView& spend_state, BlockScriptChecker& script_checker, const TransactionSpendContext& spend_context, const BlockSpendConsensusOptions& options, const BlockSpendAccounting& accounting);
+[[nodiscard]] BlockSpendResult<TransactionSpendResult> EvaluateTransactionSpendForBlock(const CTransactionRef& tx, std::span<const CoinSnapshot> input_coins, const TransactionSpendContext& spend_context, const BlockSpendConsensusOptions& options, const BlockSpendAccounting& accounting);
+[[nodiscard]] BlockSpendResult<void> SubmitTransactionScriptCheckForBlock(const CTransactionRef& tx, std::span<const CoinSnapshot> input_coins, BlockScriptChecker& script_checker, script_verify_flags flags);
+[[nodiscard]] BlockSpendResult<TransactionSpendResult> ValidateTransactionSpendForBlock(const CTransactionRef& tx, std::span<const CoinSnapshot> input_coins, BlockScriptChecker& script_checker, const TransactionSpendContext& spend_context, const BlockSpendConsensusOptions& options, const BlockSpendAccounting& accounting);
+[[nodiscard]] BlockSpendResult<TransactionSpendResult> ValidateTransactionSpendForBlock(const CTransactionRef& tx, const SpendLookupBackend& spend_state, BlockScriptChecker& script_checker, const TransactionSpendContext& spend_context, const BlockSpendConsensusOptions& options, const BlockSpendAccounting& accounting);
+[[nodiscard]] BlockSpendResult<void> SubmitBlockScriptChecksForSpendStage(std::span<const TransactionScriptCheckPlan> script_checks, BlockScriptChecker& script_checker);
 // Validates each transaction against the current staged view and stages its
 // coin effects so later transactions in the same block can spend them.
-[[nodiscard]] BlockSpendResult<BlockSpendEffects> ValidateAndStageBlockTransactions(std::span<const CTransactionRef> transactions, BlockSpendWorkspace& workspace, BlockScriptChecker& script_checker, const BlockSpendContext& spend_context, const BlockSpendConsensusOptions& options);
+[[nodiscard]] BlockSpendResult<BlockSpendStageResult> ValidateAndStageBlockTransactions(std::span<const CTransactionRef> transactions, SpendWorkspace& workspace, const BlockSpendContext& spend_context, const BlockSpendConsensusOptions& options, ScriptCheckPlanCollection script_check_plans);
+[[nodiscard]] BlockSpendResult<BlockSpendStageResult> ValidateAndStageBlockTransactions(std::span<const CTransactionRef> transactions, SpendWorkspace& workspace, const BlockSpendJoiner& joiner, const BlockSpendContext& spend_context, const BlockSpendConsensusOptions& options, ScriptCheckPlanCollection script_check_plans);
+[[nodiscard]] BlockSpendResult<BlockSpendEffects> ValidateAndStageBlockTransactions(std::span<const CTransactionRef> transactions, SpendWorkspace& workspace, BlockScriptChecker& script_checker, const BlockSpendContext& spend_context, const BlockSpendConsensusOptions& options);
+[[nodiscard]] BlockSpendResult<BlockSpendEffects> ValidateAndStageBlockTransactions(std::span<const CTransactionRef> transactions, SpendWorkspace& workspace, const BlockSpendJoiner& joiner, BlockScriptChecker& script_checker, const BlockSpendContext& spend_context, const BlockSpendConsensusOptions& options);
 
 } // namespace Consensus
 

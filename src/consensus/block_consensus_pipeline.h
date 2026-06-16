@@ -6,8 +6,8 @@
 #define BITCOIN_CONSENSUS_BLOCK_CONSENSUS_PIPELINE_H
 
 #include <consensus/amount.h>
-#include <consensus/block_commit.h>
 #include <consensus/block_check.h>
+#include <consensus/block_commit.h>
 #include <consensus/block_spend.h>
 #include <primitives/transaction.h>
 
@@ -33,6 +33,7 @@ enum class BlockConsensusStage {
 struct BlockConsensusStageError {
     BlockConsensusStage stage{BlockConsensusStage::Structural};
     std::optional<BlockConsensusIssue> issue;
+    std::optional<ValidationRuntimeIssue> runtime_issue;
     std::string reject_reason;
     std::string debug_message;
 };
@@ -68,7 +69,8 @@ struct BlockStructuralConsensusOptions {
 // Validation views borrow block storage for one validation call. They compute
 // their facts from the borrowed transaction range, so callers cannot construct
 // a view whose facts drift from its transaction storage.
-class BlockStructuralValidationView {
+class BlockStructuralValidationView
+{
 public:
     explicit BlockStructuralValidationView(const CBlock& block);
 
@@ -77,7 +79,8 @@ public:
     [[nodiscard]] const BlockStructuralFacts& Facts() const noexcept { return m_facts; }
 
 private:
-    struct TrustedFactsTag {};
+    struct TrustedFactsTag {
+    };
     BlockStructuralValidationView(const CBlockHeader& header, std::span<const CTransactionRef> transactions, BlockStructuralFacts facts, TrustedFactsTag);
 
     const CBlockHeader& m_header;
@@ -87,7 +90,8 @@ private:
     friend class BlockPrecommitValidationView;
 };
 
-class BlockContextualBodyValidationView {
+class BlockContextualBodyValidationView
+{
 public:
     explicit BlockContextualBodyValidationView(const CBlock& block);
 
@@ -95,7 +99,8 @@ public:
     [[nodiscard]] const BlockFacts& Facts() const noexcept { return m_facts; }
 
 private:
-    struct TrustedFactsTag {};
+    struct TrustedFactsTag {
+    };
     BlockContextualBodyValidationView(std::span<const CTransactionRef> transactions, BlockFacts facts, TrustedFactsTag);
 
     std::span<const CTransactionRef> m_transactions;
@@ -104,7 +109,8 @@ private:
     friend class BlockPrecommitValidationView;
 };
 
-class BlockContextualValidationView {
+class BlockContextualValidationView
+{
 public:
     explicit BlockContextualValidationView(const CBlock& block);
 
@@ -112,7 +118,8 @@ public:
     [[nodiscard]] const BlockContextualBodyValidationView& Body() const noexcept { return m_body; }
 
 private:
-    struct TrustedBodyTag {};
+    struct TrustedBodyTag {
+    };
     BlockContextualValidationView(const CBlockHeader& header, BlockContextualBodyValidationView body, TrustedBodyTag);
 
     const CBlockHeader& m_header;
@@ -121,7 +128,8 @@ private:
     friend class BlockPrecommitValidationView;
 };
 
-class BlockPrecommitValidationView {
+class BlockPrecommitValidationView
+{
 public:
     explicit BlockPrecommitValidationView(const CBlock& block);
 
@@ -138,7 +146,6 @@ private:
 };
 
 [[nodiscard]] BlockSpendContext BuildBlockSpendContext(const BlockHeaderContext& headers);
-[[nodiscard]] BlockCommitContext BuildBlockCommitContext(const uint256& new_best_block);
 [[nodiscard]] BlockCommitContext BuildBlockCommitContext(const BlockHeaderContext& headers, const uint256& new_best_block);
 [[nodiscard]] BlockConsensusContext BuildBlockConsensusContext(const BlockHeaderContext& headers, const uint256& new_best_block, CAmount block_subsidy);
 [[nodiscard]] BlockContextualBodyOptions BuildBlockContextualBodyOptions(const CBlockHeader& block, const BlockHeaderContext& headers);
@@ -158,7 +165,7 @@ private:
     const BlockStructuralConsensusOptions& structural_options,
     const BlockContextualConsensusOptions& contextual_options,
     const BlockConsensusContext& consensus_context,
-    BlockSpendWorkspace& workspace,
+    SpendWorkspace& workspace,
     BlockScriptChecker& script_checker,
     const BlockSpendConsensusOptions& spend_options);
 [[nodiscard]] BlockConsensusStageResult<BlockSpendEffects> ValidateBlockPrecommit(
@@ -166,7 +173,7 @@ private:
     const BlockStructuralConsensusOptions& structural_options,
     const BlockContextualConsensusOptions& contextual_options,
     const BlockConsensusContext& consensus_context,
-    BlockSpendWorkspace& workspace,
+    SpendWorkspace& workspace,
     BlockScriptChecker& script_checker,
     const BlockSpendConsensusOptions& spend_options);
 [[nodiscard]] BlockConsensusStageResult<BlockSpendEffects> ValidateBlockPrecommitStages(
@@ -174,7 +181,7 @@ private:
     const BlockStructuralConsensusOptions& structural_options,
     const BlockContextualConsensusOptions& contextual_options,
     const BlockConsensusContext& consensus_context,
-    BlockSpendWorkspace& workspace,
+    SpendWorkspace& workspace,
     BlockScriptChecker& script_checker,
     const BlockSpendConsensusOptions& spend_options);
 [[nodiscard]] BlockConsensusStageResult<BlockSpendEffects> ValidateBlockPrecommitStages(
@@ -182,62 +189,64 @@ private:
     const BlockStructuralConsensusOptions& structural_options,
     const BlockContextualConsensusOptions& contextual_options,
     const BlockConsensusContext& consensus_context,
-    BlockSpendWorkspace& workspace,
+    SpendWorkspace& workspace,
     BlockScriptChecker& script_checker,
     const BlockSpendConsensusOptions& spend_options);
-[[nodiscard]] BlockConsensusStageResult<void> CommitBlockStageEffects(const BlockCommitContext& commit_context, const BlockSpendEffects& effects, BlockRevertDataWriter& revert_data_writer, BlockSpendStateCommitter& spend_state_committer, BlockMetadataCommitter& metadata_committer);
+[[nodiscard]] BlockConsensusStageResult<void> CommitBlockStageEffects(const BlockCommitContext& commit_context, const BlockSpendEffects& effects, BlockRevertDataWriter& revert_data_writer, SpendCommitter& spend_state_committer, BlockMetadataCommitter& metadata_committer);
 [[nodiscard]] BlockConsensusStageResult<BlockSpendEffects> ValidateAndCommitBlockStages(
     const BlockPrecommitValidationView& input,
     const BlockStructuralConsensusOptions& structural_options,
     const BlockContextualConsensusOptions& contextual_options,
     const BlockConsensusContext& consensus_context,
-    BlockSpendWorkspace& workspace,
+    SpendWorkspace& workspace,
     BlockScriptChecker& script_checker,
     const BlockSpendConsensusOptions& spend_options,
     BlockRevertDataWriter& revert_data_writer,
-    BlockSpendStateCommitter& spend_state_committer,
+    SpendCommitter& spend_state_committer,
     BlockMetadataCommitter& metadata_committer);
 [[nodiscard]] BlockConsensusStageResult<BlockSpendEffects> ValidateAndCommitBlock(
     const BlockPrecommitValidationView& input,
     const BlockStructuralConsensusOptions& structural_options,
     const BlockContextualConsensusOptions& contextual_options,
     const BlockConsensusContext& consensus_context,
-    BlockSpendWorkspace& workspace,
+    SpendWorkspace& workspace,
     BlockScriptChecker& script_checker,
     const BlockSpendConsensusOptions& spend_options,
     BlockRevertDataWriter& revert_data_writer,
-    BlockSpendStateCommitter& spend_state_committer,
+    SpendCommitter& spend_state_committer,
     BlockMetadataCommitter& metadata_committer);
 [[nodiscard]] BlockConsensusStageResult<BlockSpendEffects> ValidateAndCommitBlock(
     const CBlock& block,
     const BlockStructuralConsensusOptions& structural_options,
     const BlockContextualConsensusOptions& contextual_options,
     const BlockConsensusContext& consensus_context,
-    BlockSpendWorkspace& workspace,
+    SpendWorkspace& workspace,
     BlockScriptChecker& script_checker,
     const BlockSpendConsensusOptions& spend_options,
     BlockRevertDataWriter& revert_data_writer,
-    BlockSpendStateCommitter& spend_state_committer,
+    SpendCommitter& spend_state_committer,
     BlockMetadataCommitter& metadata_committer);
 [[nodiscard]] BlockConsensusStageResult<BlockSpendEffects> ValidateAndCommitBlockStages(
     const CBlock& block,
     const BlockStructuralConsensusOptions& structural_options,
     const BlockContextualConsensusOptions& contextual_options,
     const BlockConsensusContext& consensus_context,
-    BlockSpendWorkspace& workspace,
+    SpendWorkspace& workspace,
     BlockScriptChecker& script_checker,
     const BlockSpendConsensusOptions& spend_options,
     BlockRevertDataWriter& revert_data_writer,
-    BlockSpendStateCommitter& spend_state_committer,
+    SpendCommitter& spend_state_committer,
     BlockMetadataCommitter& metadata_committer);
 
-class BlockConsensusPipeline {
+class BlockConsensusPipeline
+{
 public:
     BlockConsensusPipeline(std::span<const CTransactionRef> transactions, BlockConsensusContext context);
     BlockConsensusPipeline(const CBlock& block, BlockConsensusContext context);
 
-    [[nodiscard]] BlockSpendResult<BlockSpendEffects> ValidateAndStageSpend(BlockSpendWorkspace& workspace, BlockScriptChecker& script_checker, const BlockSpendConsensusOptions& options) const;
-    [[nodiscard]] BlockSpendResult<BlockSpendEffects> ValidateAndCompleteSpendStage(BlockSpendWorkspace& workspace, BlockScriptChecker& script_checker, const BlockSpendConsensusOptions& options) const;
+    [[nodiscard]] BlockSpendResult<BlockSpendEffects> ValidateAndStageSpend(SpendWorkspace& workspace, BlockScriptChecker& script_checker, const BlockSpendConsensusOptions& options) const;
+    [[nodiscard]] BlockSpendResult<BlockSpendEffects> ValidateAndStageSpend(SpendWorkspace& workspace, const BlockSpendJoiner& joiner, BlockScriptChecker& script_checker, const BlockSpendConsensusOptions& options) const;
+    [[nodiscard]] BlockSpendResult<BlockSpendEffects> ValidateAndCompleteSpendStage(SpendWorkspace& workspace, BlockScriptChecker& script_checker, const BlockSpendConsensusOptions& options) const;
     [[nodiscard]] BlockSpendResult<BlockSpendEffects> CompleteSpendStage(BlockSpendResult<BlockSpendEffects> spend_effects, BlockScriptChecker& script_checker) const;
     [[nodiscard]] BlockSpendResult<void> CheckCoinbaseReward(const BlockSpendEffects& effects) const;
     [[nodiscard]] BlockSpendResult<void> CompleteScriptChecks(BlockScriptChecker& script_checker) const;

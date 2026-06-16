@@ -105,7 +105,7 @@ public:
     void LoadSpendState(const ConformanceSpendState& spend_state);
     [[nodiscard]] validation::CoinsViewSpendState SpendView() const;
     [[nodiscard]] validation::CoinsViewSequenceLockTimeView SequenceLockTimes() const;
-    [[nodiscard]] validation::CoinsViewBlockSpendBackend BlockSpendBackend();
+    [[nodiscard]] validation::CoinsViewBlockSpendBackend SpendWorkspaceProvider();
 
 private:
     CCoinsViewCache& m_coins;

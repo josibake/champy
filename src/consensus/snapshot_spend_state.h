@@ -12,14 +12,14 @@
 
 namespace Consensus {
 
-class SnapshotSpendWorkspace final : public BlockSpendWorkspace, public SpendStateView {
+class SnapshotSpendWorkspace final : public SpendWorkspace, public SpendLookupBackend {
 public:
     SnapshotSpendWorkspace(
         std::map<COutPoint, CoinSnapshot> coins,
         int64_t previous_median_time_past,
         std::map<COutPoint, int64_t> previous_median_time_past_by_outpoint);
 
-    [[nodiscard]] const SpendStateView& StagedSpendView() const override { return *this; }
+    [[nodiscard]] const SpendLookupBackend& StagedSpendView() const override { return *this; }
     [[nodiscard]] const SequenceLockTimeView& SequenceLockTimes() const override { return m_sequence_lock_times; }
     [[nodiscard]] bool HaveCoin(const COutPoint& outpoint) const override;
     [[nodiscard]] std::optional<CoinSnapshot> GetCoin(const COutPoint& outpoint) const override;
@@ -44,7 +44,7 @@ private:
     SnapshotSequenceLockTimeView m_sequence_lock_times;
 };
 
-class SnapshotSpendState final : public BlockSpendBackend, public SpendStateView, public BlockSpendStateCommitter {
+class SnapshotSpendState final : public SpendWorkspaceProvider, public SpendLookupBackend, public SpendCommitter {
 public:
     void AddCoin(const COutPoint& outpoint, CoinSnapshot coin);
     void AddCoin(const COutPoint& outpoint, CoinSnapshot coin, int64_t previous_median_time_past);
@@ -52,7 +52,7 @@ public:
     [[nodiscard]] bool HaveCoin(const COutPoint& outpoint) const override;
     [[nodiscard]] std::optional<CoinSnapshot> GetCoin(const COutPoint& outpoint) const override;
     [[nodiscard]] SnapshotSpendWorkspace MakeWorkspace(int64_t previous_median_time_past = 0) const;
-    [[nodiscard]] BlockSpendResult<std::unique_ptr<BlockSpendWorkspace>> BeginBlockSpend(const BlockSpendContext& context) override;
+    [[nodiscard]] BlockSpendResult<std::unique_ptr<SpendWorkspace>> BeginBlockSpend(const BlockSpendContext& context) override;
     [[nodiscard]] BlockCommitResult<void> CommitSpendState(const BlockCommitContext& context, const BlockSpendEffects& effects) override;
 
 private:

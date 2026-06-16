@@ -8,6 +8,7 @@
 #include <banman.h>
 #include <validation/block_validation.h>
 #include <validation/chain_validation.h>
+#include <validation/runtime_time.h>
 #include <chainparams.h>
 #include <common/system.h>
 #include <consensus/consensus.h>
@@ -323,6 +324,7 @@ void ChainTestingSetup::LoadVerifyActivateChainstate()
     options.check_blocks = m_args.GetIntArg("-checkblocks", DEFAULT_CHECKBLOCKS);
     options.check_level = m_args.GetIntArg("-checklevel", DEFAULT_CHECKLEVEL);
     options.require_full_verification = m_args.IsArgSet("-checkblocks") || m_args.IsArgSet("-checklevel");
+    options.current_time = CurrentNodeTime();
     auto [status, error] = LoadChainstate(chainman, m_kernel_cache_sizes, options);
     assert(status == kernel::ChainstateLoadStatus::SUCCESS);
 
@@ -330,8 +332,8 @@ void ChainTestingSetup::LoadVerifyActivateChainstate()
     assert(status == kernel::ChainstateLoadStatus::SUCCESS);
 
     BlockValidationState state;
-    if (!chainman.ActiveChainstate().ActivateBestChain(state)) {
-        throw std::runtime_error(strprintf("ActivateBestChain failed. (%s)", state.ToString()));
+    if (!chainman.ActiveChainstate().ActivateBestChain(state, CurrentNodeTime()).Succeeded()) {
+        throw std::runtime_error(strprintf("ActivateBestChain failed. (%s)", FormatValidationStateForLog(state)));
     }
 }
 
@@ -432,11 +434,13 @@ CBlock TestChain100Setup::CreateAndProcessBlock(
     std::shared_ptr<const CBlock> shared_pblock = std::make_shared<const CBlock>(block);
     std::optional<node::MempoolChainSync> chain_events;
     if (m_node.mempool) chain_events.emplace(*chainstate, *m_node.mempool);
-    (void)ChainValidationService{*Assert(m_node.chainman)}.ProcessNewBlock(
-        chain_events ? &*chain_events : nullptr,
-        shared_pblock,
-        {.block_data_storage = BlockDataStorageMode::ForceStore, .header = {.min_pow_checked = true}},
-        CurrentBlockValidationTime());
+    (void)ProcessNewBlock({
+        .chainman = *Assert(m_node.chainman),
+        .chain_events = chain_events ? &*chain_events : nullptr,
+        .block = shared_pblock,
+        .options = {.block_data_storage = BlockDataStorageMode::ForceStore, .header = {.min_pow_checked = true}},
+        .time = CurrentBlockValidationTime(),
+    });
 
     return block;
 }

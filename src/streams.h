@@ -618,12 +618,15 @@ public:
         return (*this);
     }
 
-    //! search for a given byte in the stream, and remain positioned on it
-    void FindByte(std::byte byte)
+    //! Search for a given byte in the stream, and remain positioned on it.
+    //! Return false without consuming additional bytes if interrupted.
+    template <typename Interrupted>
+    bool FindByte(std::byte byte, Interrupted interrupted)
     {
         // For best performance, avoid mod operation within the loop.
         size_t buf_offset{size_t(m_read_pos % uint64_t(vchBuf.size()))};
         while (true) {
+            if (interrupted()) return false;
             if (m_read_pos == nSrcPos) {
                 // No more bytes available; read from the file into the buffer,
                 // setting nSrcPos to one beyond the end of the new data.
@@ -639,6 +642,13 @@ public:
             buf_offset += inc;
             if (buf_offset >= vchBuf.size()) buf_offset = 0;
         }
+        return true;
+    }
+
+    //! search for a given byte in the stream, and remain positioned on it
+    void FindByte(std::byte byte)
+    {
+        (void)FindByte(byte, [] { return false; });
     }
 };
 

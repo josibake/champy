@@ -8,6 +8,7 @@
 #include <chain.h>
 #include <chainstate.h>
 #include <consensus/params.h>
+#include <consensus/serialization.h>
 #include <crypto/hex_base.h>
 #include <dbwrapper.h>
 #include <flatfile.h>
@@ -677,10 +678,8 @@ CBlockFileInfo* BlockManager::GetBlockFileInfo(size_t n)
     return &m_blockfile_info.at(n);
 }
 
-bool BlockManager::ReadBlockUndo(CBlockUndo& blockundo, const CBlockIndex& index) const
+bool BlockManager::ReadBlockUndo(CBlockUndo& blockundo, const FlatFilePos& pos, const uint256& previous_block_hash) const
 {
-    const FlatFilePos pos{WITH_LOCK(::cs_main, return index.GetUndoPos())};
-
     // Open history file to read
     AutoFile file{OpenUndoFile(pos, true)};
     if (file.IsNull()) {
@@ -693,7 +692,7 @@ bool BlockManager::ReadBlockUndo(CBlockUndo& blockundo, const CBlockIndex& index
         // Read block
         HashVerifier verifier{filein}; // Use HashVerifier, as reserializing may lose data, c.f. commit d3424243
 
-        verifier << index.pprev->GetBlockHash();
+        verifier << previous_block_hash;
         verifier >> blockundo;
 
         uint256 hashChecksum;
@@ -710,6 +709,12 @@ bool BlockManager::ReadBlockUndo(CBlockUndo& blockundo, const CBlockIndex& index
     }
 
     return true;
+}
+
+bool BlockManager::ReadBlockUndo(CBlockUndo& blockundo, const CBlockIndex& index) const
+{
+    const FlatFilePos pos{WITH_LOCK(::cs_main, return index.GetUndoPos())};
+    return ReadBlockUndo(blockundo, pos, Assert(index.pprev)->GetBlockHash());
 }
 
 bool BlockManager::FlushUndoFile(int block_file, bool finalize)
@@ -888,7 +893,7 @@ void BlockManager::UpdateBlockInfo(const CBlock& block, unsigned int nHeight, co
     }
 
     // Update the file information with the current block.
-    const unsigned int added_size = ::GetSerializeSize(TX_WITH_WITNESS(block));
+    const unsigned int added_size{static_cast<unsigned int>(Consensus::SerializedSize(block))};
     const int nFile = pos.nFile;
     if (static_cast<int>(m_blockfile_info.size()) <= nFile) {
         m_blockfile_info.resize(nFile + 1);
@@ -999,13 +1004,12 @@ bool BlockManager::ReadBlock(CBlock& block, const FlatFilePos& pos, const std::o
         return false;
     }
 
-    try {
-        // Read block
-        SpanReader{*block_data} >> TX_WITH_WITNESS(block);
-    } catch (const std::exception& e) {
-        LogError("Deserialize or I/O error - %s at %s while reading block", e.what(), pos.ToString());
+    auto parsed_block{Consensus::ParseBlock(*block_data)};
+    if (!parsed_block) {
+        LogError("Deserialize or I/O error at %s while reading block", pos.ToString());
         return false;
     }
+    block = std::move(*parsed_block);
 
     const auto block_hash{block.GetHash()};
 
@@ -1089,7 +1093,7 @@ BlockManager::ReadRawBlockResult BlockManager::ReadRawBlock(const FlatFilePos& p
 
 FlatFilePos BlockManager::WriteBlock(const CBlock& block, int nHeight)
 {
-    const unsigned int block_size{static_cast<unsigned int>(GetSerializeSize(TX_WITH_WITNESS(block)))};
+    const unsigned int block_size{static_cast<unsigned int>(Consensus::SerializedSize(block))};
     FlatFilePos pos{FindNextBlockPos(block_size + STORAGE_HEADER_BYTES, nHeight, block.GetBlockTime())};
     if (pos.IsNull()) {
         LogError("FindNextBlockPos failed for %s while writing block", pos.ToString());
@@ -1108,7 +1112,11 @@ FlatFilePos BlockManager::WriteBlock(const CBlock& block, int nHeight)
         fileout << GetParams().MessageStart() << block_size;
         pos.nPos += STORAGE_HEADER_BYTES;
         // Write block
-        fileout << TX_WITH_WITNESS(block);
+        using BufferedFileWriter = decltype(fileout);
+        auto write_to_buffered_file = [](void* user_data, std::span<const std::byte> bytes) {
+            static_cast<BufferedFileWriter*>(user_data)->write(bytes);
+        };
+        Consensus::SerializeBlock(block, Consensus::ByteSinkRef{&fileout, write_to_buffered_file});
     }
 
     if (file.fclose() != 0) {

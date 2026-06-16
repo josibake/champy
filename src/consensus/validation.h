@@ -7,6 +7,7 @@
 #define BITCOIN_CONSENSUS_VALIDATION_H
 
 #include <consensus/consensus.h>
+#include <consensus/serialization.h>
 #include <consensus/script_view.h>
 #include <primitives/transaction.h>
 #include <primitives/block.h>
@@ -28,16 +29,16 @@ static constexpr size_t MINIMUM_WITNESS_COMMITMENT{38};
 // weight = (stripped_size * 3) + total_size.
 static inline int32_t GetTransactionWeight(const CTransaction& tx)
 {
-    return ::GetSerializeSize(TX_NO_WITNESS(tx)) * (WITNESS_SCALE_FACTOR - 1) + ::GetSerializeSize(TX_WITH_WITNESS(tx));
+    return StrippedSerializedSize(tx) * (WITNESS_SCALE_FACTOR - 1) + SerializedSize(tx);
 }
 static inline int64_t GetBlockWeight(const CBlock& block)
 {
-    return ::GetSerializeSize(TX_NO_WITNESS(block)) * (WITNESS_SCALE_FACTOR - 1) + ::GetSerializeSize(TX_WITH_WITNESS(block));
+    return StrippedSerializedSize(block) * (WITNESS_SCALE_FACTOR - 1) + SerializedSize(block);
 }
 static inline int64_t GetTransactionInputWeight(const CTxIn& txin)
 {
     // scriptWitness size is added here because witnesses and txins are split up in segwit serialization.
-    return ::GetSerializeSize(TX_NO_WITNESS(txin)) * (WITNESS_SCALE_FACTOR - 1) + ::GetSerializeSize(TX_WITH_WITNESS(txin)) + ::GetSerializeSize(txin.scriptWitness.stack);
+    return SerializedInputBaseSize(txin) * WITNESS_SCALE_FACTOR + SerializedInputWitnessStackSize(txin);
 }
 
 /** Compute at which vout of the coinbase transaction the witness commitment occurs, or -1 if not found */

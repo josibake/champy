@@ -12,6 +12,16 @@ enum class BlockConsensusIssue {
     InvalidHeader,
     Mutated,
     TimeFuture,
+    ValidationRuntime,
+};
+
+enum class ValidationRuntimeIssue {
+    SystemError,
+    StaleWork,
+    ResourceLimit,
+    BackendUnavailable,
+    Cancelled,
+    CommitConflict,
 };
 
 } // namespace Consensus

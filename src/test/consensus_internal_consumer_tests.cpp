@@ -53,8 +53,8 @@ Consensus::CoinSnapshot SpendableCoin(CAmount value)
     };
 }
 
-class ExternalSpendWorkspace final : public Consensus::BlockSpendWorkspace,
-                                     public Consensus::SpendStateView,
+class ExternalSpendWorkspace final : public Consensus::SpendWorkspace,
+                                     public Consensus::SpendLookupBackend,
                                      public Consensus::SequenceLockTimeView {
 public:
     explicit ExternalSpendWorkspace(
@@ -65,7 +65,7 @@ public:
     {
     }
 
-    [[nodiscard]] const Consensus::SpendStateView& StagedSpendView() const override { return *this; }
+    [[nodiscard]] const Consensus::SpendLookupBackend& StagedSpendView() const override { return *this; }
     [[nodiscard]] const Consensus::SequenceLockTimeView& SequenceLockTimes() const override { return *this; }
 
     [[nodiscard]] bool HaveCoin(const COutPoint& outpoint) const override
@@ -122,20 +122,20 @@ private:
     std::vector<unsigned int> m_staged_indices;
 };
 
-class ExternalSpendBackend final : public Consensus::BlockSpendBackend {
+class ExternalSpendBackend final : public Consensus::SpendWorkspaceProvider {
 public:
     void AddCoin(const COutPoint& outpoint, Consensus::CoinSnapshot coin)
     {
         m_coins.emplace(outpoint, std::move(coin));
     }
 
-    [[nodiscard]] Consensus::BlockSpendResult<std::unique_ptr<Consensus::BlockSpendWorkspace>>
+    [[nodiscard]] Consensus::BlockSpendResult<std::unique_ptr<Consensus::SpendWorkspace>>
     BeginBlockSpend(const Consensus::BlockSpendContext& context) override
     {
         ++m_started_workspaces;
         auto workspace{std::make_unique<ExternalSpendWorkspace>(m_coins, context.previous_median_time_past)};
         m_last_workspace = workspace.get();
-        std::unique_ptr<Consensus::BlockSpendWorkspace> result{std::move(workspace)};
+        std::unique_ptr<Consensus::SpendWorkspace> result{std::move(workspace)};
         return std::move(result);
     }
 
@@ -174,7 +174,7 @@ private:
 };
 
 class ExternalCommitter final : public Consensus::BlockRevertDataWriter,
-                                public Consensus::BlockSpendStateCommitter,
+                                public Consensus::SpendCommitter,
                                 public Consensus::BlockMetadataCommitter {
 public:
     void AddCoin(const COutPoint& outpoint, Consensus::CoinSnapshot coin)
@@ -259,16 +259,20 @@ Consensus::BlockConsensusContext ConsensusContext()
             .block_height = 200,
             .previous_median_time_past = 0,
         },
-        .commit = Consensus::BlockCommitContext{.new_best_block = uint256::ONE},
+        .commit = Consensus::BlockCommitContext{
+            .new_best_block = uint256::ONE,
+            .block_height = 200,
+            .previous_median_time_past = 0,
+        },
         .block_subsidy = 50,
     };
 }
 
 } // namespace
 
-BOOST_AUTO_TEST_SUITE(consensus_api_consumer_tests)
+BOOST_AUTO_TEST_SUITE(consensus_internal_consumer_tests)
 
-BOOST_AUTO_TEST_CASE(public_api_supports_external_spend_backend)
+BOOST_AUTO_TEST_CASE(internal_boundary_supports_external_spend_backend)
 {
     const COutPoint prevout{Txid::FromUint256(uint256::ONE), 0};
     const auto coin{SpendableCoin(50)};
@@ -320,6 +324,62 @@ BOOST_AUTO_TEST_CASE(public_api_supports_external_spend_backend)
     BOOST_CHECK_EQUAL(committer.SpendCommits(), 1);
     BOOST_CHECK_EQUAL(committer.MetadataCommits(), 1);
     BOOST_CHECK(committer.NewBestBlock() == uint256::ONE);
+    BOOST_CHECK(!committer.HaveCommittedCoin(prevout));
+    BOOST_CHECK(committer.HaveCommittedCoin(COutPoint{block.vtx[0]->GetHash(), 0}));
+    BOOST_CHECK(committer.HaveCommittedCoin(COutPoint{block.vtx[1]->GetHash(), 0}));
+}
+
+BOOST_AUTO_TEST_CASE(internal_boundary_supports_manual_stage_orchestration)
+{
+    const COutPoint prevout{Txid::FromUint256(uint256::ONE), 0};
+    const auto coin{SpendableCoin(50)};
+    CBlock block{MakeBlock({
+        MakeCoinbase(60),
+        MakeSpend(prevout, 40),
+    })};
+
+    ExternalSpendBackend backend;
+    backend.AddCoin(prevout, coin);
+    ExternalCommitter committer;
+    committer.AddCoin(prevout, coin);
+
+    const Consensus::BlockConsensusContext context{ConsensusContext()};
+    const auto view{Consensus::BuildBlockPrecommitValidationView(block)};
+
+    BOOST_CHECK(Consensus::ValidateBlockStructuralStage(
+        view.StructuralView(),
+        Consensus::BlockStructuralConsensusOptions{}));
+    BOOST_CHECK(Consensus::ValidateBlockContextualStage(
+        view.ContextualView(),
+        ContextualOptions(block)));
+
+    auto workspace{backend.BeginBlockSpend(context.spend)};
+    BOOST_REQUIRE(workspace);
+
+    ExternalScriptChecker scripts;
+    Consensus::BlockConsensusPipeline pipeline{view.Transactions(), context};
+    auto staged{pipeline.ValidateAndStageSpend(**workspace, scripts, Consensus::BlockSpendConsensusOptions{})};
+    BOOST_REQUIRE(staged);
+    BOOST_CHECK_EQUAL(staged->fees, 10);
+    BOOST_CHECK_EQUAL(staged->inputs, 2);
+    BOOST_CHECK_EQUAL(scripts.Checks(), 1);
+    BOOST_CHECK_EQUAL(scripts.Completions(), 0);
+
+    auto completed{pipeline.CompleteSpendStage(std::move(staged), scripts)};
+    BOOST_REQUIRE(completed);
+    BOOST_CHECK_EQUAL(scripts.Completions(), 1);
+
+    const auto commit{Consensus::CommitBlockStageEffects(
+        context.commit,
+        *completed,
+        committer,
+        committer,
+        committer)};
+    BOOST_REQUIRE(commit);
+
+    BOOST_CHECK_EQUAL(committer.RevertEntries(), 2);
+    BOOST_CHECK_EQUAL(committer.SpendCommits(), 1);
+    BOOST_CHECK_EQUAL(committer.MetadataCommits(), 1);
     BOOST_CHECK(!committer.HaveCommittedCoin(prevout));
     BOOST_CHECK(committer.HaveCommittedCoin(COutPoint{block.vtx[0]->GetHash(), 0}));
     BOOST_CHECK(committer.HaveCommittedCoin(COutPoint{block.vtx[1]->GetHash(), 0}));

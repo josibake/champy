@@ -81,7 +81,7 @@ void BenchSpendBackend(benchmark::Bench& bench, const char* name, auto&& setup_w
     const SpendBackendBenchFixture fixture{MakeSpendBackendBenchFixture()};
     const Consensus::BlockSpendContext context{BenchSpendContext()};
     NoScriptChecks script_checker;
-    std::unique_ptr<Consensus::BlockSpendWorkspace> workspace;
+    std::unique_ptr<Consensus::SpendWorkspace> workspace;
 
     bench.unit("block")
         .name(name)

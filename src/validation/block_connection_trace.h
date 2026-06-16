@@ -14,14 +14,27 @@
 
 class ChainstateManager;
 
+struct BlockConnectionStageTimings {
+    std::chrono::nanoseconds sanity_checks{0};
+    std::chrono::nanoseconds fork_checks{0};
+    std::chrono::nanoseconds spend_join{0};
+    std::chrono::nanoseconds script_validation{0};
+    std::chrono::nanoseconds undo_write{0};
+    std::chrono::nanoseconds index_commit{0};
+    std::chrono::nanoseconds total{0};
+};
+
 struct BlockConnectionTraceCounters {
-    int64_t& num_blocks_total;
-    SteadyClock::duration& time_check;
-    SteadyClock::duration& time_forks;
-    SteadyClock::duration& time_connect;
-    SteadyClock::duration& time_verify;
-    SteadyClock::duration& time_undo;
-    SteadyClock::duration& time_index;
+    // Optional Core global counters. The default trace records local stage
+    // timings only; traces with these counters must be advanced under the
+    // same lock that protects the referenced ChainstateManager timings.
+    int64_t* num_blocks_total{nullptr};
+    SteadyClock::duration* time_check{nullptr};
+    SteadyClock::duration* time_forks{nullptr};
+    SteadyClock::duration* time_connect{nullptr};
+    SteadyClock::duration* time_verify{nullptr};
+    SteadyClock::duration* time_undo{nullptr};
+    SteadyClock::duration* time_index{nullptr};
 };
 
 [[nodiscard]] BlockConnectionTraceCounters BlockConnectionTraceCountersFor(ChainstateManager& chainman)
@@ -30,19 +43,24 @@ struct BlockConnectionTraceCounters {
 class BlockConnectionTrace final
 {
 public:
+    BlockConnectionTrace();
     explicit BlockConnectionTrace(BlockConnectionTraceCounters counters);
 
-    void CountBlock() EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
-    void SanityChecksDone() EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
-    void ForkChecksDone() EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
-    void SpendStageValidated(std::size_t transaction_count, int spend_inputs) EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
-    void SpendStageCompleted(int spend_inputs) EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
-    void UndoWritten() EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
-    void IndexCommitted() EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
+    void CountBlock();
+    void SanityChecksDone();
+    void ForkChecksDone();
+    void SpendStageValidated(std::size_t transaction_count, int spend_inputs);
+    void SpendStageCompleted(int spend_inputs);
+    void UndoWritten();
+    void IndexCommitted();
 
+    [[nodiscard]] BlockConnectionStageTimings Timings() const;
     [[nodiscard]] std::chrono::nanoseconds TraceDuration() const;
 
 private:
+    [[nodiscard]] bool HasGlobalCounters() const noexcept;
+    [[nodiscard]] int64_t GlobalBlockCount() const noexcept;
+
     BlockConnectionTraceCounters m_counters;
     SteadyClock::time_point m_start;
     SteadyClock::time_point m_after_sanity;

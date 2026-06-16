@@ -23,6 +23,8 @@ BlockValidationResult ToBlockValidationResult(Consensus::BlockConsensusIssue iss
         return BlockValidationResult::BLOCK_MUTATED;
     case Consensus::BlockConsensusIssue::TimeFuture:
         return BlockValidationResult::BLOCK_TIME_FUTURE;
+    case Consensus::BlockConsensusIssue::ValidationRuntime:
+        return BlockValidationResult::BLOCK_RESULT_UNSET;
     }
     assert(false);
     return BlockValidationResult::BLOCK_CONSENSUS;
@@ -35,17 +37,30 @@ bool ApplyBlockCheckError(BlockValidationState& state, const Consensus::BlockChe
 
 bool ApplyBlockSpendError(BlockValidationState& state, const Consensus::BlockSpendError& error)
 {
+    if (error.issue == Consensus::BlockConsensusIssue::ValidationRuntime) {
+        return state.Error(error.reject_reason);
+    }
     return state.Invalid(ToBlockValidationResult(error.issue), error.reject_reason, error.debug_message);
 }
 
 bool ApplyBlockCommitError(BlockValidationState& state, const Consensus::BlockCommitError& error)
 {
+    switch (error.failure_state) {
+    case Consensus::BlockCommitFailureState::Unchanged:
+        return state.Error(error.reject_reason);
+    case Consensus::BlockCommitFailureState::Tainted:
+        return state.Error(error.reject_reason);
+    }
+    assert(false);
     return state.Error(error.reject_reason);
 }
 
 bool ApplyBlockConsensusStageError(BlockValidationState& state, const Consensus::BlockConsensusStageError& error)
 {
     if (!error.issue) {
+        return state.Error(error.reject_reason);
+    }
+    if (*error.issue == Consensus::BlockConsensusIssue::ValidationRuntime) {
         return state.Error(error.reject_reason);
     }
     return state.Invalid(ToBlockValidationResult(*error.issue), error.reject_reason, error.debug_message);

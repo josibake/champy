@@ -11,18 +11,55 @@
 #include <primitives/block.h>
 #include <uint256.h>
 #include <undo.h>
+#include <util/expected.h>
 
 #include <optional>
 
 class CBlockIndex;
+
+struct BlockDataReadRequest {
+    FlatFilePos position;
+    uint256 expected_hash;
+    int height{-1};
+};
+
+struct BlockUndoReadRequest {
+    FlatFilePos position;
+    uint256 block_hash;
+    uint256 previous_block_hash;
+    int height{-1};
+};
+
+enum class BlockDataReadError {
+    NotIndexed,
+    DataUnavailable,
+    Pruned,
+    MalformedStoredData,
+    IoError,
+    Interrupted,
+};
+
+using BlockDataReadResult = util::Expected<CBlock, BlockDataReadError>;
+
+enum class BlockUndoReadError {
+    GenesisHasNoUndo,
+    NotIndexed,
+    UndoUnavailable,
+    Pruned,
+    MalformedStoredData,
+    IoError,
+    Interrupted,
+};
+
+using BlockUndoReadResult = util::Expected<CBlockUndo, BlockUndoReadError>;
 
 class BlockDataReader
 {
 public:
     virtual ~BlockDataReader() = default;
 
-    virtual bool ReadBlock(CBlock& block, const CBlockIndex& index) = 0;
-    virtual bool ReadBlockFromPosition(CBlock& block, const FlatFilePos& pos, const std::optional<uint256>& expected_hash) = 0;
+    virtual BlockDataReadResult ReadBlock(const BlockDataReadRequest& request) = 0;
+    virtual BlockDataReadResult ReadBlockFromPosition(const FlatFilePos& pos, const std::optional<uint256>& expected_hash) = 0;
 };
 
 class BlockUndoReader
@@ -30,7 +67,7 @@ class BlockUndoReader
 public:
     virtual ~BlockUndoReader() = default;
 
-    virtual bool ReadBlockUndo(CBlockUndo& blockundo, const CBlockIndex& index) = 0;
+    virtual BlockUndoReadResult ReadBlockUndo(const BlockUndoReadRequest& request) = 0;
 };
 
 class BlockUndoWriter

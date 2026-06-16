@@ -191,25 +191,26 @@ void ValidationSignals::SyncWithValidationInterfaceQueue()
 #define LOG_EVENT(fmt, ...) \
     LogDebug(BCLog::VALIDATION, fmt, __VA_ARGS__)
 
-void ValidationSignals::UpdatedBlockTip(const CBlockIndex *pindexNew, const CBlockIndex *pindexFork, bool fInitialDownload) {
+void ValidationSignals::UpdatedBlockTip(validation::TipUpdatedEvent tip_event)
+{
     // Dependencies exist that require UpdatedBlockTip events to be delivered in the order in which
     // the chain actually updates. One way to ensure this is for the caller to invoke this signal
     // in the same critical section where the chain is updated
 
     auto log_msg = LOG_MSG("%s: new block hash=%s fork block hash=%s (in IBD=%s)", __func__,
-                          pindexNew->GetBlockHash().ToString(),
-                          pindexFork ? pindexFork->GetBlockHash().ToString() : "null",
-                          fInitialDownload);
-    auto event = [pindexNew, pindexFork, fInitialDownload, this] {
-        m_internals->Iterate([&](CValidationInterface& callbacks) { callbacks.UpdatedBlockTip(pindexNew, pindexFork, fInitialDownload); });
+                          tip_event.new_tip.hash.ToString(),
+                          tip_event.fork ? tip_event.fork->hash.ToString() : "null",
+                          tip_event.initial_download);
+    auto event = [tip_event = std::move(tip_event), this] {
+        m_internals->Iterate([&](CValidationInterface& callbacks) { callbacks.UpdatedBlockTip(tip_event); });
     };
     ENQUEUE_AND_LOG_EVENT(std::move(event), std::move(log_msg));
 }
 
-void ValidationSignals::ActiveTipChange(const CBlockIndex& new_tip, bool is_ibd)
+void ValidationSignals::ActiveTipChange(validation::ActiveTipChangedEvent event)
 {
-    LOG_EVENT("%s: new block hash=%s block height=%d", __func__, new_tip.GetBlockHash().ToString(), new_tip.nHeight);
-    m_internals->Iterate([&](CValidationInterface& callbacks) { callbacks.ActiveTipChange(new_tip, is_ibd); });
+    LOG_EVENT("%s: new block hash=%s block height=%d", __func__, event.new_tip.hash.ToString(), event.new_tip.height);
+    m_internals->Iterate([&](CValidationInterface& callbacks) { callbacks.ActiveTipChange(event); });
 }
 
 void ValidationSignals::TransactionAddedToMempool(const NewMempoolTransactionInfo& tx, uint64_t mempool_sequence)
@@ -234,13 +235,13 @@ void ValidationSignals::TransactionRemovedFromMempool(const CTransactionRef& tx,
     ENQUEUE_AND_LOG_EVENT(std::move(event), std::move(log_msg));
 }
 
-void ValidationSignals::BlockConnected(std::shared_ptr<const CBlock> pblock, const CBlockIndex* pindex)
+void ValidationSignals::BlockConnected(validation::BlockConnectedEvent connected_event)
 {
     auto log_msg = LOG_MSG("%s: block hash=%s block height=%d", __func__,
-                          pblock->GetHash().ToString(),
-                          pindex->nHeight);
-    auto event = [pblock = std::move(pblock), pindex, this] {
-        m_internals->Iterate([&](CValidationInterface& callbacks) { callbacks.BlockConnected(pblock, pindex); });
+                          connected_event.block->GetHash().ToString(),
+                          connected_event.block_info.height);
+    auto event = [connected_event = std::move(connected_event), this] {
+        m_internals->Iterate([&](CValidationInterface& callbacks) { callbacks.BlockConnected(connected_event); });
     };
     ENQUEUE_AND_LOG_EVENT(std::move(event), std::move(log_msg));
 }
@@ -256,35 +257,36 @@ void ValidationSignals::MempoolTransactionsRemovedForBlock(const std::vector<Rem
     ENQUEUE_AND_LOG_EVENT(std::move(event), std::move(log_msg));
 }
 
-void ValidationSignals::BlockDisconnected(std::shared_ptr<const CBlock> pblock, const CBlockIndex* pindex)
+void ValidationSignals::BlockDisconnected(validation::BlockDisconnectedEvent disconnected_event)
 {
     auto log_msg = LOG_MSG("%s: block hash=%s block height=%d", __func__,
-                          pblock->GetHash().ToString(),
-                          pindex->nHeight);
-    auto event = [pblock = std::move(pblock), pindex, this] {
-        m_internals->Iterate([&](CValidationInterface& callbacks) { callbacks.BlockDisconnected(pblock, pindex); });
+                          disconnected_event.block->GetHash().ToString(),
+                          disconnected_event.block_info.height);
+    auto event = [disconnected_event = std::move(disconnected_event), this] {
+        m_internals->Iterate([&](CValidationInterface& callbacks) { callbacks.BlockDisconnected(disconnected_event); });
     };
     ENQUEUE_AND_LOG_EVENT(std::move(event), std::move(log_msg));
 }
 
-void ValidationSignals::ChainStateFlushed(const CBlockLocator& locator)
+void ValidationSignals::ChainStateFlushed(validation::ChainStateFlushedEvent flush_event)
 {
     auto log_msg = LOG_MSG("%s: block hash=%s", __func__,
-                          locator.IsNull() ? "null" : locator.vHave.front().ToString());
-    auto event = [locator, this] {
-        m_internals->Iterate([&](CValidationInterface& callbacks) { callbacks.ChainStateFlushed(locator); });
+                          flush_event.locator.IsNull() ? "null" : flush_event.locator.vHave.front().ToString());
+    auto event = [flush_event = std::move(flush_event), this] {
+        m_internals->Iterate([&](CValidationInterface& callbacks) { callbacks.ChainStateFlushed(flush_event); });
     };
     ENQUEUE_AND_LOG_EVENT(std::move(event), std::move(log_msg));
 }
 
-void ValidationSignals::BlockChecked(const std::shared_ptr<const CBlock>& block, const BlockValidationState& state)
+void ValidationSignals::BlockChecked(validation::BlockCheckedEvent event)
 {
     LOG_EVENT("%s: block hash=%s state=%s", __func__,
-              block->GetHash().ToString(), state.ToString());
-    m_internals->Iterate([&](CValidationInterface& callbacks) { callbacks.BlockChecked(block, state); });
+              event.block->GetHash().ToString(), FormatValidationStateForLog(event.state));
+    m_internals->Iterate([&](CValidationInterface& callbacks) { callbacks.BlockChecked(event); });
 }
 
-void ValidationSignals::NewPoWValidBlock(const CBlockIndex *pindex, const std::shared_ptr<const CBlock> &block) {
-    LOG_EVENT("%s: block hash=%s", __func__, block->GetHash().ToString());
-    m_internals->Iterate([&](CValidationInterface& callbacks) { callbacks.NewPoWValidBlock(pindex, block); });
+void ValidationSignals::NewPoWValidBlock(validation::PoWValidBlockEvent event)
+{
+    LOG_EVENT("%s: block hash=%s", __func__, event.block->GetHash().ToString());
+    m_internals->Iterate([&](CValidationInterface& callbacks) { callbacks.NewPoWValidBlock(event); });
 }

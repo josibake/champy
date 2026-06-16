@@ -36,6 +36,7 @@
 #include <validation/active_chain.h>
 #include <validation/block_index_snapshot.h>
 #include <validation/block_validation.h>
+#include <validation/script_task_executor.h>
 #include <versionbits.h>
 
 #include <algorithm>
@@ -54,14 +55,10 @@
 
 class Chainstate;
 class ChainstateManager;
-class BlockDataAvailability;
-class BlockDataReader;
 class BlockIndexLookup;
-class BlockIndexValidityCommitter;
-class BlockUndoReader;
-class BlockUndoWriter;
+class CoreActivationRuntime;
 class CoreChainActivationState;
-class CoreChainValidationContext;
+struct CoreBlockConnectionCommitWork;
 struct ChainTxData;
 class ChainstateEventSink;
 struct LockPoints;
@@ -71,10 +68,6 @@ struct Params;
 namespace util {
 class SignalInterrupt;
 } // namespace util
-namespace validation {
-class ActiveChainView;
-class ScriptCheckScheduler;
-} // namespace validation
 
 /** Block files containing a block-height within MIN_BLOCKS_TO_KEEP of ActiveChain().Tip() will not be pruned. */
 static const unsigned int MIN_BLOCKS_TO_KEEP = 288;
@@ -127,32 +120,6 @@ public:
     CSHA256 ScriptExecutionCacheHasher() const { return m_script_execution_cache_hasher; }
     [[nodiscard]] bool ContainsScriptExecution(const uint256& entry, bool erase) EXCLUSIVE_LOCKS_REQUIRED(!m_script_execution_cache_mutex);
     void StoreScriptExecution(const uint256& entry) EXCLUSIVE_LOCKS_REQUIRED(!m_script_execution_cache_mutex);
-};
-
-enum class VerifyDBResult {
-    SUCCESS,
-    CORRUPTED_BLOCK_DB,
-    INTERRUPTED,
-    SKIPPED_L3_CHECKS,
-    SKIPPED_MISSING_BLOCKS,
-};
-
-struct VerifyDBRequest {
-    validation::ActiveChainView& active_chain;
-    const Consensus::Params& consensus_params;
-    CCoinsView& coins_view;
-    CCoinsViewCache& coins_tip;
-    size_t coins_tip_cache_size_bytes;
-    BlockDataReader& block_reader;
-    BlockUndoReader& undo_reader;
-    BlockUndoWriter& undo_writer;
-    BlockDataAvailability& block_data_availability;
-    BlockIndexLookup& block_index_lookup;
-    BlockIndexValidityCommitter& block_index_committer;
-    CoreChainValidationContext& validation_context;
-    validation::ScriptCheckScheduler& script_check_scheduler;
-    std::optional<const char*>& last_script_check_reason_logged;
-    const util::SignalInterrupt& interrupt;
 };
 
 struct ChainBlockQuery {
@@ -326,27 +293,6 @@ struct PoWValidBlockAnnouncementFacts {
     bool segwit_active{false};
 };
 
-/** RAII wrapper for VerifyDB: Verify consistency of the block and coin databases */
-class CVerifyDB
-{
-private:
-    kernel::Notifications& m_notifications;
-
-public:
-    explicit CVerifyDB(kernel::Notifications& notifications);
-    ~CVerifyDB();
-    [[nodiscard]] VerifyDBResult VerifyDB(
-        VerifyDBRequest request,
-        int nCheckLevel,
-        int nCheckDepth) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
-    [[nodiscard]] VerifyDBResult VerifyDB(
-        Chainstate& chainstate,
-        const Consensus::Params& consensus_params,
-        CCoinsView& coinsview,
-        int nCheckLevel,
-        int nCheckDepth) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
-};
-
 /** @see Chainstate::FlushStateToDisk */
 inline constexpr std::array FlushStateModeNames{"NONE", "IF_NEEDED", "PERIODIC", "FORCE_FLUSH", "FORCE_SYNC"};
 enum class FlushStateMode : uint8_t {
@@ -430,7 +376,7 @@ class Chainstate
 {
     friend class ChainstateActivationOrchestrator;
     friend class CoreChainActivationState;
-    friend class CoreChainValidationContext;
+    friend class CoreActivationRuntime;
 
 protected:
     /**
@@ -576,11 +522,46 @@ public:
      * May not be called with cs_main held. May not be called in a
      * validationinterface callback.
      *
-     * @returns true unless a system error occurred
+     * @returns completed unless a system error occurred
      */
-    bool ActivateBestChain(
+    BlockActivationResult ActivateBestChain(
         BlockValidationState& state,
+        NodeSeconds current_time,
         std::shared_ptr<const CBlock> pblock = nullptr,
+        ChainstateEventSink* chain_events = nullptr)
+        EXCLUSIVE_LOCKS_REQUIRED(!m_chainstate_mutex)
+            LOCKS_EXCLUDED(::cs_main);
+
+    /**
+     * Activate block_index only if it is the current most-work block and
+     * directly extends the active tip.
+     *
+     * This is an IBD fast path for an ordered commit stage. It keeps the same
+     * lock, event, and commit contracts as ActivateBestChain(). If the block is
+     * not an exact active-tip candidate, the result is completed with zero
+     * connected blocks and callers should fall back to ActivateBestChain().
+     */
+    BlockActivationResult ActivateMostWorkTipBlock(
+        BlockValidationState& state,
+        NodeSeconds current_time,
+        CBlockIndex& block_index,
+        std::shared_ptr<const CBlock> pblock,
+        ChainstateEventSink* chain_events = nullptr)
+        EXCLUSIVE_LOCKS_REQUIRED(!m_chainstate_mutex)
+            LOCKS_EXCLUDED(::cs_main);
+
+    /**
+     * Commit already-validated block effects only if the block is the current
+     * active-tip extension on the most-work path.
+     *
+     * This is the serialized commit half of the IBD fast path. It keeps commit
+     * mutation, Core events, and storage coordination under the same contracts
+     * as ActivateBestChain().
+     */
+    BlockActivationResult CommitMostWorkTipBlock(
+        BlockValidationState& state,
+        NodeSeconds current_time,
+        CoreBlockConnectionCommitWork work,
         ChainstateEventSink* chain_events = nullptr)
         EXCLUSIVE_LOCKS_REQUIRED(!m_chainstate_mutex)
             LOCKS_EXCLUDED(::cs_main);
@@ -588,6 +569,7 @@ public:
     // Apply the effects of a block disconnection on the UTXO set.
     bool DisconnectTip(
         BlockValidationState& state,
+        NodeSeconds current_time,
         ChainstateEventSink* chain_events) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
 
     // Manual block validity manipulation:
@@ -595,12 +577,12 @@ public:
      *
      * May not be called in a validationinterface callback.
      */
-    bool PreciousBlock(BlockValidationState& state, CBlockIndex* pindex, ChainstateEventSink* chain_events = nullptr)
+    bool PreciousBlock(BlockValidationState& state, NodeSeconds current_time, CBlockIndex* pindex, ChainstateEventSink* chain_events = nullptr)
         EXCLUSIVE_LOCKS_REQUIRED(!m_chainstate_mutex)
             LOCKS_EXCLUDED(::cs_main);
 
     /** Mark a block as invalid. */
-    bool InvalidateBlock(BlockValidationState& state, CBlockIndex* pindex, ChainstateEventSink* chain_events = nullptr)
+    bool InvalidateBlock(BlockValidationState& state, NodeSeconds current_time, CBlockIndex* pindex, ChainstateEventSink* chain_events = nullptr)
         EXCLUSIVE_LOCKS_REQUIRED(!m_chainstate_mutex)
             LOCKS_EXCLUDED(::cs_main);
 
@@ -622,6 +604,7 @@ public:
     void TryAddBlockIndexCandidate(CBlockIndex* pindex) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
 
     void PruneBlockIndexCandidates();
+    void RefreshBlockIndexCandidates() EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
 
     void ClearBlockIndexCandidates() EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
 
@@ -632,7 +615,7 @@ public:
     const CBlockIndex* FindForkInGlobalIndex(const CBlockLocator& locator) const EXCLUSIVE_LOCKS_REQUIRED(cs_main);
 
     /** Update the chain tip based on database information, i.e. CoinsTip()'s best block. */
-    bool LoadChainTip() EXCLUSIVE_LOCKS_REQUIRED(cs_main);
+    bool LoadChainTip(NodeSeconds current_time) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
 
     //! Dictates whether we need to flush the cache to disk or not.
     //!
@@ -653,7 +636,7 @@ public:
 protected:
     void SetActiveChainTip(CBlockIndex& block_index) EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
 
-    void AdvanceActiveChainTip(CBlockIndex& block_index, ChainstateEventSink* chain_events)
+    void AdvanceActiveChainTip(CBlockIndex& block_index, ChainstateEventSink* chain_events, NodeSeconds current_time)
         EXCLUSIVE_LOCKS_REQUIRED(cs_main);
 
     CBlockIndex* FindMostWorkChain() EXCLUSIVE_LOCKS_REQUIRED(cs_main);
@@ -662,7 +645,7 @@ protected:
     void InvalidChainFound(CBlockIndex* pindexNew) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
 
     /** Check warning conditions and do some notifications on new chain tip set. */
-    void UpdateTip(const CBlockIndex* pindexNew, ChainstateEventSink* chain_events = nullptr)
+    void UpdateTip(const CBlockIndex* pindexNew, ChainstateEventSink* chain_events, NodeSeconds current_time)
         EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
 
     NodeClock::time_point m_next_write{NodeClock::time_point::max()};
@@ -688,7 +671,7 @@ private:
     MockableSteadyClock::time_point m_last_presync_update GUARDED_BY(GetMutex()){};
 
     //! A queue for script verifications that have to be performed by worker threads.
-    CCheckQueue<CScriptCheck> m_script_check_queue;
+    CCheckQueue<validation::ScriptTask> m_script_check_queue;
 
     //! Timers and counters used for benchmarking validation in both background
     //! and active chainstates.
@@ -1081,7 +1064,7 @@ public:
      * conditions (e.g. after updating the active chain tip, or after
      * `ImportBlocks()` finishes).
      */
-    void UpdateIBDStatus() EXCLUSIVE_LOCKS_REQUIRED(cs_main);
+    void UpdateIBDStatus(NodeSeconds current_time) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
 
     void UpdateActiveTipSnapshot(const CBlockIndex* tip)
         EXCLUSIVE_LOCKS_REQUIRED(::cs_main)
@@ -1102,40 +1085,9 @@ public:
     bool IsInitialBlockDownload() const noexcept;
 
     /** Guess verification progress (as a fraction between 0.0=genesis and 1.0=current tip). */
-    double GuessVerificationProgress(const CBlockIndex* pindex) const EXCLUSIVE_LOCKS_REQUIRED(GetMutex());
+    double GuessVerificationProgress(const CBlockIndex* pindex, NodeSeconds current_time) const EXCLUSIVE_LOCKS_REQUIRED(GetMutex());
     double GuessVerificationProgressForActiveTip() const LOCKS_EXCLUDED(::cs_main);
     double GuessVerificationProgress(const uint256& block_hash) const LOCKS_EXCLUDED(::cs_main);
-
-    /**
-     * Import blocks from an external file
-     *
-     * During reindexing, this function is called for each block file (datadir/blocks/blk?????.dat).
-     * It reads all blocks contained in the given file and attempts to process them (add them to the
-     * block index). The blocks may be out of order within each file and across files. Often this
-     * function reads a block but finds that its parent hasn't been read yet, so the block can't be
-     * processed yet. The function will add an entry to the blocks_with_unknown_parent map (which is
-     * passed as an argument), so that when the block's parent is later read and processed, this
-     * function can re-read the child block from disk and process it.
-     *
-     * Because a block's parent may be in a later file, not just later in the same file, the
-     * blocks_with_unknown_parent map must be passed in and out with each call. It's a multimap,
-     * rather than just a map, because multiple blocks may have the same parent (when chain splits
-     * or stale blocks exist). It maps from parent-hash to child-disk-position.
-     *
-     * This function can also be used to read blocks from user-specified block files using the
-     * -loadblock= option. There's no unknown-parent tracking, so the last two arguments are omitted.
-     *
-     *
-     * @param[in]     file_in                       File containing blocks to read
-     * @param[in]     dbp                           (optional) Disk block position (only for reindex)
-     * @param[in,out] blocks_with_unknown_parent    (optional) Map of disk positions for blocks with
-     *                                              unknown parent, key is parent block hash
-     *                                              (only used for reindex)
-     * */
-    void LoadExternalBlockFile(
-        AutoFile& file_in,
-        FlatFilePos* dbp = nullptr,
-        std::multimap<uint256, FlatFilePos>* blocks_with_unknown_parent = nullptr);
 
     void ReceivedBlockTransactions(const CBlock& block, CBlockIndex* pindexNew, const FlatFilePos& pos) EXCLUSIVE_LOCKS_REQUIRED(cs_main);
 
@@ -1152,7 +1104,7 @@ public:
      *  headers are not yet fed to validation during that time, but validation is (for now)
      *  responsible for logging and signalling through NotifyHeaderTip, so it needs this
      *  information. */
-    void ReportHeadersPresync(int64_t height, int64_t timestamp);
+    void ReportHeadersPresync(int64_t height, int64_t timestamp, NodeSeconds current_time);
 
     void ResetChainstates()
         EXCLUSIVE_LOCKS_REQUIRED(::cs_main)
@@ -1160,7 +1112,7 @@ public:
         EXCLUSIVE_LOCKS_REQUIRED(!m_best_header_snapshot_mutex);
 
     //! Call ActivateBestChain() on the chainstate.
-    util::Result<void> ActivateBestChains(ChainstateEventSink* chain_events = nullptr) LOCKS_EXCLUDED(::cs_main);
+    util::Result<void> ActivateBestChains(NodeSeconds current_time, ChainstateEventSink* chain_events = nullptr) LOCKS_EXCLUDED(::cs_main);
 
     //! If, due to invalidation / reconsideration of blocks, the previous
     //! best header is no longer valid / guaranteed to be the most-work
@@ -1179,7 +1131,7 @@ public:
     //! Flush Core's active chainstate if cache pressure requires it.
     bool FlushActiveChainstateIfNeeded(BlockValidationState& state, ExternalCacheUsage external_cache_usage) EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
 
-    CCheckQueue<CScriptCheck>& GetCheckQueue() { return m_script_check_queue; }
+    CCheckQueue<validation::ScriptTask>& GetCheckQueue() { return m_script_check_queue; }
 
     ~ChainstateManager();
 

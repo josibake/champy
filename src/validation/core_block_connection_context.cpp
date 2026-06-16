@@ -8,24 +8,20 @@
 #include <consensus/amount.h>
 #include <consensus/block_spend.h>
 #include <consensus/params.h>
-#include <validation/block_header_context_adapters.h>
 #include <validation/coins_view_spend_state.h>
-#include <validation/core_chain_validation_context.h>
 
 #include <memory>
+#include <utility>
 
-CoreBlockConnectionPolicySnapshot SnapshotCoreBlockConnectionPolicy(CoreChainValidationContext& context, const CBlockIndex& block_index)
+CoreBlockConnectionPolicySnapshot SnapshotCoreBlockConnectionPolicy(
+    const Consensus::Params& consensus_params,
+    Consensus::BlockHeaderContext header_context,
+    CoreBlockScriptCheckPolicy script_check_policy)
 {
-    const Consensus::Params& consensus_params{context.ConsensusParams()};
-    const CoreBlockHeaderContextProvider header_context{context.MakeHeaderContextProvider()};
     return {
         .consensus_params = consensus_params,
-        .header_context = header_context.BuildContext(block_index.pprev),
-        .script_check_policy = {
-            .assumed_valid_block = context.AssumedValidBlock(),
-            .best_header = context.BestHeader(),
-            .minimum_chain_work = context.MinimumChainWork(),
-        },
+        .header_context = std::move(header_context),
+        .script_check_policy = std::move(script_check_policy),
     };
 }
 
@@ -47,6 +43,7 @@ CoreBlockConnectionPlan PlanCoreBlockConnection(const CoreBlockConnectionPolicyS
             .sequence_lock_times = has_spend_stage ? std::make_shared<validation::CoinsViewSequenceLockTimeView>(block_index_entry) : nullptr,
             .spend_options = has_spend_stage ? BuildCoreBlockSpendConsensusOptions(block_index_entry, policy.consensus_params, policy.header_context.Deployments()) : Consensus::BlockSpendConsensusOptions{},
         },
+        .block_position = validation::SnapshotBlockConnectionPosition(block_index_entry),
         .script_check_decision = script_check_decision,
         .has_spend_stage = has_spend_stage,
     };

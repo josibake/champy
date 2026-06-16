@@ -160,7 +160,7 @@ public:
     }
 };
 
-class RecordingBlockSpendStateCommitter final : public Consensus::BlockSpendStateCommitter {
+class RecordingSpendCommitter final : public Consensus::SpendCommitter {
 public:
     [[nodiscard]] Consensus::BlockCommitResult<void> CommitSpendState(const Consensus::BlockCommitContext&, const Consensus::BlockSpendEffects&) override
     {
@@ -271,8 +271,8 @@ Consensus::BlockContextualConsensusOptions BuildBlockContextualConsensusOptions(
 
 ConformanceResult RunConformanceSpendAndCommitStages(
     const ConformanceFixture& fixture,
-    Consensus::BlockSpendBackend& spend_backend,
-    Consensus::BlockSpendStateCommitter& spend_state_committer)
+    Consensus::SpendWorkspaceProvider& spend_backend,
+    Consensus::SpendCommitter& spend_state_committer)
 {
     const Consensus::BlockConsensusContext consensus_context{BuildBlockConsensusContext(fixture)};
     Consensus::DirectBlockScriptChecker script_checker;
@@ -360,8 +360,8 @@ ConformanceResult RunCoreSpendStateConsensusFixture(const ConformanceFixture& fi
     CCoinsViewCache coins{&CoinsViewEmpty::Get()};
     CoreConformanceAdapter adapter{coins};
     adapter.LoadSpendState(fixture.spend_state);
-    auto spend_backend{adapter.BlockSpendBackend()};
-    RecordingBlockSpendStateCommitter spend_state_committer;
+    auto spend_backend{adapter.SpendWorkspaceProvider()};
+    RecordingSpendCommitter spend_state_committer;
     return RunConformanceSpendAndCommitStages(fixture, spend_backend, spend_state_committer);
 }
 
@@ -430,7 +430,7 @@ validation::CoinsViewSequenceLockTimeView CoreConformanceAdapter::SequenceLockTi
     return validation::CoinsViewSequenceLockTimeView{/*previous_median_time_past=*/0, m_previous_median_time_past_by_outpoint};
 }
 
-validation::CoinsViewBlockSpendBackend CoreConformanceAdapter::BlockSpendBackend()
+validation::CoinsViewBlockSpendBackend CoreConformanceAdapter::SpendWorkspaceProvider()
 {
     return validation::CoinsViewBlockSpendBackend{m_coins, m_previous_median_time_past_by_outpoint};
 }

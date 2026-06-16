@@ -7,6 +7,7 @@
 
 #include <kernel/bitcoinkernel.h>
 
+#include <algorithm>
 #include <array>
 #include <exception>
 #include <functional>
@@ -80,15 +81,16 @@ enum class BlockValidationResult : btck_BlockValidationResult {
 };
 
 enum class TxValidationResult : btck_TxValidationResult {
-    UNSET     = btck_TxValidationResult_UNSET,
+    UNSET = btck_TxValidationResult_UNSET,
     CONSENSUS = btck_TxValidationResult_CONSENSUS,
-    UNKNOWN   = btck_TxValidationResult_UNKNOWN
+    UNKNOWN = btck_TxValidationResult_UNKNOWN
 };
 
 enum class ScriptVerifyStatus : btck_ScriptVerifyStatus {
     OK = btck_ScriptVerifyStatus_OK,
     ERROR_INVALID_FLAGS_COMBINATION = btck_ScriptVerifyStatus_ERROR_INVALID_FLAGS_COMBINATION,
     ERROR_SPENT_OUTPUTS_REQUIRED = btck_ScriptVerifyStatus_ERROR_SPENT_OUTPUTS_REQUIRED,
+    ERROR_INTERNAL = btck_ScriptVerifyStatus_ERROR_INTERNAL,
 };
 
 enum class ScriptVerificationFlags : btck_ScriptVerificationFlags {
@@ -110,9 +112,65 @@ enum class BlockCheckFlags : btck_BlockCheckFlags {
     ALL = btck_BlockCheckFlags_ALL
 };
 
-struct BlockProcessResult {
-    bool processed{false};
-    bool new_block{false};
+enum class ErrorCode : btck_ErrorCode {
+    NONE = btck_ErrorCode_NONE,
+    EXCEPTION = btck_ErrorCode_EXCEPTION,
+    RESOURCE_EXHAUSTION = btck_ErrorCode_RESOURCE_EXHAUSTION,
+    INVALID_ARGUMENT = btck_ErrorCode_INVALID_ARGUMENT,
+    IO = btck_ErrorCode_IO,
+    CALLBACK = btck_ErrorCode_CALLBACK,
+    CHAINSTATE_LOAD = btck_ErrorCode_CHAINSTATE_LOAD,
+    IO_READ = btck_ErrorCode_IO_READ,
+    IO_WRITE = btck_ErrorCode_IO_WRITE,
+    DATA_UNAVAILABLE = btck_ErrorCode_DATA_UNAVAILABLE,
+    STORAGE_CORRUPTION = btck_ErrorCode_STORAGE_CORRUPTION,
+    INTERRUPTED = btck_ErrorCode_INTERRUPTED
+};
+
+enum class ParseStatus : btck_ParseStatus {
+    OK = btck_ParseStatus_OK,
+    MALFORMED = btck_ParseStatus_MALFORMED,
+};
+
+enum class CheckStatus : btck_CheckStatus {
+    VALID = btck_CheckStatus_VALID,
+    INVALID = btck_CheckStatus_INVALID,
+};
+
+enum class HeaderProcessStatus : btck_HeaderProcessStatus {
+    ACCEPTED = btck_HeaderProcessStatus_ACCEPTED,
+    REJECTED = btck_HeaderProcessStatus_REJECTED,
+};
+
+enum class BlockProcessStatus : btck_BlockProcessStatus {
+    CHECK_FAILED = btck_BlockProcessStatus_CHECK_FAILED,
+    HEADER_REJECTED = btck_BlockProcessStatus_HEADER_REJECTED,
+    BLOCK_REJECTED = btck_BlockProcessStatus_BLOCK_REJECTED,
+    ALREADY_KNOWN = btck_BlockProcessStatus_ALREADY_KNOWN,
+    STORED = btck_BlockProcessStatus_STORED,
+    UNREQUESTED_PREVIOUSLY_PROCESSED = btck_BlockProcessStatus_UNREQUESTED_PREVIOUSLY_PROCESSED,
+    UNREQUESTED_LESS_WORK_THAN_TIP = btck_BlockProcessStatus_UNREQUESTED_LESS_WORK_THAN_TIP,
+    UNREQUESTED_TOO_FAR_AHEAD = btck_BlockProcessStatus_UNREQUESTED_TOO_FAR_AHEAD,
+    UNREQUESTED_BELOW_MINIMUM_CHAIN_WORK = btck_BlockProcessStatus_UNREQUESTED_BELOW_MINIMUM_CHAIN_WORK,
+};
+
+enum class BlockImportStatus : btck_BlockImportStatus {
+    COMPLETED = btck_BlockImportStatus_COMPLETED,
+    INTERRUPTED = btck_BlockImportStatus_INTERRUPTED,
+    ALREADY_IMPORTING = btck_BlockImportStatus_ALREADY_IMPORTING,
+    RESOURCE_LIMIT = btck_BlockImportStatus_RESOURCE_LIMIT,
+};
+
+enum class BlockReadStatus : btck_BlockReadStatus {
+    FOUND = btck_BlockReadStatus_FOUND,
+    NOT_INDEXED = btck_BlockReadStatus_NOT_INDEXED,
+    DATA_UNAVAILABLE = btck_BlockReadStatus_DATA_UNAVAILABLE,
+};
+
+enum class BlockSpentOutputsReadStatus : btck_BlockSpentOutputsReadStatus {
+    FOUND = btck_BlockSpentOutputsReadStatus_FOUND,
+    NOT_INDEXED = btck_BlockSpentOutputsReadStatus_NOT_INDEXED,
+    DATA_UNAVAILABLE = btck_BlockSpentOutputsReadStatus_DATA_UNAVAILABLE,
 };
 
 template <typename T>
@@ -184,6 +242,75 @@ T check(T ptr)
     return ptr;
 }
 
+inline void check_status(int status, const char* operation)
+{
+    if (status != 0) {
+        throw std::runtime_error(operation);
+    }
+}
+
+class ApiError : public std::runtime_error
+{
+    ErrorCode m_code;
+
+public:
+    ApiError(ErrorCode code, const std::string& message)
+        : std::runtime_error{message}, m_code{code}
+    {
+    }
+
+    ErrorCode code() const noexcept { return m_code; }
+};
+
+class ErrorOut
+{
+    btck_Error* m_error{nullptr};
+
+public:
+    ErrorOut() = default;
+    ErrorOut(const ErrorOut&) = delete;
+    ErrorOut& operator=(const ErrorOut&) = delete;
+    ~ErrorOut() { btck_error_destroy(m_error); }
+
+    btck_Error** out() { return &m_error; }
+    bool has_error() const { return m_error != nullptr; }
+
+    ErrorCode code() const
+    {
+        return m_error ? static_cast<ErrorCode>(btck_error_get_code(m_error)) : ErrorCode::NONE;
+    }
+
+    std::string message(std::string_view fallback) const
+    {
+        if (!m_error) return std::string{fallback};
+        size_t message_len{0};
+        const char* message{btck_error_get_message(m_error, &message_len)};
+        if (!message) return std::string{fallback};
+        return std::string{message, message_len};
+    }
+};
+
+[[noreturn]] inline void throw_api_error(const ErrorOut& error, std::string_view fallback)
+{
+    throw ApiError{error.code(), error.message(fallback)};
+}
+
+inline void check_status(int status, ErrorOut& error, const char* operation)
+{
+    if (status != 0) {
+        throw_api_error(error, operation);
+    }
+}
+
+template <typename T>
+T check(T ptr, ErrorOut& error, const char* operation)
+{
+    if (ptr == nullptr) {
+        throw_api_error(error, operation);
+    }
+    return ptr;
+}
+
 template <typename Collection, typename ValueType>
 class Iterator
 {
@@ -206,14 +333,40 @@ public:
     auto operator*() const { return (*m_collection)[m_idx]; }
     auto operator->() const { return (*m_collection)[m_idx]; }
 
-    auto& operator++() { m_idx++; return *this; }
-    auto operator++(int) { Iterator tmp = *this; ++(*this); return tmp; }
+    auto& operator++()
+    {
+        m_idx++;
+        return *this;
+    }
+    auto operator++(int)
+    {
+        Iterator tmp = *this;
+        ++(*this);
+        return tmp;
+    }
 
-    auto& operator--() { m_idx--; return *this; }
-    auto operator--(int) { auto temp = *this; --m_idx; return temp; }
+    auto& operator--()
+    {
+        m_idx--;
+        return *this;
+    }
+    auto operator--(int)
+    {
+        auto temp = *this;
+        --m_idx;
+        return temp;
+    }
 
-    auto& operator+=(difference_type n) { m_idx += n; return *this; }
-    auto& operator-=(difference_type n) { m_idx -= n; return *this; }
+    auto& operator+=(difference_type n)
+    {
+        m_idx += n;
+        return *this;
+    }
+    auto& operator-=(difference_type n)
+    {
+        m_idx -= n;
+        return *this;
+    }
 
     auto operator+(difference_type n) const { return Iterator(m_collection, m_idx + n); }
     auto operator-(difference_type n) const { return Iterator(m_collection, m_idx - n); }
@@ -280,13 +433,14 @@ public:
 };
 
 #define MAKE_RANGE_METHOD(method_name, ContainerType, SizeFunc, GetFunc, container_expr) \
-    auto method_name() const & { \
-        return Range<ContainerType, SizeFunc, GetFunc>{container_expr}; \
-    } \
-    auto method_name() const && = delete;
+    auto method_name() const&                                                            \
+    {                                                                                    \
+        return Range<ContainerType, SizeFunc, GetFunc>{container_expr};                  \
+    }                                                                                    \
+    auto method_name() const&& = delete;
 
 template <typename T>
-std::vector<std::byte> write_bytes(const T* object, int (*to_bytes)(const T*, btck_WriteBytes, void*))
+std::vector<std::byte> write_bytes(const T* object, int (*to_bytes)(const T*, btck_WriteBytes, void*, btck_Error**))
 {
     std::vector<std::byte> bytes;
     struct UserData {
@@ -309,8 +463,10 @@ std::vector<std::byte> write_bytes(const T* object, int (*to_bytes)(const T*, bt
         }
     };
 
-    if (to_bytes(object, write, &user_data) != 0) {
-        std::rethrow_exception(user_data.exception);
+    ErrorOut error;
+    if (to_bytes(object, write, &user_data, error.out()) != 0) {
+        if (user_data.exception) std::rethrow_exception(user_data.exception);
+        throw_api_error(error, "failed to serialize bytes");
     }
     return bytes;
 }
@@ -327,18 +483,28 @@ public:
     const CType* get() const { return m_ptr; }
 };
 
-template <typename CType, CType* (*CopyFunc)(const CType*), void (*DestroyFunc)(CType*)>
+template <typename CType, auto CopyFunc, void (*DestroyFunc)(CType*)>
 class Handle
 {
 protected:
     CType* m_ptr;
+
+    static CType* CopyChecked(const CType* ptr)
+    {
+        if constexpr (std::is_invocable_r_v<CType*, decltype(CopyFunc), const CType*, btck_Error**>) {
+            ErrorOut error;
+            return check(CopyFunc(ptr, error.out()), error, "failed to copy btck object");
+        } else {
+            return check(CopyFunc(ptr));
+        }
+    }
 
 public:
     explicit Handle(CType* ptr) : m_ptr{check(ptr)} {}
 
     // Copy constructors
     Handle(const Handle& other)
-        : m_ptr{check(CopyFunc(other.m_ptr))} {}
+        : m_ptr{CopyChecked(other.m_ptr)} {}
     Handle& operator=(const Handle& other)
     {
         if (this != &other) {
@@ -362,7 +528,7 @@ public:
     template <typename ViewType>
         requires std::derived_from<ViewType, View<CType>>
     Handle(const ViewType& view)
-        : Handle{CopyFunc(view.get())}
+        : Handle{CopyChecked(view.get())}
     {
     }
 
@@ -431,8 +597,14 @@ public:
 class ScriptPubkey : public Handle<btck_ScriptPubkey, btck_script_pubkey_copy, btck_script_pubkey_destroy>, public ScriptPubkeyApi<ScriptPubkey>
 {
 public:
+    explicit ScriptPubkey(btck_ScriptPubkey* script_pubkey)
+        : Handle{script_pubkey} {}
+
     explicit ScriptPubkey(std::span<const std::byte> raw)
-        : Handle{btck_script_pubkey_create(raw.data(), raw.size())} {}
+        : Handle{[&] {
+              ErrorOut error;
+              return check(btck_script_pubkey_create(raw.data(), raw.size(), error.out()), error, "failed to create script pubkey");
+          }()} {}
 
     ScriptPubkey(const ScriptPubkeyView& view)
         : Handle(view) {}
@@ -456,9 +628,10 @@ public:
         return btck_transaction_output_get_amount(impl());
     }
 
-    ScriptPubkeyView GetScriptPubkey() const
+    ScriptPubkey GetScriptPubkey() const
     {
-        return ScriptPubkeyView{btck_transaction_output_get_script_pubkey(impl())};
+        ErrorOut error;
+        return ScriptPubkey{check(btck_transaction_output_get_script_pubkey(impl(), error.out()), error, "failed to copy transaction output script pubkey")};
     }
 };
 
@@ -472,7 +645,10 @@ class TransactionOutput : public Handle<btck_TransactionOutput, btck_transaction
 {
 public:
     explicit TransactionOutput(const ScriptPubkey& script_pubkey, int64_t amount)
-        : Handle{btck_transaction_output_create(script_pubkey.get(), amount)} {}
+        : Handle{[&] {
+              ErrorOut error;
+              return check(btck_transaction_output_create(script_pubkey.get(), amount, error.out()), error, "failed to create transaction output");
+          }()} {}
 
     TransactionOutput(const TransactionOutputView& view)
         : Handle(view) {}
@@ -491,14 +667,16 @@ private:
     TxidApi() = default;
 
 public:
-    bool operator==(const TxidApi& other) const
+    template <typename Other>
+    bool operator==(const TxidApi<Other>& other) const
     {
-        return btck_txid_equals(impl(), other.impl()) != 0;
+        return btck_txid_equals(impl(), static_cast<const Other&>(other).get()) != 0;
     }
 
-    bool operator!=(const TxidApi& other) const
+    template <typename Other>
+    bool operator!=(const TxidApi<Other>& other) const
     {
-        return btck_txid_equals(impl(), other.impl()) == 0;
+        return btck_txid_equals(impl(), static_cast<const Other&>(other).get()) == 0;
     }
 
     std::array<std::byte, 32> ToBytes() const
@@ -518,6 +696,9 @@ public:
 class Txid : public Handle<btck_Txid, btck_txid_copy, btck_txid_destroy>, public TxidApi<Txid>
 {
 public:
+    explicit Txid(btck_Txid* txid)
+        : Handle{txid} {}
+
     Txid(const TxidView& view)
         : Handle(view) {}
 };
@@ -540,9 +721,10 @@ public:
         return btck_transaction_out_point_get_index(impl());
     }
 
-    TxidView Txid() const
+    Txid Txid() const
     {
-        return TxidView{btck_transaction_out_point_get_txid(impl())};
+        ErrorOut error;
+        return btck::Txid{check(btck_transaction_out_point_get_txid(impl(), error.out()), error, "failed to copy outpoint txid")};
     }
 };
 
@@ -555,6 +737,9 @@ public:
 class OutPoint : public Handle<btck_TransactionOutPoint, btck_transaction_out_point_copy, btck_transaction_out_point_destroy>, public OutPointApi<OutPoint>
 {
 public:
+    explicit OutPoint(btck_TransactionOutPoint* outpoint)
+        : Handle{outpoint} {}
+
     OutPoint(const OutPointView& view)
         : Handle(view) {}
 };
@@ -572,9 +757,10 @@ private:
     TransactionInputApi() = default;
 
 public:
-    OutPointView OutPoint() const
+    OutPoint OutPoint() const
     {
-        return OutPointView{btck_transaction_input_get_out_point(impl())};
+        ErrorOut error;
+        return btck::OutPoint{check(btck_transaction_input_get_out_point(impl(), error.out()), error, "failed to copy transaction input outpoint")};
     }
 
     uint32_t GetSequence() const
@@ -631,9 +817,10 @@ public:
         return btck_transaction_get_locktime(impl());
     }
 
-    TxidView Txid() const
+    Txid Txid() const
     {
-        return TxidView{btck_transaction_get_txid(impl())};
+        ErrorOut error;
+        return btck::Txid{check(btck_transaction_get_txid(impl(), error.out()), error, "failed to compute transaction txid")};
     }
 
     MAKE_RANGE_METHOD(Outputs, Derived, &TransactionApi<Derived>::CountOutputs, &TransactionApi<Derived>::GetOutput, *static_cast<const Derived*>(this))
@@ -642,7 +829,7 @@ public:
 
     std::vector<std::byte> ToBytes() const
     {
-        return write_bytes(impl(), btck_transaction_to_bytes);
+        return write_bytes(impl(), btck_transaction_serialize);
     }
 };
 
@@ -654,9 +841,35 @@ public:
 
 class Transaction : public Handle<btck_Transaction, btck_transaction_copy, btck_transaction_destroy>, public TransactionApi<Transaction>
 {
+    static btck_Transaction* ParseC(std::span<const std::byte> raw_transaction, ErrorOut& error)
+    {
+        UniqueHandle<btck_TransactionParseResult, btck_transaction_parse_result_destroy> result{
+            check(btck_transaction_parse_result(raw_transaction.data(), raw_transaction.size(), error.out()), error, "failed to parse transaction")};
+        if (btck_transaction_parse_result_get_status(result.get()) == btck_ParseStatus_MALFORMED) {
+            return nullptr;
+        }
+        return check(btck_transaction_copy(
+                         check(btck_transaction_parse_result_get_transaction(result.get())),
+                         error.out()),
+                     error, "failed to copy parsed transaction");
+    }
+
 public:
-    explicit Transaction(std::span<const std::byte> raw_transaction)
-        : Handle{btck_transaction_create(raw_transaction.data(), raw_transaction.size())} {}
+    static std::optional<Transaction> Parse(std::span<const std::byte> raw_transaction)
+    {
+        ErrorOut error;
+        auto* parsed{ParseC(raw_transaction, error)};
+        if (!parsed) {
+            if (error.has_error()) {
+                throw_api_error(error, "failed to parse transaction");
+            }
+            return std::nullopt;
+        }
+        return Transaction{parsed};
+    }
+
+    explicit Transaction(btck_Transaction* transaction)
+        : Handle{transaction} {}
 
     Transaction(const TransactionView& view)
         : Handle{view} {}
@@ -666,11 +879,18 @@ class PrecomputedTransactionData : public Handle<btck_PrecomputedTransactionData
 {
 public:
     explicit PrecomputedTransactionData(const Transaction& tx_to, std::span<const TransactionOutput> spent_outputs)
-        : Handle{btck_precomputed_transaction_data_create(
-            tx_to.get(),
-            reinterpret_cast<const btck_TransactionOutput**>(
-                const_cast<TransactionOutput*>(spent_outputs.data())),
-            spent_outputs.size())} {}
+        : Handle{[&] {
+              ErrorOut error;
+              return check(
+                  btck_precomputed_transaction_data_create(
+                      tx_to.get(),
+                      reinterpret_cast<const btck_TransactionOutput**>(
+                          const_cast<TransactionOutput*>(spent_outputs.data())),
+                      spent_outputs.size(),
+                      error.out()),
+                  error,
+                  "failed to create precomputed transaction data");
+          }()} {}
 };
 
 template <typename Derived>
@@ -681,6 +901,7 @@ bool ScriptPubkeyApi<Derived>::Verify(int64_t amount,
                                       ScriptVerificationFlags flags,
                                       ScriptVerifyStatus& status) const
 {
+    ErrorOut error;
     auto result = btck_script_pubkey_verify(
         impl(),
         amount,
@@ -688,7 +909,11 @@ bool ScriptPubkeyApi<Derived>::Verify(int64_t amount,
         precomputed_txdata ? precomputed_txdata->get() : nullptr,
         input_index,
         static_cast<btck_ScriptVerificationFlags>(flags),
-        reinterpret_cast<btck_ScriptVerifyStatus*>(&status));
+        reinterpret_cast<btck_ScriptVerifyStatus*>(&status),
+        error.out());
+    if (error.has_error()) {
+        throw_api_error(error, "failed to verify script pubkey");
+    }
     return result == 1;
 }
 
@@ -730,7 +955,10 @@ class BlockHash : public Handle<btck_BlockHash, btck_block_hash_copy, btck_block
 {
 public:
     explicit BlockHash(const std::array<std::byte, 32>& hash)
-        : Handle{btck_block_hash_create(reinterpret_cast<const unsigned char*>(hash.data()))} {}
+        : Handle{[&] {
+              ErrorOut error;
+              return check(btck_block_hash_create(reinterpret_cast<const unsigned char*>(hash.data()), error.out()), error, "failed to create block hash");
+          }()} {}
 
     explicit BlockHash(btck_BlockHash* hash)
         : Handle{hash} {}
@@ -754,12 +982,14 @@ private:
 public:
     BlockHash Hash() const
     {
-        return BlockHash{btck_block_header_get_hash(impl())};
+        ErrorOut error;
+        return BlockHash{check(btck_block_header_get_hash(impl(), error.out()), error, "failed to hash block header")};
     }
 
-    BlockHashView PrevHash() const
+    BlockHash PrevHash() const
     {
-        return BlockHashView{btck_block_header_get_prev_hash(impl())};
+        ErrorOut error;
+        return BlockHash{check(btck_block_header_get_prev_hash(impl(), error.out()), error, "failed to copy previous block hash")};
     }
 
     uint32_t Timestamp() const
@@ -785,10 +1015,11 @@ public:
     std::array<std::byte, 80> ToBytes() const
     {
         std::array<std::byte, 80> header;
-        int res{btck_block_header_to_bytes(impl(), reinterpret_cast<unsigned char*>(header.data()))};
-        if (res != 0) {
+        const auto bytes{write_bytes(impl(), btck_block_header_serialize)};
+        if (bytes.size() != header.size()) {
             throw std::runtime_error("Failed to serialize block header");
         }
+        std::ranges::copy(bytes, header.begin());
         return header;
     }
 };
@@ -801,14 +1032,37 @@ public:
 
 class BlockHeader : public Handle<btck_BlockHeader, btck_block_header_copy, btck_block_header_destroy>, public BlockHeaderApi<BlockHeader>
 {
+    static btck_BlockHeader* ParseC(std::span<const std::byte> raw_header, ErrorOut& error)
+    {
+        UniqueHandle<btck_BlockHeaderParseResult, btck_block_header_parse_result_destroy> result{
+            check(btck_block_header_parse_result(raw_header.data(), raw_header.size(), error.out()), error, "failed to parse block header")};
+        if (btck_block_header_parse_result_get_status(result.get()) == btck_ParseStatus_MALFORMED) {
+            return nullptr;
+        }
+        return check(btck_block_header_copy(
+                         check(btck_block_header_parse_result_get_header(result.get())),
+                         error.out()),
+                     error, "failed to copy parsed block header");
+    }
+
 public:
-    explicit BlockHeader(std::span<const std::byte> raw_header)
-        : Handle{btck_block_header_create(reinterpret_cast<const unsigned char*>(raw_header.data()), raw_header.size())} {}
+    static std::optional<BlockHeader> Parse(std::span<const std::byte> raw_header)
+    {
+        ErrorOut error;
+        auto* parsed{ParseC(raw_header, error)};
+        if (!parsed) {
+            if (error.has_error()) {
+                throw_api_error(error, "failed to parse block header");
+            }
+            return std::nullopt;
+        }
+        return BlockHeader{parsed};
+    }
 
     BlockHeader(const BlockHeaderView& view)
         : Handle{view} {}
 
-    BlockHeader(btck_BlockHeader* header)
+    explicit BlockHeader(btck_BlockHeader* header)
         : Handle{header} {}
 };
 
@@ -818,46 +1072,87 @@ public:
     explicit ConsensusParamsView(const btck_ConsensusParams* ptr) : View{ptr} {}
 };
 
-class Block : public Handle<btck_Block, btck_block_copy, btck_block_destroy>
+template <typename Derived>
+class BlockApi
 {
-public:
-    Block(const std::span<const std::byte> raw_block)
-        : Handle{btck_block_create(raw_block.data(), raw_block.size())}
+private:
+    auto impl() const
     {
+        return static_cast<const Derived*>(this)->get();
     }
 
-    Block(btck_Block* block) : Handle{block} {}
-
+public:
     size_t CountTransactions() const
     {
-        return btck_block_count_transactions(get());
+        return btck_block_count_transactions(impl());
     }
 
     TransactionView GetTransaction(size_t index) const
     {
-        return TransactionView{btck_block_get_transaction_at(get(), index)};
+        return TransactionView{btck_block_get_transaction_at(impl(), index)};
     }
 
-    bool Check(const ConsensusParamsView& consensus_params,
-        BlockCheckFlags flags,
-        BlockValidationState& state) const;
-
-    MAKE_RANGE_METHOD(Transactions, Block, &Block::CountTransactions, &Block::GetTransaction, *this)
+    MAKE_RANGE_METHOD(Transactions, Derived, &Derived::CountTransactions, &Derived::GetTransaction, *static_cast<const Derived*>(this))
 
     BlockHash GetHash() const
     {
-        return BlockHash{btck_block_get_hash(get())};
+        ErrorOut error;
+        return BlockHash{check(btck_block_get_hash(impl(), error.out()), error, "failed to hash block")};
     }
 
     BlockHeader GetHeader() const
     {
-        return BlockHeader{btck_block_get_header(get())};
+        ErrorOut error;
+        return BlockHeader{check(btck_block_get_header(impl(), error.out()), error, "failed to copy block header")};
     }
 
     std::vector<std::byte> ToBytes() const
     {
-        return write_bytes(get(), btck_block_to_bytes);
+        return write_bytes(impl(), btck_block_serialize);
     }
+};
+
+class BlockView : public View<btck_Block>, public BlockApi<BlockView>
+{
+public:
+    explicit BlockView(const btck_Block* block) : View{block} {}
+};
+
+class Block : public Handle<btck_Block, btck_block_copy, btck_block_destroy>, public BlockApi<Block>
+{
+    static btck_Block* ParseC(std::span<const std::byte> raw_block, ErrorOut& error)
+    {
+        UniqueHandle<btck_BlockParseResult, btck_block_parse_result_destroy> result{
+            check(btck_block_parse_result(raw_block.data(), raw_block.size(), error.out()), error, "failed to parse block")};
+        if (btck_block_parse_result_get_status(result.get()) == btck_ParseStatus_MALFORMED) {
+            return nullptr;
+        }
+        return check(btck_block_copy(
+                         check(btck_block_parse_result_get_block(result.get())),
+                         error.out()),
+                     error, "failed to copy parsed block");
+    }
+
+public:
+    static std::optional<Block> Parse(std::span<const std::byte> raw_block)
+    {
+        ErrorOut error;
+        auto* parsed{ParseC(raw_block, error)};
+        if (!parsed) {
+            if (error.has_error()) {
+                throw_api_error(error, "failed to parse block");
+            }
+            return std::nullopt;
+        }
+        return Block{parsed};
+    }
+
+    explicit Block(btck_Block* block) : Handle{block} {}
+    Block(const BlockView& block) : Handle{block} {}
+
+    bool Check(const ConsensusParamsView& consensus_params,
+               BlockCheckFlags flags,
+               BlockValidationState& state) const;
 };
 
 inline void logging_disable()
@@ -893,77 +1188,105 @@ concept Log = requires(T a, std::string_view message) {
 template <Log T>
 class Logger : UniqueHandle<btck_LoggingConnection, btck_logging_connection_destroy>
 {
+    static btck_LoggingConnection* Create(std::unique_ptr<T> log)
+    {
+        ErrorOut error;
+        T* user_data{log.get()};
+        auto connection{btck_logging_connection_create(
+            +[](void* user_data, const char* message, size_t message_len) { static_cast<T*>(user_data)->LogMessage({message, message_len}); },
+            user_data,
+            +[](void* user_data) { delete static_cast<T*>(user_data); },
+            error.out())};
+        if (!connection) {
+            throw_api_error(error, "failed to create logging connection");
+        }
+        log.release();
+        return connection;
+    }
+
 public:
     Logger(std::unique_ptr<T> log)
-        : UniqueHandle{btck_logging_connection_create(
-              +[](void* user_data, const char* message, size_t message_len) { static_cast<T*>(user_data)->LogMessage({message, message_len}); },
-              log.release(),
-              +[](void* user_data) { delete static_cast<T*>(user_data); })}
+        : UniqueHandle{Create(std::move(log))}
     {
     }
 };
 
-class BlockTreeEntry : public View<btck_BlockTreeEntry>
+template <typename Derived>
+class BlockInfoApi
 {
+private:
+    auto impl() const
+    {
+        return static_cast<const Derived*>(this)->get();
+    }
+
 public:
-    BlockTreeEntry(const btck_BlockTreeEntry* entry)
-        : View{entry}
+    bool operator==(const Derived& other) const
     {
+        return btck_block_info_equals(impl(), other.get()) != 0;
     }
 
-    bool operator==(const BlockTreeEntry& other) const
+    bool operator!=(const Derived& other) const
     {
-        return btck_block_tree_entry_equals(get(), other.get()) != 0;
-    }
-
-    std::optional<BlockTreeEntry> GetPrevious() const
-    {
-        auto entry{btck_block_tree_entry_get_previous(get())};
-        if (!entry) return std::nullopt;
-        return entry;
+        return !(*this == other);
     }
 
     int32_t GetHeight() const
     {
-        return btck_block_tree_entry_get_height(get());
+        return btck_block_info_get_height(impl());
     }
 
     BlockHashView GetHash() const
     {
-        return BlockHashView{btck_block_tree_entry_get_block_hash(get())};
+        return BlockHashView{btck_block_info_get_block_hash(impl())};
+    }
+
+    std::optional<BlockHashView> PreviousHash() const
+    {
+        const auto* hash{btck_block_info_get_previous_block_hash(impl())};
+        if (!hash) return std::nullopt;
+        return BlockHashView{hash};
     }
 
     BlockHeader GetHeader() const
     {
-        return BlockHeader{btck_block_tree_entry_get_block_header(get())};
+        return BlockHeader{BlockHeaderView{btck_block_info_get_header(impl())}};
     }
-
-    BlockTreeEntry GetAncestor(int32_t height) const
-    {
-        return BlockTreeEntry{btck_block_tree_entry_get_ancestor(get(), height)};
-    }
-
 };
 
-class KernelNotifications
+class BlockInfoView : public View<btck_BlockInfo>, public BlockInfoApi<BlockInfoView>
 {
 public:
-    virtual ~KernelNotifications() = default;
-
-    virtual void BlockTipHandler(SynchronizationState state, BlockTreeEntry entry, double verification_progress) {}
-
-    virtual void HeaderTipHandler(SynchronizationState state, int64_t height, int64_t timestamp, bool presync) {}
-
-    virtual void ProgressHandler(std::string_view title, int progress_percent, bool resume_possible) {}
-
-    virtual void WarningSetHandler(Warning warning, std::string_view message) {}
-
-    virtual void WarningUnsetHandler(Warning warning) {}
-
-    virtual void FlushErrorHandler(std::string_view error) {}
-
-    virtual void FatalErrorHandler(std::string_view error) {}
+    explicit BlockInfoView(const btck_BlockInfo* info) : View{info} {}
 };
+
+class BlockInfo : public Handle<btck_BlockInfo, btck_block_info_copy, btck_block_info_destroy>, public BlockInfoApi<BlockInfo>
+{
+public:
+    explicit BlockInfo(btck_BlockInfo* info) : Handle{info} {}
+    explicit BlockInfo(const BlockInfoView& info) : Handle{info} {}
+};
+
+struct KernelNotifications {
+    std::function<void(SynchronizationState state, BlockInfoView tip, double verification_progress)> block_tip;
+    std::function<void(SynchronizationState state, int64_t height, int64_t timestamp, bool presync)> header_tip;
+    std::function<void(std::string_view title, int progress_percent, bool resume_possible)> progress;
+    std::function<void(Warning warning, std::string_view message)> warning_set;
+    std::function<void(Warning warning)> warning_unset;
+    std::function<void(std::string_view error)> flush_error;
+    std::function<void(std::string_view error)> fatal_error;
+};
+
+template <typename F>
+int callback_status(F&& fn) noexcept
+{
+    try {
+        std::forward<F>(fn)();
+        return 0;
+    } catch (...) {
+        return -1;
+    }
+}
 
 template <typename Derived>
 class BlockValidationStateApi
@@ -998,25 +1321,70 @@ public:
 class BlockValidationState : public Handle<btck_BlockValidationState, btck_block_validation_state_copy, btck_block_validation_state_destroy>, public BlockValidationStateApi<BlockValidationState>
 {
 public:
-    explicit BlockValidationState() : Handle{btck_block_validation_state_create()} {}
+    explicit BlockValidationState()
+        : Handle{[] {
+              ErrorOut error;
+              return check(btck_block_validation_state_create(error.out()), error, "failed to create block validation state");
+          }()} {}
 
     explicit BlockValidationState(const BlockValidationStateView& view) : Handle{view} {}
 
     explicit BlockValidationState(btck_BlockValidationState* state) : Handle{state} {}
 };
 
-inline bool Block::Check(const ConsensusParamsView& consensus_params,
-    BlockCheckFlags flags,
-    BlockValidationState& state) const
+struct BlockProcessResult {
+    BlockProcessStatus status{BlockProcessStatus::CHECK_FAILED};
+    bool processed{false};
+    bool new_block{false};
+    BlockValidationState validation_state{};
+};
+
+struct HeaderProcessResult {
+    HeaderProcessStatus status{HeaderProcessStatus::REJECTED};
+    BlockValidationState validation_state{};
+};
+
+struct BlockImportResult {
+    BlockImportStatus status{BlockImportStatus::COMPLETED};
+    int loaded_blocks{0};
+    int skipped_records{0};
+    int skipped_blocks{0};
+    int rejected_blocks{0};
+};
+
+inline bool IsProcessedBlockStatus(BlockProcessStatus status)
 {
-    return btck_block_check(get(), consensus_params.get(), static_cast<btck_BlockCheckFlags>(flags), state.get()) == 1;
+    return status == BlockProcessStatus::STORED ||
+           status == BlockProcessStatus::ALREADY_KNOWN;
 }
 
-class TxValidationState : public UniqueHandle<btck_TxValidationState, btck_tx_validation_state_destroy>
+inline bool Block::Check(const ConsensusParamsView& consensus_params,
+                         BlockCheckFlags flags,
+                         BlockValidationState& state) const
+{
+    ErrorOut error;
+    UniqueHandle<btck_BlockCheckResult, btck_block_check_result_destroy> result{
+        check(btck_block_check_result(get(), consensus_params.get(), static_cast<btck_BlockCheckFlags>(flags), error.out()), error, "failed to check block")};
+    state = BlockValidationState{BlockValidationStateView{btck_block_check_result_get_validation_state(result.get())}};
+    return btck_block_check_result_get_status(result.get()) == btck_CheckStatus_VALID;
+}
+
+class TxValidationState : public Handle<btck_TxValidationState, btck_tx_validation_state_copy, btck_tx_validation_state_destroy>
 {
 public:
-    using UniqueHandle::UniqueHandle; // inherit ctor
-    explicit TxValidationState() : UniqueHandle{btck_tx_validation_state_create()} {}
+    explicit TxValidationState()
+        : Handle{[] {
+              ErrorOut error;
+              return check(btck_tx_validation_state_create(error.out()), error, "failed to create transaction validation state");
+          }()} {}
+
+    explicit TxValidationState(const btck_TxValidationState* state)
+        : Handle{[&] {
+              ErrorOut error;
+              return check(btck_tx_validation_state_copy(state, error.out()), error, "failed to copy transaction validation state");
+          }()} {}
+
+    explicit TxValidationState(btck_TxValidationState* state) : Handle{state} {}
 
     ValidationMode GetValidationMode() const
     {
@@ -1031,28 +1399,28 @@ public:
 
 inline bool CheckTransaction(const Transaction& tx, TxValidationState& state)
 {
-    return btck_transaction_check(tx.get(), state.get()) == 1;
+    ErrorOut error;
+    UniqueHandle<btck_TransactionCheckResult, btck_transaction_check_result_destroy> result{
+        check(btck_transaction_check_result(tx.get(), error.out()), error, "failed to check transaction")};
+    state = TxValidationState{btck_transaction_check_result_get_validation_state(result.get())};
+    return btck_transaction_check_result_get_status(result.get()) == btck_CheckStatus_VALID;
 }
 
-class ValidationInterface
-{
-public:
-    virtual ~ValidationInterface() = default;
-
-    virtual void BlockChecked(Block block, BlockValidationStateView state) {}
-
-    virtual void PowValidBlock(BlockTreeEntry entry, Block block) {}
-
-    virtual void BlockConnected(Block block, BlockTreeEntry entry) {}
-
-    virtual void BlockDisconnected(Block block, BlockTreeEntry entry) {}
+struct ValidationInterface {
+    std::function<void(BlockView block, BlockValidationStateView state)> block_checked;
+    std::function<void(BlockView block, BlockInfoView info)> pow_valid_block;
+    std::function<void(BlockView block, BlockInfoView info)> block_connected;
+    std::function<void(BlockView block, BlockInfoView info)> block_disconnected;
 };
 
 class ChainParams : public Handle<btck_ChainParameters, btck_chain_parameters_copy, btck_chain_parameters_destroy>
 {
 public:
     ChainParams(ChainType chain_type)
-        : Handle{btck_chain_parameters_create(static_cast<btck_ChainType>(chain_type))} {}
+        : Handle{[&] {
+              ErrorOut error;
+              return check(btck_chain_parameters_create(static_cast<btck_ChainType>(chain_type), error.out()), error, "failed to create chain parameters");
+          }()} {}
 
     ConsensusParamsView GetConsensusParams() const
     {
@@ -1063,126 +1431,251 @@ public:
 class ContextOptions : public UniqueHandle<btck_ContextOptions, btck_context_options_destroy>
 {
 public:
-    ContextOptions() : UniqueHandle{btck_context_options_create()} {}
+    ContextOptions()
+        : UniqueHandle{[] {
+              ErrorOut error;
+              return check(btck_context_options_create(error.out()), error, "failed to create context options");
+          }()} {}
 
     void SetChainParams(ChainParams& chain_params)
     {
-        btck_context_options_set_chainparams(get(), chain_params.get());
+        ErrorOut error;
+        check_status(btck_context_options_set_chainparams(get(), chain_params.get(), error.out()), error, "failed to set chain parameters");
     }
 
-    template <typename T>
-    void SetNotifications(std::shared_ptr<T> notifications)
+    void SetNotifications(KernelNotifications notifications)
     {
-        static_assert(std::is_base_of_v<KernelNotifications, T>);
-        auto heap_notifications = std::make_unique<std::shared_ptr<T>>(std::move(notifications));
-        using user_type = std::shared_ptr<T>*;
-        btck_context_options_set_notifications(
-            get(),
-            btck_NotificationInterfaceCallbacks{
-                .user_data = heap_notifications.release(),
-                .user_data_destroy = +[](void* user_data) { delete static_cast<user_type>(user_data); },
-                .block_tip = +[](void* user_data, btck_SynchronizationState state, const btck_BlockTreeEntry* entry, double verification_progress) { (*static_cast<user_type>(user_data))->BlockTipHandler(static_cast<SynchronizationState>(state), BlockTreeEntry{entry}, verification_progress); },
-                .header_tip = +[](void* user_data, btck_SynchronizationState state, int64_t height, int64_t timestamp, int presync) { (*static_cast<user_type>(user_data))->HeaderTipHandler(static_cast<SynchronizationState>(state), height, timestamp, presync == 1); },
-                .progress = +[](void* user_data, const char* title, size_t title_len, int progress_percent, int resume_possible) { (*static_cast<user_type>(user_data))->ProgressHandler({title, title_len}, progress_percent, resume_possible == 1); },
-                .warning_set = +[](void* user_data, btck_Warning warning, const char* message, size_t message_len) { (*static_cast<user_type>(user_data))->WarningSetHandler(static_cast<Warning>(warning), {message, message_len}); },
-                .warning_unset = +[](void* user_data, btck_Warning warning) { (*static_cast<user_type>(user_data))->WarningUnsetHandler(static_cast<Warning>(warning)); },
-                .flush_error = +[](void* user_data, const char* error, size_t error_len) { (*static_cast<user_type>(user_data))->FlushErrorHandler({error, error_len}); },
-                .fatal_error = +[](void* user_data, const char* error, size_t error_len) { (*static_cast<user_type>(user_data))->FatalErrorHandler({error, error_len}); },
-            });
+        auto heap_notifications = std::make_unique<KernelNotifications>(std::move(notifications));
+        using user_type = KernelNotifications*;
+        btck_NotificationInterfaceCallbacks callbacks{
+            .user_data = heap_notifications.get(),
+            .user_data_destroy = +[](void* user_data) { delete static_cast<user_type>(user_data); },
+            .block_tip = +[](void* user_data, btck_SynchronizationState state, const btck_BlockInfo* tip, double verification_progress) -> int {
+                return callback_status([&] {
+                    auto& callbacks{*static_cast<user_type>(user_data)};
+                    if (callbacks.block_tip) callbacks.block_tip(static_cast<SynchronizationState>(state), BlockInfoView{tip}, verification_progress);
+                });
+            },
+            .header_tip = +[](void* user_data, btck_SynchronizationState state, int64_t height, int64_t timestamp, int presync) -> int {
+                return callback_status([&] {
+                    auto& callbacks{*static_cast<user_type>(user_data)};
+                    if (callbacks.header_tip) callbacks.header_tip(static_cast<SynchronizationState>(state), height, timestamp, presync == 1);
+                });
+            },
+            .progress = +[](void* user_data, const char* title, size_t title_len, int progress_percent, int resume_possible) -> int {
+                return callback_status([&] {
+                    auto& callbacks{*static_cast<user_type>(user_data)};
+                    if (callbacks.progress) callbacks.progress({title, title_len}, progress_percent, resume_possible == 1);
+                });
+            },
+            .warning_set = +[](void* user_data, btck_Warning warning, const char* message, size_t message_len) -> int {
+                return callback_status([&] {
+                    auto& callbacks{*static_cast<user_type>(user_data)};
+                    if (callbacks.warning_set) callbacks.warning_set(static_cast<Warning>(warning), {message, message_len});
+                });
+            },
+            .warning_unset = +[](void* user_data, btck_Warning warning) -> int {
+                return callback_status([&] {
+                    auto& callbacks{*static_cast<user_type>(user_data)};
+                    if (callbacks.warning_unset) callbacks.warning_unset(static_cast<Warning>(warning));
+                });
+            },
+            .flush_error = +[](void* user_data, const char* error, size_t error_len) -> int {
+                return callback_status([&] {
+                    auto& callbacks{*static_cast<user_type>(user_data)};
+                    if (callbacks.flush_error) callbacks.flush_error({error, error_len});
+                });
+            },
+            .fatal_error = +[](void* user_data, const char* error, size_t error_len) -> int {
+                return callback_status([&] {
+                    auto& callbacks{*static_cast<user_type>(user_data)};
+                    if (callbacks.fatal_error) callbacks.fatal_error({error, error_len});
+                });
+            },
+        };
+        ErrorOut error;
+        check_status(btck_context_options_set_notifications(get(), callbacks, error.out()), error, "failed to set kernel notifications");
+        heap_notifications.release();
     }
 
-    template <typename T>
-    void SetValidationInterface(std::shared_ptr<T> validation_interface)
+    void SetValidationInterface(ValidationInterface validation_interface)
     {
-        static_assert(std::is_base_of_v<ValidationInterface, T>);
-        auto heap_vi = std::make_unique<std::shared_ptr<T>>(std::move(validation_interface));
-        using user_type = std::shared_ptr<T>*;
-        btck_context_options_set_validation_interface(
-            get(),
-            btck_ValidationInterfaceCallbacks{
-                .user_data = heap_vi.release(),
-                .user_data_destroy = +[](void* user_data) { delete static_cast<user_type>(user_data); },
-                .block_checked = +[](void* user_data, btck_Block* block, const btck_BlockValidationState* state) { (*static_cast<user_type>(user_data))->BlockChecked(Block{block}, BlockValidationStateView{state}); },
-                .pow_valid_block = +[](void* user_data, btck_Block* block, const btck_BlockTreeEntry* entry) { (*static_cast<user_type>(user_data))->PowValidBlock(BlockTreeEntry{entry}, Block{block}); },
-                .block_connected = +[](void* user_data, btck_Block* block, const btck_BlockTreeEntry* entry) { (*static_cast<user_type>(user_data))->BlockConnected(Block{block}, BlockTreeEntry{entry}); },
-                .block_disconnected = +[](void* user_data, btck_Block* block, const btck_BlockTreeEntry* entry) { (*static_cast<user_type>(user_data))->BlockDisconnected(Block{block}, BlockTreeEntry{entry}); },
-            });
+        auto heap_vi = std::make_unique<ValidationInterface>(std::move(validation_interface));
+        using user_type = ValidationInterface*;
+        btck_ValidationInterfaceCallbacks callbacks{
+            .user_data = heap_vi.get(),
+            .user_data_destroy = +[](void* user_data) { delete static_cast<user_type>(user_data); },
+            .block_checked = +[](void* user_data, const btck_Block* block, const btck_BlockValidationState* state) -> int {
+                return callback_status([&] {
+                    auto& callbacks{*static_cast<user_type>(user_data)};
+                    if (callbacks.block_checked) callbacks.block_checked(BlockView{block}, BlockValidationStateView{state});
+                });
+            },
+            .pow_valid_block = +[](void* user_data, const btck_Block* block, const btck_BlockInfo* info) -> int {
+                return callback_status([&] {
+                    auto& callbacks{*static_cast<user_type>(user_data)};
+                    if (callbacks.pow_valid_block) callbacks.pow_valid_block(BlockView{block}, BlockInfoView{info});
+                });
+            },
+            .block_connected = +[](void* user_data, const btck_Block* block, const btck_BlockInfo* info) -> int {
+                return callback_status([&] {
+                    auto& callbacks{*static_cast<user_type>(user_data)};
+                    if (callbacks.block_connected) callbacks.block_connected(BlockView{block}, BlockInfoView{info});
+                });
+            },
+            .block_disconnected = +[](void* user_data, const btck_Block* block, const btck_BlockInfo* info) -> int {
+                return callback_status([&] {
+                    auto& callbacks{*static_cast<user_type>(user_data)};
+                    if (callbacks.block_disconnected) callbacks.block_disconnected(BlockView{block}, BlockInfoView{info});
+                });
+            },
+        };
+        ErrorOut error;
+        check_status(btck_context_options_set_validation_interface(get(), callbacks, error.out()), error, "failed to set validation interface");
+        heap_vi.release();
     }
 };
 
 class Context : public Handle<btck_Context, btck_context_copy, btck_context_destroy>
 {
+    static btck_Context* Create(const btck_ContextOptions* options)
+    {
+        ErrorOut error;
+        return check(btck_context_create(options, error.out()), error, "failed to create context");
+    }
+
 public:
     Context(ContextOptions& opts)
-        : Handle{btck_context_create(opts.get())} {}
+        : Handle{Create(opts.get())} {}
 
     Context()
-        : Handle{btck_context_create(ContextOptions{}.get())} {}
+        : Handle{Create(ContextOptions{}.get())} {}
 
     bool interrupt()
     {
-        return btck_context_interrupt(get()) == 0;
+        ErrorOut error;
+        check_status(btck_context_interrupt(get(), error.out()), error, "failed to interrupt context");
+        return true;
     }
 };
 
-class ChainstateManagerOptions : public UniqueHandle<btck_ChainstateManagerOptions, btck_chainstate_manager_options_destroy>
+class ChainstateOptions : public UniqueHandle<btck_ChainstateOptions, btck_chainstate_options_destroy>
 {
+    static btck_ChainstateOptions* Create(const Context& context, std::string_view data_dir, std::string_view blocks_dir)
+    {
+        ErrorOut error;
+        return check(
+            btck_chainstate_options_create(
+                context.get(), data_dir.data(), data_dir.length(), blocks_dir.data(), blocks_dir.length(), error.out()),
+            error,
+            "failed to create chainstate options");
+    }
+
 public:
-    ChainstateManagerOptions(const Context& context, std::string_view data_dir, std::string_view blocks_dir)
-        : UniqueHandle{btck_chainstate_manager_options_create(
-              context.get(), data_dir.data(), data_dir.length(), blocks_dir.data(), blocks_dir.length())}
+    ChainstateOptions(const Context& context, std::string_view data_dir, std::string_view blocks_dir)
+        : UniqueHandle{Create(context, data_dir, blocks_dir)}
     {
     }
 
     void SetWorkerThreads(int worker_threads)
     {
-        btck_chainstate_manager_options_set_worker_threads_num(get(), worker_threads);
+        ErrorOut error;
+        check_status(btck_chainstate_options_set_worker_threads_num(get(), worker_threads, error.out()), error, "failed to set worker thread count");
     }
 
-    bool SetWipeDbs(bool wipe_block_tree, bool wipe_chainstate)
+    bool SetWipeState(bool reindex_block_files, bool wipe_chainstate)
     {
-        return btck_chainstate_manager_options_set_wipe_dbs(get(), wipe_block_tree, wipe_chainstate) == 0;
+        ErrorOut error;
+        if (btck_chainstate_options_set_wipe_state(get(), reindex_block_files, wipe_chainstate, error.out()) == 0) {
+            return true;
+        }
+        if (error.code() == ErrorCode::INVALID_ARGUMENT) {
+            return false;
+        }
+        throw_api_error(error, "failed to set chainstate wipe options");
     }
 
-    void UpdateBlockTreeDbInMemory(bool block_tree_db_in_memory)
+    void SetInMemory(bool in_memory)
     {
-        btck_chainstate_manager_options_update_block_tree_db_in_memory(get(), block_tree_db_in_memory);
-    }
-
-    void UpdateChainstateDbInMemory(bool chainstate_db_in_memory)
-    {
-        btck_chainstate_manager_options_update_chainstate_db_in_memory(get(), chainstate_db_in_memory);
+        ErrorOut error;
+        check_status(btck_chainstate_options_set_in_memory(get(), in_memory, error.out()), error, "failed to set chainstate memory option");
     }
 };
 
-class ChainView : public View<btck_Chain>
+class ChainstateRuntime : public UniqueHandle<btck_ChainstateRuntime, btck_chainstate_runtime_destroy>
 {
 public:
-    explicit ChainView(const btck_Chain* ptr) : View{ptr} {}
+    ChainstateRuntime()
+        : UniqueHandle{[] {
+              ErrorOut error;
+              return check(btck_chainstate_runtime_create(error.out()), error, "failed to create chainstate runtime inputs");
+          }()}
+    {
+    }
+
+    void SetCurrentTime(int64_t timestamp)
+    {
+        ErrorOut error;
+        check_status(btck_chainstate_runtime_set_current_time(get(), timestamp, error.out()), error, "failed to set chainstate current time");
+    }
+};
+
+class BlockValidationOptions : public UniqueHandle<btck_BlockValidationOptions, btck_block_validation_options_destroy>
+{
+public:
+    BlockValidationOptions()
+        : UniqueHandle{[] {
+              ErrorOut error;
+              return check(btck_block_validation_options_create(error.out()), error, "failed to create block validation options");
+          }()}
+    {
+    }
+
+    void SetCurrentTime(int64_t timestamp)
+    {
+        ErrorOut error;
+        check_status(btck_block_validation_options_set_current_time(get(), timestamp, error.out()), error, "failed to set block validation current time");
+    }
+};
+
+class ChainSnapshot : public Handle<btck_ChainSnapshot, btck_chain_snapshot_copy, btck_chain_snapshot_destroy>
+{
+public:
+    explicit ChainSnapshot(btck_ChainSnapshot* ptr) : Handle{ptr} {}
 
     int32_t Height() const
     {
-        return btck_chain_get_height(get());
+        return btck_chain_snapshot_get_height(get());
     }
 
     int32_t CountEntries() const
     {
-        return btck_chain_get_height(get()) + 1;
+        return static_cast<int32_t>(btck_chain_snapshot_count(get()));
     }
 
-    BlockTreeEntry GetByHeight(int32_t height) const
+    BlockInfoView GetByHeight(int32_t height) const
     {
-        auto index{btck_chain_get_by_height(get(), height)};
-        if (!index) throw std::runtime_error("No entry in the chain at the provided height");
-        return index;
+        auto info{btck_chain_snapshot_get_block_info_by_height(get(), height)};
+        if (!info) throw std::runtime_error("No block info in the chain snapshot at the provided height");
+        return BlockInfoView{info};
     }
 
-    bool Contains(BlockTreeEntry& entry) const
+    bool ContainsHash(const BlockHashView& hash) const
     {
-        return btck_chain_contains(get(), entry.get());
+        return btck_chain_snapshot_contains_block_hash(get(), hash.get()) != 0;
     }
 
-    MAKE_RANGE_METHOD(Entries, ChainView, &ChainView::CountEntries, &ChainView::GetByHeight, *this)
+    bool Contains(const BlockInfoView& info) const
+    {
+        return ContainsHash(info.GetHash());
+    }
+
+    bool Contains(const BlockInfo& info) const
+    {
+        return Contains(BlockInfoView{info.get()});
+    }
+
+    MAKE_RANGE_METHOD(Entries, ChainSnapshot, &ChainSnapshot::CountEntries, &ChainSnapshot::GetByHeight, *this)
 };
 
 template <typename Derived>
@@ -1284,15 +1777,26 @@ public:
     MAKE_RANGE_METHOD(TxsSpentOutputs, BlockSpentOutputs, &BlockSpentOutputs::Count, &BlockSpentOutputs::GetTxSpentOutputs, *this)
 };
 
-class ChainMan : UniqueHandle<btck_ChainstateManager, btck_chainstate_manager_destroy>
+class Chainstate : UniqueHandle<btck_Chainstate, btck_chainstate_destroy>
 {
+    static btck_Chainstate* Create(const ChainstateOptions& chainman_opts, const ChainstateRuntime& runtime_options)
+    {
+        ErrorOut error;
+        return check(
+            btck_chainstate_open(chainman_opts.get(), runtime_options.get(), error.out()),
+            error,
+            "failed to open chainstate");
+    }
+
 public:
-    ChainMan(const Context& context, const ChainstateManagerOptions& chainman_opts)
-        : UniqueHandle{btck_chainstate_manager_create(chainman_opts.get())}
+    using UniqueHandle::get;
+
+    Chainstate(const ChainstateOptions& chainman_opts, const ChainstateRuntime& runtime_options)
+        : UniqueHandle{Create(chainman_opts, runtime_options)}
     {
     }
 
-    bool ImportBlocks(const std::span<const std::string> paths)
+    BlockImportResult ImportBlocks(const std::span<const std::string> paths, const ChainstateRuntime& runtime_options)
     {
         std::vector<const char*> c_paths;
         std::vector<size_t> c_paths_lens;
@@ -1303,49 +1807,124 @@ public:
             c_paths_lens.push_back(path.length());
         }
 
-        return btck_chainstate_manager_import_blocks(get(), c_paths.data(), c_paths_lens.data(), c_paths.size()) == 0;
+        ErrorOut error;
+        UniqueHandle<btck_BlockImportResult, btck_block_import_result_destroy> result{
+            check(btck_chainstate_import_blocks_result(get(), c_paths.data(), c_paths_lens.data(), c_paths.size(), runtime_options.get(), error.out()),
+                  error,
+                  "failed to import blocks")};
+        return {
+            .status = static_cast<BlockImportStatus>(btck_block_import_result_get_status(result.get())),
+            .loaded_blocks = btck_block_import_result_get_loaded_block_count(result.get()),
+            .skipped_records = btck_block_import_result_get_skipped_record_count(result.get()),
+            .skipped_blocks = btck_block_import_result_get_skipped_block_count(result.get()),
+            .rejected_blocks = btck_block_import_result_get_rejected_block_count(result.get()),
+        };
     }
 
-    BlockProcessResult ProcessBlock(const Block& block)
+    BlockProcessResult ProcessBlock(const Block& block, const BlockValidationOptions& options)
     {
-        int _new_block;
-        const int res{btck_chainstate_manager_process_block(get(), block.get(), &_new_block)};
-        return {.processed = res == 0, .new_block = _new_block == 1};
+        ErrorOut error;
+        UniqueHandle<btck_BlockProcessResult, btck_block_process_result_destroy> result{
+            check(btck_chainstate_process_block_result(get(), block.get(), options.get(), error.out()), error, "failed to process block")};
+        const auto status{static_cast<BlockProcessStatus>(btck_block_process_result_get_status(result.get()))};
+        return {
+            .status = status,
+            .processed = IsProcessedBlockStatus(status),
+            .new_block = btck_block_process_result_has_new_block_data(result.get()) == 1,
+            .validation_state = BlockValidationState{BlockValidationStateView{btck_block_process_result_get_validation_state(result.get())}},
+        };
     }
 
-    BlockValidationState ProcessBlockHeader(const BlockHeader& header)
+    HeaderProcessResult ProcessBlockHeader(const BlockHeader& header, const BlockValidationOptions& options)
     {
-        auto state = btck_chainstate_manager_process_block_header(get(), header.get());
-        return BlockValidationState{state};
+        ErrorOut error;
+        UniqueHandle<btck_HeaderProcessResult, btck_header_process_result_destroy> result{
+            check(btck_chainstate_process_header_result(get(), header.get(), options.get(), error.out()), error, "failed to process block header")};
+        return {
+            .status = static_cast<HeaderProcessStatus>(btck_header_process_result_get_status(result.get())),
+            .validation_state = BlockValidationState{BlockValidationStateView{btck_header_process_result_get_validation_state(result.get())}},
+        };
     }
 
-    ChainView GetChain() const
+    ChainSnapshot SnapshotActiveChain() const
     {
-        return ChainView{btck_chainstate_manager_get_active_chain(get())};
+        ErrorOut error;
+        return ChainSnapshot{check(btck_chainstate_snapshot_active_chain(get(), error.out()), error, "failed to snapshot active chain")};
     }
 
-    std::optional<BlockTreeEntry> GetBlockTreeEntry(const BlockHash& block_hash) const
+    std::optional<BlockInfo> GetBlockInfo(const BlockHashView& block_hash) const
     {
-        auto entry{btck_chainstate_manager_get_block_tree_entry_by_hash(get(), block_hash.get())};
-        if (!entry) return std::nullopt;
-        return entry;
+        ErrorOut error;
+        auto info{btck_chainstate_get_block_info(get(), block_hash.get(), error.out())};
+        if (error.has_error()) {
+            throw_api_error(error, "failed to get block info");
+        }
+        if (!info) return std::nullopt;
+        return BlockInfo{info};
     }
 
-    BlockTreeEntry GetBestEntry() const
+    std::optional<BlockInfo> GetBlockInfo(const BlockHash& block_hash) const
     {
-        return btck_chainstate_manager_get_best_entry(get());
+        return GetBlockInfo(BlockHashView{block_hash.get()});
     }
 
-    std::optional<Block> ReadBlock(const BlockTreeEntry& entry) const
+    std::optional<BlockInfo> GetBestHeaderInfo() const
     {
-        auto block{btck_block_read(get(), entry.get())};
-        if (!block) return std::nullopt;
-        return block;
+        ErrorOut error;
+        auto info{btck_chainstate_get_best_header_info(get(), error.out())};
+        if (error.has_error()) {
+            throw_api_error(error, "failed to get best header info");
+        }
+        if (!info) return std::nullopt;
+        return BlockInfo{info};
     }
 
-    BlockSpentOutputs ReadBlockSpentOutputs(const BlockTreeEntry& entry) const
+    std::optional<Block> ReadBlockByHash(const BlockHashView& block_hash) const
     {
-        return btck_block_spent_outputs_read(get(), entry.get());
+        ErrorOut error;
+        UniqueHandle<btck_BlockReadResult, btck_block_read_result_destroy> result{
+            check(btck_chainstate_read_block_result(get(), block_hash.get(), error.out()), error, "failed to read block")};
+        if (btck_block_read_result_get_status(result.get()) != btck_BlockReadStatus_FOUND) {
+            return std::nullopt;
+        }
+        return Block{check(btck_block_copy(
+                               check(btck_block_read_result_get_block(result.get())),
+                               error.out()),
+                           error, "failed to copy read block")};
+    }
+
+    std::optional<Block> ReadBlock(const BlockInfoView& info) const
+    {
+        return ReadBlockByHash(info.GetHash());
+    }
+
+    std::optional<Block> ReadBlock(const BlockInfo& info) const
+    {
+        return ReadBlock(BlockInfoView{info.get()});
+    }
+
+    std::optional<BlockSpentOutputs> ReadBlockSpentOutputsByHash(const BlockHashView& block_hash) const
+    {
+        ErrorOut error;
+        UniqueHandle<btck_BlockSpentOutputsReadResult, btck_block_spent_outputs_read_result_destroy> result{
+            check(btck_chainstate_read_block_spent_outputs_result(get(), block_hash.get(), error.out()), error, "failed to read block spent outputs")};
+        if (btck_block_spent_outputs_read_result_get_status(result.get()) != btck_BlockSpentOutputsReadStatus_FOUND) {
+            return std::nullopt;
+        }
+        return BlockSpentOutputs{check(btck_block_spent_outputs_copy(
+                                           check(btck_block_spent_outputs_read_result_get_spent_outputs(result.get())),
+                                           error.out()),
+                                       error, "failed to copy block spent outputs")};
+    }
+
+    std::optional<BlockSpentOutputs> ReadBlockSpentOutputs(const BlockInfoView& info) const
+    {
+        return ReadBlockSpentOutputsByHash(info.GetHash());
+    }
+
+    std::optional<BlockSpentOutputs> ReadBlockSpentOutputs(const BlockInfo& info) const
+    {
+        return ReadBlockSpentOutputs(BlockInfoView{info.get()});
     }
 };
 

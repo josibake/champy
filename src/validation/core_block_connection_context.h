@@ -12,7 +12,6 @@
 #include <optional>
 
 class CBlockIndex;
-class CoreChainValidationContext;
 class BlockIndexLookup;
 class uint256;
 
@@ -24,11 +23,15 @@ struct CoreBlockConnectionPolicySnapshot {
 
 struct CoreBlockConnectionPlan {
     validation::BlockConnectionContext context;
+    validation::BlockConnectionBlockPosition block_position;
     CoreBlockScriptCheckDecision script_check_decision;
     bool has_spend_stage{false};
 };
 
-[[nodiscard]] CoreBlockConnectionPolicySnapshot SnapshotCoreBlockConnectionPolicy(CoreChainValidationContext& context, const CBlockIndex& block_index)
+[[nodiscard]] CoreBlockConnectionPolicySnapshot SnapshotCoreBlockConnectionPolicy(
+    const Consensus::Params& consensus_params,
+    Consensus::BlockHeaderContext header_context,
+    CoreBlockScriptCheckPolicy script_check_policy)
     EXCLUSIVE_LOCKS_REQUIRED(::cs_main);
 
 [[nodiscard]] CoreBlockConnectionPlan PlanCoreBlockConnection(const CoreBlockConnectionPolicySnapshot& policy, BlockIndexLookup& block_index, const CBlockIndex& block_index_entry)

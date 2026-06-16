@@ -22,15 +22,17 @@ struct CoinSnapshot {
     bool is_coinbase{false};
 };
 
-class SpendStateView {
+class SpendLookupBackend {
 public:
-    virtual ~SpendStateView() = default;
+    virtual ~SpendLookupBackend() = default;
 
     // Existence checks can be cheaper than materializing a full CoinSnapshot
     // for backends that separate membership from spend evidence.
     [[nodiscard]] virtual bool HaveCoin(const COutPoint& outpoint) const = 0;
     [[nodiscard]] virtual std::optional<CoinSnapshot> GetCoin(const COutPoint& outpoint) const = 0;
 };
+
+using SpendStateView = SpendLookupBackend;
 
 class SequenceLockTimeView {
 public:

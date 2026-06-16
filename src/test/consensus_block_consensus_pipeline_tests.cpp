@@ -4,6 +4,7 @@
 
 #include <consensus/block_consensus_pipeline.h>
 #include <consensus/merkle.h>
+#include <consensus/spend_state_batch.h>
 #include <primitives/block.h>
 #include <primitives/transaction.h>
 #include <script/interpreter.h>
@@ -35,7 +36,8 @@ CTransactionRef MakeSpend(const COutPoint& outpoint, CAmount value)
     return MakeTransactionRef(tx);
 }
 
-class FakeSpendView final : public Consensus::SpendStateView {
+class FakeSpendView final : public Consensus::SpendLookupBackend
+{
 public:
     bool HaveCoin(const COutPoint& outpoint) const override { return m_outpoint && *m_outpoint == outpoint; }
 
@@ -56,12 +58,14 @@ private:
     Consensus::CoinSnapshot m_coin;
 };
 
-class FakeSequenceLockTimeView final : public Consensus::SequenceLockTimeView {
+class FakeSequenceLockTimeView final : public Consensus::SequenceLockTimeView
+{
 public:
     int64_t PreviousMedianTimePast(const COutPoint&, int) const override { return 0; }
 };
 
-class FakeBlockSpendWorkspace final : public Consensus::BlockSpendWorkspace {
+class FakeBlockSpendWorkspace final : public Consensus::SpendWorkspace
+{
 public:
     int stages{0};
     std::optional<unsigned int> fail_stage_index;
@@ -69,7 +73,7 @@ public:
 
     void AddCoin(const COutPoint& outpoint, Consensus::CoinSnapshot coin) { m_view.AddCoin(outpoint, coin); }
 
-    const Consensus::SpendStateView& StagedSpendView() const override { return m_view; }
+    const Consensus::SpendLookupBackend& StagedSpendView() const override { return m_view; }
     const Consensus::SequenceLockTimeView& SequenceLockTimes() const override { return m_sequence_lock_times; }
 
     Consensus::BlockSpendResult<void> StageTransactionEffectsForIntraBlockView(const Consensus::TransactionCoinEffects& coin_effects, unsigned int transaction_index) override
@@ -92,7 +96,8 @@ private:
     FakeSequenceLockTimeView m_sequence_lock_times;
 };
 
-class NoopScriptChecker final : public Consensus::BlockScriptChecker {
+class NoopScriptChecker final : public Consensus::BlockScriptChecker
+{
 public:
     int checks{0};
     int completions{0};
@@ -112,7 +117,21 @@ public:
     }
 };
 
-class FakeBlockCommitter final : public Consensus::BlockRevertDataWriter, public Consensus::BlockSpendStateCommitter, public Consensus::BlockMetadataCommitter {
+class FakeBlockSpendJoiner final : public Consensus::BlockSpendJoiner
+{
+public:
+    mutable int joins{0};
+    Consensus::BlockSpentOutputJoin joined_inputs;
+
+    Consensus::BlockSpentOutputJoin Join(std::span<const CTransactionRef>, int) const override
+    {
+        ++joins;
+        return joined_inputs;
+    }
+};
+
+class FakeBlockCommitter final : public Consensus::BlockRevertDataWriter, public Consensus::SpendCommitter, public Consensus::BlockMetadataCommitter
+{
 public:
     bool fail_commit{false};
     int commits{0};
@@ -125,6 +144,7 @@ public:
         ++commits;
         if (fail_commit) {
             return Consensus::Unexpected<Consensus::BlockCommitError>{Consensus::BlockCommitError{
+                .failure_state = Consensus::BlockCommitFailureState::Unchanged,
                 .reject_reason = "metadata-failed",
             }};
         }
@@ -225,6 +245,7 @@ BOOST_AUTO_TEST_CASE(consensus_stage_error_preserves_rule_diagnostics)
     BOOST_CHECK(contextual.stage == Consensus::BlockConsensusStage::Contextual);
     BOOST_REQUIRE(contextual.issue);
     BOOST_CHECK(*contextual.issue == Consensus::BlockConsensusIssue::InvalidHeader);
+    BOOST_CHECK(!contextual.runtime_issue);
     BOOST_CHECK_EQUAL(contextual.reject_reason, "time-too-new");
     BOOST_CHECK_EQUAL(contextual.debug_message, "block timestamp too far in the future");
 
@@ -239,10 +260,29 @@ BOOST_AUTO_TEST_CASE(consensus_stage_error_preserves_rule_diagnostics)
     BOOST_CHECK(spend.stage == Consensus::BlockConsensusStage::Spend);
     BOOST_REQUIRE(spend.issue);
     BOOST_CHECK(*spend.issue == Consensus::BlockConsensusIssue::Consensus);
+    BOOST_CHECK(!spend.runtime_issue);
     BOOST_CHECK_EQUAL(spend.reject_reason, "bad-txns-inputs-missingorspent");
     BOOST_CHECK_EQUAL(spend.debug_message, "CheckTxInputs: inputs missing/spent");
 
+    const Consensus::BlockSpendError runtime_spend_error{
+        .issue = Consensus::BlockConsensusIssue::ValidationRuntime,
+        .runtime_issue = Consensus::ValidationRuntimeIssue::ResourceLimit,
+        .reject_reason = "segment-script-check-limit",
+        .debug_message = "too much script work",
+    };
+    const auto runtime_spend{Consensus::BuildBlockConsensusStageError(
+        Consensus::BlockConsensusStage::Spend,
+        runtime_spend_error)};
+    BOOST_CHECK(runtime_spend.stage == Consensus::BlockConsensusStage::Spend);
+    BOOST_REQUIRE(runtime_spend.issue);
+    BOOST_CHECK(*runtime_spend.issue == Consensus::BlockConsensusIssue::ValidationRuntime);
+    BOOST_REQUIRE(runtime_spend.runtime_issue);
+    BOOST_CHECK(*runtime_spend.runtime_issue == Consensus::ValidationRuntimeIssue::ResourceLimit);
+    BOOST_CHECK_EQUAL(runtime_spend.reject_reason, "segment-script-check-limit");
+
     const Consensus::BlockCommitError commit_error{
+        .runtime_issue = Consensus::ValidationRuntimeIssue::CommitConflict,
+        .failure_state = Consensus::BlockCommitFailureState::Tainted,
         .reject_reason = "undo-failed",
     };
     const auto commit{Consensus::BuildBlockConsensusStageError(
@@ -250,6 +290,8 @@ BOOST_AUTO_TEST_CASE(consensus_stage_error_preserves_rule_diagnostics)
         commit_error)};
     BOOST_CHECK(commit.stage == Consensus::BlockConsensusStage::Commit);
     BOOST_CHECK(!commit.issue);
+    BOOST_REQUIRE(commit.runtime_issue);
+    BOOST_CHECK(*commit.runtime_issue == Consensus::ValidationRuntimeIssue::CommitConflict);
     BOOST_CHECK_EQUAL(commit.reject_reason, "undo-failed");
 }
 
@@ -551,6 +593,51 @@ BOOST_AUTO_TEST_CASE(pipeline_validates_spend_with_explicit_context)
     BOOST_CHECK(pipeline.CheckCoinbaseReward(*effects));
 }
 
+BOOST_AUTO_TEST_CASE(pipeline_validates_spend_with_explicit_joiner)
+{
+    const Consensus::BlockConsensusContext context{
+        .spend = Consensus::BlockSpendContext{
+            .block_height = 2,
+            .previous_median_time_past = 0,
+        },
+        .commit = Consensus::BlockCommitContext{.new_best_block = uint256::ONE},
+        .block_subsidy = 50,
+    };
+
+    const COutPoint spent_outpoint{Txid::FromUint256(uint256::ONE), 0};
+    CBlock block;
+    block.vtx = {MakeCoinbase(50), MakeSpend(spent_outpoint, 40)};
+
+    Consensus::BlockConsensusPipeline pipeline{block, context};
+    FakeBlockSpendWorkspace spend_state;
+    FakeBlockSpendJoiner joiner;
+    joiner.joined_inputs = Consensus::BlockSpentOutputJoin{
+        .status = Consensus::BlockSpentOutputJoinStatus::Complete,
+        .failed_lookup = std::nullopt,
+        .input_coins_by_transaction = {
+            {},
+            {
+                Consensus::CoinSnapshot{
+                    .output = CTxOut{50, CScript{} << OP_TRUE},
+                    .height = 1,
+                    .is_coinbase = false,
+                },
+            },
+        },
+        .backend_mismatch = std::nullopt,
+    };
+    NoopScriptChecker script_checker;
+
+    const auto effects{pipeline.ValidateAndStageSpend(spend_state, joiner, script_checker, Consensus::BlockSpendConsensusOptions{})};
+
+    BOOST_REQUIRE(effects);
+    BOOST_CHECK_EQUAL(joiner.joins, 1);
+    BOOST_CHECK_EQUAL(effects->fees, 10);
+    BOOST_CHECK_EQUAL(effects->inputs, 2);
+    BOOST_CHECK_EQUAL(spend_state.stages, 2);
+    BOOST_CHECK_EQUAL(script_checker.checks, 1);
+}
+
 BOOST_AUTO_TEST_CASE(pipeline_returns_coinbase_reward_diagnostics)
 {
     const Consensus::BlockConsensusContext context{
@@ -662,20 +749,20 @@ BOOST_AUTO_TEST_CASE(pipeline_split_spend_completion_matches_combined_stage)
 
     FakeBlockSpendWorkspace combined_spend_state;
     combined_spend_state.AddCoin(spent_outpoint, Consensus::CoinSnapshot{
-        .output = CTxOut{50, CScript{} << OP_TRUE},
-        .height = 1,
-        .is_coinbase = false,
-    });
+                                                     .output = CTxOut{50, CScript{} << OP_TRUE},
+                                                     .height = 1,
+                                                     .is_coinbase = false,
+                                                 });
     NoopScriptChecker combined_script_checker;
     const auto combined{pipeline.ValidateAndCompleteSpendStage(combined_spend_state, combined_script_checker, Consensus::BlockSpendConsensusOptions{})};
     BOOST_REQUIRE(combined);
 
     FakeBlockSpendWorkspace split_spend_state;
     split_spend_state.AddCoin(spent_outpoint, Consensus::CoinSnapshot{
-        .output = CTxOut{50, CScript{} << OP_TRUE},
-        .height = 1,
-        .is_coinbase = false,
-    });
+                                                  .output = CTxOut{50, CScript{} << OP_TRUE},
+                                                  .height = 1,
+                                                  .is_coinbase = false,
+                                              });
     NoopScriptChecker split_script_checker;
     auto split{pipeline.ValidateAndStageSpend(split_spend_state, split_script_checker, Consensus::BlockSpendConsensusOptions{})};
     BOOST_REQUIRE(split);
@@ -710,10 +797,10 @@ BOOST_AUTO_TEST_CASE(pipeline_completes_scripts_after_full_spend_stage_failure)
     Consensus::BlockConsensusPipeline pipeline{block, context};
     FakeBlockSpendWorkspace spend_state;
     spend_state.AddCoin(spent_outpoint, Consensus::CoinSnapshot{
-        .output = CTxOut{50, CScript{} << OP_TRUE},
-        .height = 1,
-        .is_coinbase = false,
-    });
+                                            .output = CTxOut{50, CScript{} << OP_TRUE},
+                                            .height = 1,
+                                            .is_coinbase = false,
+                                        });
     spend_state.fail_stage_index = 1;
     NoopScriptChecker script_checker;
     script_checker.complete_error = Consensus::BlockSpendError{
@@ -724,7 +811,7 @@ BOOST_AUTO_TEST_CASE(pipeline_completes_scripts_after_full_spend_stage_failure)
     const auto effects{pipeline.ValidateAndCompleteSpendStage(spend_state, script_checker, Consensus::BlockSpendConsensusOptions{})};
 
     CheckRejectReason(effects, "fake-stage-error");
-    BOOST_CHECK_EQUAL(script_checker.checks, 1);
+    BOOST_CHECK_EQUAL(script_checker.checks, 0);
     BOOST_CHECK_EQUAL(script_checker.completions, 1);
 }
 

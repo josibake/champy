@@ -562,7 +562,7 @@ BOOST_AUTO_TEST_CASE(package_single_tx)
                                                     package_tx_single, /*test_accept=*/false, /*client_maxfeerate=*/{});
     expected_pool_size += 1;
     BOOST_CHECK_MESSAGE(result_single_tx.m_state.IsValid(),
-                        "Package validation unexpectedly failed: " << result_single_tx.m_state.ToString());
+                        "Package validation unexpectedly failed: " << FormatValidationStateForLog(result_single_tx.m_state));
     BOOST_CHECK_EQUAL(m_node.mempool->size(), expected_pool_size);
 
     // Parent and Child. Both submitted by themselves through the ProcessNewPackage interface.
@@ -579,7 +579,7 @@ BOOST_AUTO_TEST_CASE(package_single_tx)
         BOOST_ERROR(err_parent_child.value());
     } else {
         auto it_parent = result_just_parent.m_tx_results.find(tx_parent->GetWitnessHash());
-        BOOST_CHECK_MESSAGE(it_parent->second.m_state.IsValid(), it_parent->second.m_state.ToString());
+        BOOST_CHECK_MESSAGE(it_parent->second.m_state.IsValid(), FormatValidationStateForLog(it_parent->second.m_state));
         BOOST_CHECK(it_parent->second.m_effective_feerate.value().GetFee(GetVirtualTransactionSize(*tx_parent)) == high_fee);
         BOOST_CHECK_EQUAL(it_parent->second.m_wtxids_fee_calculations.value().size(), 1);
         BOOST_CHECK_EQUAL(it_parent->second.m_wtxids_fee_calculations.value().front(), tx_parent->GetWitnessHash());
@@ -600,7 +600,7 @@ BOOST_AUTO_TEST_CASE(package_single_tx)
         BOOST_ERROR(err_parent_child.value());
     } else {
         auto it_child = result_just_child.m_tx_results.find(tx_child->GetWitnessHash());
-        BOOST_CHECK_MESSAGE(it_child->second.m_state.IsValid(), it_child->second.m_state.ToString());
+        BOOST_CHECK_MESSAGE(it_child->second.m_state.IsValid(), FormatValidationStateForLog(it_child->second.m_state));
         BOOST_CHECK(it_child->second.m_effective_feerate.value().GetFee(GetVirtualTransactionSize(*tx_child)) == high_fee);
         BOOST_CHECK_EQUAL(it_child->second.m_wtxids_fee_calculations.value().size(), 1);
         BOOST_CHECK_EQUAL(it_child->second.m_wtxids_fee_calculations.value().front(), tx_child->GetWitnessHash());

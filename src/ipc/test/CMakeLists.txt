@@ -10,4 +10,4 @@ target_sources(test_bitcoin
     ipc_tests.cpp
 )
 
-target_link_libraries(test_bitcoin bitcoin_ipc)
+target_link_libraries(test_bitcoin bitcoin_ipc CapnProto::capnp-rpc)

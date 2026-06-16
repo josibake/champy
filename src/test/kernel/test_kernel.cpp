@@ -7,20 +7,23 @@
 #include <util/fs.h>
 
 #define BOOST_TEST_MODULE Bitcoin Kernel Test Suite
-#include <boost/test/included/unit_test.hpp>
-
 #include <test/kernel/block_data.h>
 #include <test/util/common.h>
 
+#include <boost/test/included/unit_test.hpp>
+
+#include <array>
 #include <charconv>
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <random>
 #include <ranges>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -62,6 +65,43 @@ std::vector<std::byte> hex_string_to_byte_vec(std::string_view hex)
     return bytes;
 }
 
+template <typename T>
+T require_parsed(std::span<const std::byte> bytes)
+{
+    auto parsed{T::Parse(bytes)};
+    if (!parsed) {
+        throw std::runtime_error{"failed to parse test fixture"};
+    }
+    return std::move(*parsed);
+}
+
+template <typename ParseFn, typename StatusFn, typename FailureCodeFn, typename FailureOffsetFn, typename DestroyFn>
+void CheckMalformedParseDoesNotSetError(
+    ParseFn parse,
+    StatusFn get_status,
+    FailureCodeFn get_failure_code,
+    FailureOffsetFn get_failure_offset,
+    DestroyFn destroy,
+    std::span<const std::byte> bytes,
+    std::optional<btck_ParseFailureCode> expected_failure = std::nullopt,
+    std::optional<size_t> expected_offset = std::nullopt)
+{
+    btck_Error* error{nullptr};
+    auto* result{parse(bytes.data(), bytes.size(), &error)};
+    BOOST_REQUIRE(result != nullptr);
+    BOOST_CHECK_EQUAL(get_status(result), btck_ParseStatus_MALFORMED);
+    BOOST_CHECK_NE(get_failure_code(result), btck_ParseFailureCode_NONE);
+    if (expected_failure) {
+        BOOST_CHECK_EQUAL(get_failure_code(result), *expected_failure);
+    }
+    if (expected_offset) {
+        BOOST_CHECK_EQUAL(get_failure_offset(result), *expected_offset);
+    }
+    BOOST_CHECK(error == nullptr);
+    destroy(result);
+    if (error) btck_error_destroy(error);
+}
+
 std::string byte_span_to_hex_string_reversed(std::span<const std::byte> bytes)
 {
     std::ostringstream oss;
@@ -89,6 +129,104 @@ void check_equal(std::span<const std::byte> _actual, std::span<const std::byte> 
         expected.begin(), expected.end());
 }
 
+struct RuleLookupCallbacks {
+    btck_CoinLookupStatus status{btck_CoinLookupStatus_MISSING};
+    const btck_Coin* coin{nullptr};
+};
+
+int rule_lookup_callback(void* user_data, const btck_TransactionOutPoint*, btck_CoinLookupResult* result)
+{
+    if (user_data == nullptr || result == nullptr) return 1;
+    const auto& callbacks{*static_cast<const RuleLookupCallbacks*>(user_data)};
+    result->status = callbacks.status;
+    result->coin = callbacks.status == btck_CoinLookupStatus_FOUND ? callbacks.coin : nullptr;
+    return 0;
+}
+
+std::vector<BlockHeader> RegtestAncestorHeaders(size_t fixture_parent_count)
+{
+    static constexpr std::string_view REGTEST_GENESIS_HEADER_HEX{
+        "010000000000000000000000000000000000000000000000000000000000000000000000"
+        "3ba3edfd7a7b12b27ac72c3e67768f617fc81bc3888a51323a9fb8aa4b1e5e4a"
+        "dae5494dffff7f2002000000"};
+
+    std::vector<BlockHeader> ancestors;
+    ancestors.reserve(fixture_parent_count + 1);
+    ancestors.push_back(require_parsed<BlockHeader>(hex_string_to_byte_vec(REGTEST_GENESIS_HEADER_HEX)));
+    for (size_t index{0}; index < fixture_parent_count; ++index) {
+        const auto bytes{hex_string_to_byte_vec(REGTEST_BLOCK_DATA[index])};
+        const auto block{require_parsed<Block>(bytes)};
+        ancestors.push_back(block.GetHeader());
+    }
+    return ancestors;
+}
+
+std::vector<const btck_BlockHeader*> HeaderPointers(const std::vector<BlockHeader>& headers)
+{
+    std::vector<const btck_BlockHeader*> pointers;
+    pointers.reserve(headers.size());
+    for (const auto& header : headers) {
+        pointers.push_back(header.get());
+    }
+    return pointers;
+}
+
+void CheckBlockVerifyRejection(const btck_BlockVerifyResult* result, btck_ValidationRule expected_rule, std::string_view expected_rule_code)
+{
+    BOOST_REQUIRE(result != nullptr);
+    BOOST_CHECK_EQUAL(btck_block_verify_result_get_status(result), btck_CheckStatus_INVALID);
+    BOOST_CHECK_EQUAL(btck_block_verify_result_get_rejection_code(result), btck_ValidationRejectionCode_RULE_VIOLATION);
+    BOOST_CHECK_EQUAL(btck_block_verify_result_get_rejection_rule(result), expected_rule);
+
+    size_t text_len{0};
+    const char* text{btck_block_verify_result_get_rejection_rule_code(result, &text_len)};
+    BOOST_REQUIRE(text != nullptr);
+    const std::string_view rule_code{text, text_len};
+    BOOST_CHECK(rule_code == expected_rule_code);
+
+    text = btck_block_verify_result_get_rejection_reason(result, &text_len);
+    BOOST_REQUIRE(text != nullptr);
+    BOOST_CHECK_GT(text_len, size_t{0});
+}
+
+void CheckBlockVerifyInvalidContextEvidence(
+    const btck_BlockVerifyResult* result,
+    btck_HeaderContextEvidenceCode expected_evidence_code)
+{
+    BOOST_REQUIRE(result != nullptr);
+    BOOST_CHECK_EQUAL(btck_block_verify_result_get_status(result), btck_CheckStatus_INVALID);
+    BOOST_CHECK_EQUAL(btck_block_validation_state_get_validation_mode(
+                          btck_block_verify_result_get_validation_state(result)),
+                      btck_ValidationMode_INVALID);
+    BOOST_CHECK_EQUAL(btck_block_validation_state_get_block_validation_result(
+                          btck_block_verify_result_get_validation_state(result)),
+                      btck_BlockValidationResult_INVALID_PREV);
+    BOOST_CHECK_EQUAL(btck_block_verify_result_get_rejection_code(result), btck_ValidationRejectionCode_NONE);
+    BOOST_CHECK_EQUAL(btck_block_verify_result_get_rejection_rule(result), btck_ValidationRule_NONE);
+
+    size_t text_len{1};
+    BOOST_CHECK(btck_block_verify_result_get_rejection_rule_code(result, &text_len) == nullptr);
+    BOOST_CHECK_EQUAL(text_len, size_t{0});
+    text_len = 1;
+    BOOST_CHECK(btck_block_verify_result_get_rejection_reason(result, &text_len) == nullptr);
+    BOOST_CHECK_EQUAL(text_len, size_t{0});
+
+    BOOST_CHECK_EQUAL(btck_block_verify_result_get_header_context_evidence_code(result), expected_evidence_code);
+    text_len = 0;
+    const char* evidence_reason{btck_block_verify_result_get_header_context_evidence_reason(result, &text_len)};
+    BOOST_REQUIRE(evidence_reason != nullptr);
+    BOOST_CHECK_GT(text_len, size_t{0});
+}
+
+void ReportUnexpectedError(const btck_Error* error)
+{
+    if (error == nullptr) return;
+    size_t message_len{0};
+    const char* message{btck_error_get_message(error, &message_len)};
+    const std::string_view message_view{message != nullptr ? message : "", message_len};
+    BOOST_TEST_MESSAGE("unexpected btck_Error " << static_cast<int>(btck_error_get_code(error)) << ": " << message_view);
+}
+
 class TestLog
 {
 public:
@@ -112,45 +250,53 @@ struct TestDirectory {
     }
 };
 
-class TestKernelNotifications : public KernelNotifications
+KernelNotifications MakeTestKernelNotifications()
 {
-public:
-    void HeaderTipHandler(SynchronizationState state, int64_t height, int64_t timestamp, bool presync) override
-    {
+    KernelNotifications notifications;
+    notifications.header_tip = [](SynchronizationState state, int64_t height, int64_t timestamp, bool presync) {
         BOOST_CHECK_GT(timestamp, 0);
-    }
-
-    void WarningSetHandler(Warning warning, std::string_view message) override
-    {
+    };
+    notifications.warning_set = [](Warning warning, std::string_view message) {
         std::cout << "Kernel warning is set: " << message << std::endl;
-    }
-
-    void WarningUnsetHandler(Warning warning) override
-    {
+    };
+    notifications.warning_unset = [](Warning warning) {
         std::cout << "Kernel warning was unset." << std::endl;
-    }
-
-    void FlushErrorHandler(std::string_view error) override
-    {
+    };
+    notifications.flush_error = [](std::string_view error) {
         std::cout << error << std::endl;
-    }
-
-    void FatalErrorHandler(std::string_view error) override
-    {
+    };
+    notifications.fatal_error = [](std::string_view error) {
         std::cout << error << std::endl;
-    }
+    };
+    return notifications;
+}
+
+struct TipProgressProbe {
+    std::vector<int32_t> heights;
+    std::vector<double> progress_values;
 };
 
-class TestValidationInterface : public ValidationInterface
+KernelNotifications MakeTipProgressNotifications(std::shared_ptr<TipProgressProbe> probe)
 {
-public:
-    std::optional<std::vector<std::byte>> m_expected_valid_block = std::nullopt;
+    KernelNotifications notifications{MakeTestKernelNotifications()};
+    notifications.block_tip = [probe](SynchronizationState state, BlockInfoView tip, double verification_progress) {
+        probe->heights.push_back(tip.GetHeight());
+        probe->progress_values.push_back(verification_progress);
+    };
+    return notifications;
+}
 
-    void BlockChecked(Block block, BlockValidationStateView state) override
-    {
-        if (m_expected_valid_block.has_value()) {
+struct TestValidationInterfaceState {
+    std::optional<std::vector<std::byte>> m_expected_valid_block = std::nullopt;
+};
+
+ValidationInterface MakeTestValidationInterface(std::shared_ptr<TestValidationInterfaceState> callback_state)
+{
+    ValidationInterface callbacks;
+    callbacks.block_checked = [callback_state](BlockView block, BlockValidationStateView state) {
+        if (callback_state->m_expected_valid_block.has_value()) {
             auto ser_block{block.ToBytes()};
-            check_equal(m_expected_valid_block.value(), ser_block);
+            check_equal(callback_state->m_expected_valid_block.value(), ser_block);
         }
 
         auto mode{state.GetValidationMode()};
@@ -198,23 +344,18 @@ public:
             return;
         }
         }
-    }
-
-    void BlockConnected(Block block, BlockTreeEntry entry) override
-    {
+    };
+    callbacks.block_connected = [](BlockView block, BlockInfoView info) {
         std::cout << "Block connected." << std::endl;
-    }
-
-    void PowValidBlock(BlockTreeEntry entry, Block block) override
-    {
+    };
+    callbacks.pow_valid_block = [](BlockView block, BlockInfoView info) {
         std::cout << "Block passed pow verification" << std::endl;
-    }
-
-    void BlockDisconnected(Block block, BlockTreeEntry entry) override
-    {
+    };
+    callbacks.block_disconnected = [](BlockView block, BlockInfoView info) {
         std::cout << "Block disconnected." << std::endl;
-    }
-};
+    };
+    return callbacks;
+}
 
 void run_verify_test(
     const ScriptPubkey& spent_script_pubkey,
@@ -402,28 +543,63 @@ void CheckRange(const RangeType& range, size_t expected_size)
 BOOST_AUTO_TEST_CASE(btck_transaction_tests)
 {
     auto tx_data{hex_string_to_byte_vec("02000000013f7cebd65c27431a90bba7f796914fe8cc2ddfc3f2cbd6f7e5f2fc854534da95000000006b483045022100de1ac3bcdfb0332207c4a91f3832bd2c2915840165f876ab47c5f8996b971c3602201c6c053d750fadde599e6f5c4e1963df0f01fc0d97815e8157e3d59fe09ca30d012103699b464d1d8bc9e47d4fb1cdaa89a1c5783d68363c4dbc4b524ed3d857148617feffffff02836d3c01000000001976a914fc25d6d5c94003bf5b0c7b640a248e2c637fcfb088ac7ada8202000000001976a914fbed3d9b11183209a57999d54d59f67c019e756c88ac6acb0700")};
-    auto tx{Transaction{tx_data}};
+    auto tx{require_parsed<Transaction>(tx_data)};
     auto tx_data_2{hex_string_to_byte_vec("02000000000101904f4ee5c87d20090b642f116e458cd6693292ad9ece23e72f15fb6c05b956210500000000fdffffff02e2010000000000002251200839a723933b56560487ec4d67dda58f09bae518ffa7e148313c5696ac837d9f10060000000000002251205826bcdae7abfb1c468204170eab00d887b61ab143464a4a09e1450bdc59a3340140f26e7af574e647355830772946356c27e7bbc773c5293688890f58983499581be84de40be7311a14e6d6422605df086620e75adae84ff06b75ce5894de5e994a00000000")};
-    auto tx2{Transaction{tx_data_2}};
+    auto tx2{require_parsed<Transaction>(tx_data_2)};
     CheckHandle(tx, tx2);
 
     auto invalid_data = hex_string_to_byte_vec("012300");
-    BOOST_CHECK_THROW(Transaction{invalid_data}, std::runtime_error);
+    BOOST_CHECK(!Transaction::Parse(invalid_data).has_value());
+    CheckMalformedParseDoesNotSetError(
+        btck_transaction_parse_result,
+        btck_transaction_parse_result_get_status,
+        btck_transaction_parse_result_get_failure_code,
+        btck_transaction_parse_result_get_failure_offset,
+        btck_transaction_parse_result_destroy,
+        invalid_data);
     auto empty_data = hex_string_to_byte_vec("");
-    BOOST_CHECK_THROW(Transaction{empty_data}, std::runtime_error);
+    BOOST_CHECK(!Transaction::Parse(empty_data).has_value());
+    CheckMalformedParseDoesNotSetError(
+        btck_transaction_parse_result,
+        btck_transaction_parse_result_get_status,
+        btck_transaction_parse_result_get_failure_code,
+        btck_transaction_parse_result_get_failure_offset,
+        btck_transaction_parse_result_destroy,
+        empty_data,
+        btck_ParseFailureCode_TRUNCATED,
+        size_t{0});
+    auto trailing_tx_data{tx_data};
+    trailing_tx_data.push_back(std::byte{0x00});
+    BOOST_CHECK(!Transaction::Parse(trailing_tx_data).has_value());
+    CheckMalformedParseDoesNotSetError(
+        btck_transaction_parse_result,
+        btck_transaction_parse_result_get_status,
+        btck_transaction_parse_result_get_failure_code,
+        btck_transaction_parse_result_get_failure_offset,
+        btck_transaction_parse_result_destroy,
+        trailing_tx_data,
+        btck_ParseFailureCode_TRAILING_DATA,
+        tx_data.size());
 
     BOOST_CHECK_EQUAL(tx.CountOutputs(), 2);
     BOOST_CHECK_EQUAL(tx.CountInputs(), 1);
     BOOST_CHECK_EQUAL(tx.GetLocktime(), 510826);
     auto broken_tx_data{std::span<std::byte>{tx_data.begin(), tx_data.begin() + 10}};
-    BOOST_CHECK_THROW(Transaction{broken_tx_data}, std::runtime_error);
+    BOOST_CHECK(!Transaction::Parse(broken_tx_data).has_value());
+    CheckMalformedParseDoesNotSetError(
+        btck_transaction_parse_result,
+        btck_transaction_parse_result_get_status,
+        btck_transaction_parse_result_get_failure_code,
+        btck_transaction_parse_result_get_failure_offset,
+        btck_transaction_parse_result_destroy,
+        broken_tx_data);
     auto input{tx.GetInput(0)};
     BOOST_CHECK_EQUAL(input.GetSequence(), 0xfffffffe);
     auto output{tx.GetOutput(tx.CountOutputs() - 1)};
     BOOST_CHECK_EQUAL(output.Amount(), 42130042);
     auto script_pubkey{output.GetScriptPubkey()};
     {
-        auto tx_new{Transaction{tx_data}};
+        auto tx_new{require_parsed<Transaction>(tx_data)};
         // This is safe, because we now use copy assignment
         TransactionOutput output = tx_new.GetOutput(tx_new.CountOutputs() - 1);
         ScriptPubkey script = output.GetScriptPubkey();
@@ -436,7 +612,7 @@ BOOST_AUTO_TEST_CASE(btck_transaction_tests)
         BOOST_CHECK_EQUAL(output3.Amount(), output2.Amount());
 
         // Non-owned view
-        ScriptPubkeyView script2 = output.GetScriptPubkey();
+        ScriptPubkey script2 = output.GetScriptPubkey();
         BOOST_CHECK_NE(script.get(), script2.get());
         check_equal(script.ToBytes(), script2.ToBytes());
 
@@ -447,14 +623,14 @@ BOOST_AUTO_TEST_CASE(btck_transaction_tests)
     }
     BOOST_CHECK_EQUAL(output.Amount(), 42130042);
 
-    auto tx_roundtrip{Transaction{tx.ToBytes()}};
+    auto tx_roundtrip{require_parsed<Transaction>(tx.ToBytes())};
     check_equal(tx_roundtrip.ToBytes(), tx_data);
 
     // The following code is unsafe, but left here to show limitations of the
     // API, because we preserve the output view beyond the lifetime of the
     // transaction. The view type wrapper should make this clear to the user.
     // auto get_output = [&]() -> TransactionOutputView {
-    //     auto tx{Transaction{tx_data}};
+    //     auto tx{require_parsed<Transaction>(tx_data)};
     //     return tx.GetOutput(0);
     // };
     // auto output_new = get_output();
@@ -505,7 +681,7 @@ BOOST_AUTO_TEST_CASE(btck_transaction_output)
 
 BOOST_AUTO_TEST_CASE(btck_transaction_input)
 {
-    Transaction tx{hex_string_to_byte_vec("020000000248c03e66fd371c7033196ce24298628e59ebefa00363026044e0f35e0325a65d000000006a473044022004893432347f39beaa280e99da595681ddb20fc45010176897e6e055d716dbfa022040a9e46648a5d10c33ef7cee5e6cf4b56bd513eae3ae044f0039824b02d0f44c012102982331a52822fd9b62e9b5d120da1d248558fac3da3a3c51cd7d9c8ad3da760efeffffffb856678c6e4c3c84e39e2ca818807049d6fba274b42af3c6d3f9d4b6513212d2000000006a473044022068bcedc7fe39c9f21ad318df2c2da62c2dc9522a89c28c8420ff9d03d2e6bf7b0220132afd752754e5cb1ea2fd0ed6a38ec666781e34b0e93dc9a08f2457842cf5660121033aeb9c079ea3e08ea03556182ab520ce5c22e6b0cb95cee6435ee17144d860cdfeffffff0260d50b00000000001976a914363cc8d55ea8d0500de728ef6d63804ddddbdc9888ac67040f00000000001976a914c303bdc5064bf9c9a8b507b5496bd0987285707988ac6acb0700")};
+    Transaction tx{require_parsed<Transaction>(hex_string_to_byte_vec("020000000248c03e66fd371c7033196ce24298628e59ebefa00363026044e0f35e0325a65d000000006a473044022004893432347f39beaa280e99da595681ddb20fc45010176897e6e055d716dbfa022040a9e46648a5d10c33ef7cee5e6cf4b56bd513eae3ae044f0039824b02d0f44c012102982331a52822fd9b62e9b5d120da1d248558fac3da3a3c51cd7d9c8ad3da760efeffffffb856678c6e4c3c84e39e2ca818807049d6fba274b42af3c6d3f9d4b6513212d2000000006a473044022068bcedc7fe39c9f21ad318df2c2da62c2dc9522a89c28c8420ff9d03d2e6bf7b0220132afd752754e5cb1ea2fd0ed6a38ec666781e34b0e93dc9a08f2457842cf5660121033aeb9c079ea3e08ea03556182ab520ce5c22e6b0cb95cee6435ee17144d860cdfeffffff0260d50b00000000001976a914363cc8d55ea8d0500de728ef6d63804ddddbdc9888ac67040f00000000001976a914c303bdc5064bf9c9a8b507b5496bd0987285707988ac6acb0700"))};
     TransactionInput input_0 = tx.GetInput(0);
     TransactionInput input_1 = tx.GetInput(1);
     CheckHandle(input_0, input_1);
@@ -515,11 +691,12 @@ BOOST_AUTO_TEST_CASE(btck_transaction_input)
     CheckHandle(point_0, point_1);
 }
 
-BOOST_AUTO_TEST_CASE(btck_precomputed_txdata) {
+BOOST_AUTO_TEST_CASE(btck_precomputed_txdata)
+{
     auto tx_data{hex_string_to_byte_vec("02000000013f7cebd65c27431a90bba7f796914fe8cc2ddfc3f2cbd6f7e5f2fc854534da95000000006b483045022100de1ac3bcdfb0332207c4a91f3832bd2c2915840165f876ab47c5f8996b971c3602201c6c053d750fadde599e6f5c4e1963df0f01fc0d97815e8157e3d59fe09ca30d012103699b464d1d8bc9e47d4fb1cdaa89a1c5783d68363c4dbc4b524ed3d857148617feffffff02836d3c01000000001976a914fc25d6d5c94003bf5b0c7b640a248e2c637fcfb088ac7ada8202000000001976a914fbed3d9b11183209a57999d54d59f67c019e756c88ac6acb0700")};
-    auto tx{Transaction{tx_data}};
+    auto tx{require_parsed<Transaction>(tx_data)};
     auto tx_data_2{hex_string_to_byte_vec("02000000000101904f4ee5c87d20090b642f116e458cd6693292ad9ece23e72f15fb6c05b956210500000000fdffffff02e2010000000000002251200839a723933b56560487ec4d67dda58f09bae518ffa7e148313c5696ac837d9f10060000000000002251205826bcdae7abfb1c468204170eab00d887b61ab143464a4a09e1450bdc59a3340140f26e7af574e647355830772946356c27e7bbc773c5293688890f58983499581be84de40be7311a14e6d6422605df086620e75adae84ff06b75ce5894de5e994a00000000")};
-    auto tx2{Transaction{tx_data_2}};
+    auto tx2{require_parsed<Transaction>(tx_data_2)};
     auto precomputed_txdata{PrecomputedTransactionData{
         /*tx_to=*/tx,
         /*spent_outputs=*/{},
@@ -535,7 +712,7 @@ BOOST_AUTO_TEST_CASE(btck_script_verify_tests)
 {
     // Legacy transaction aca326a724eda9a461c10a876534ecd5ae7b27f10f26c3862fb996f80ea2d45d
     auto legacy_spent_script_pubkey{ScriptPubkey{hex_string_to_byte_vec("76a9144bfbaf6afb76cc5771bc6404810d1cc041a6933988ac")}};
-    auto legacy_spending_tx{Transaction{hex_string_to_byte_vec("02000000013f7cebd65c27431a90bba7f796914fe8cc2ddfc3f2cbd6f7e5f2fc854534da95000000006b483045022100de1ac3bcdfb0332207c4a91f3832bd2c2915840165f876ab47c5f8996b971c3602201c6c053d750fadde599e6f5c4e1963df0f01fc0d97815e8157e3d59fe09ca30d012103699b464d1d8bc9e47d4fb1cdaa89a1c5783d68363c4dbc4b524ed3d857148617feffffff02836d3c01000000001976a914fc25d6d5c94003bf5b0c7b640a248e2c637fcfb088ac7ada8202000000001976a914fbed3d9b11183209a57999d54d59f67c019e756c88ac6acb0700")}};
+    auto legacy_spending_tx{require_parsed<Transaction>(hex_string_to_byte_vec("02000000013f7cebd65c27431a90bba7f796914fe8cc2ddfc3f2cbd6f7e5f2fc854534da95000000006b483045022100de1ac3bcdfb0332207c4a91f3832bd2c2915840165f876ab47c5f8996b971c3602201c6c053d750fadde599e6f5c4e1963df0f01fc0d97815e8157e3d59fe09ca30d012103699b464d1d8bc9e47d4fb1cdaa89a1c5783d68363c4dbc4b524ed3d857148617feffffff02836d3c01000000001976a914fc25d6d5c94003bf5b0c7b640a248e2c637fcfb088ac7ada8202000000001976a914fbed3d9b11183209a57999d54d59f67c019e756c88ac6acb0700"))};
     run_verify_test(
         /*spent_script_pubkey=*/legacy_spent_script_pubkey,
         /*spending_tx=*/legacy_spending_tx,
@@ -543,6 +720,38 @@ BOOST_AUTO_TEST_CASE(btck_script_verify_tests)
         /*amount=*/0,
         /*input_index=*/0,
         /*taproot=*/false);
+
+    auto invalid_flags{static_cast<ScriptVerificationFlags>(1U << 31)};
+    auto status{ScriptVerifyStatus::OK};
+    BOOST_CHECK_EXCEPTION(
+        legacy_spent_script_pubkey.Verify(
+            /*amount=*/0,
+            /*tx_to=*/legacy_spending_tx,
+            /*precomputed_txdata=*/nullptr,
+            /*input_index=*/0,
+            invalid_flags,
+            status),
+        ApiError,
+        [](const ApiError& e) { return e.code() == ErrorCode::INVALID_ARGUMENT; });
+    BOOST_CHECK(status == ScriptVerifyStatus::ERROR_INVALID_FLAGS_COMBINATION);
+
+    btck_Error* error{nullptr};
+    btck_ScriptVerifyStatus c_status{btck_ScriptVerifyStatus_OK};
+    BOOST_CHECK_EQUAL(
+        btck_script_pubkey_verify(
+            legacy_spent_script_pubkey.get(),
+            /*amount=*/0,
+            legacy_spending_tx.get(),
+            /*precomputed_txdata=*/nullptr,
+            /*input_index=*/0,
+            static_cast<btck_ScriptVerificationFlags>(1U << 31),
+            &c_status,
+            &error),
+        0);
+    BOOST_REQUIRE(error != nullptr);
+    BOOST_CHECK_EQUAL(btck_error_get_code(error), btck_ErrorCode_INVALID_ARGUMENT);
+    BOOST_CHECK_EQUAL(c_status, btck_ScriptVerifyStatus_ERROR_INVALID_FLAGS_COMBINATION);
+    btck_error_destroy(error);
 
     // Legacy transaction aca326a724eda9a461c10a876534ecd5ae7b27f10f26c3862fb996f80ea2d45d with precomputed_txdata
     auto legacy_precomputed_txdata{PrecomputedTransactionData{
@@ -559,7 +768,7 @@ BOOST_AUTO_TEST_CASE(btck_script_verify_tests)
 
     // Segwit transaction 1a3e89644985fbbb41e0dcfe176739813542b5937003c46a07de1e3ee7a4a7f3
     auto segwit_spent_script_pubkey{ScriptPubkey{hex_string_to_byte_vec("0020701a8d401c84fb13e6baf169d59684e17abd9fa216c8cc5b9fc63d622ff8c58d")}};
-    auto segwit_spending_tx{Transaction{hex_string_to_byte_vec("010000000001011f97548fbbe7a0db7588a66e18d803d0089315aa7d4cc28360b6ec50ef36718a0100000000ffffffff02df1776000000000017a9146c002a686959067f4866b8fb493ad7970290ab728757d29f0000000000220020701a8d401c84fb13e6baf169d59684e17abd9fa216c8cc5b9fc63d622ff8c58d04004730440220565d170eed95ff95027a69b313758450ba84a01224e1f7f130dda46e94d13f8602207bdd20e307f062594022f12ed5017bbf4a055a06aea91c10110a0e3bb23117fc014730440220647d2dc5b15f60bc37dc42618a370b2a1490293f9e5c8464f53ec4fe1dfe067302203598773895b4b16d37485cbe21b337f4e4b650739880098c592553add7dd4355016952210375e00eb72e29da82b89367947f29ef34afb75e8654f6ea368e0acdfd92976b7c2103a1b26313f430c4b15bb1fdce663207659d8cac749a0e53d70eff01874496feff2103c96d495bfdd5ba4145e3e046fee45e84a8a48ad05bd8dbb395c011a32cf9f88053ae00000000")}};
+    auto segwit_spending_tx{require_parsed<Transaction>(hex_string_to_byte_vec("010000000001011f97548fbbe7a0db7588a66e18d803d0089315aa7d4cc28360b6ec50ef36718a0100000000ffffffff02df1776000000000017a9146c002a686959067f4866b8fb493ad7970290ab728757d29f0000000000220020701a8d401c84fb13e6baf169d59684e17abd9fa216c8cc5b9fc63d622ff8c58d04004730440220565d170eed95ff95027a69b313758450ba84a01224e1f7f130dda46e94d13f8602207bdd20e307f062594022f12ed5017bbf4a055a06aea91c10110a0e3bb23117fc014730440220647d2dc5b15f60bc37dc42618a370b2a1490293f9e5c8464f53ec4fe1dfe067302203598773895b4b16d37485cbe21b337f4e4b650739880098c592553add7dd4355016952210375e00eb72e29da82b89367947f29ef34afb75e8654f6ea368e0acdfd92976b7c2103a1b26313f430c4b15bb1fdce663207659d8cac749a0e53d70eff01874496feff2103c96d495bfdd5ba4145e3e046fee45e84a8a48ad05bd8dbb395c011a32cf9f88053ae00000000"))};
     run_verify_test(
         /*spent_script_pubkey=*/segwit_spent_script_pubkey,
         /*spending_tx=*/segwit_spending_tx,
@@ -583,7 +792,7 @@ BOOST_AUTO_TEST_CASE(btck_script_verify_tests)
 
     // Taproot transaction 33e794d097969002ee05d336686fc03c9e15a597c1b9827669460fac98799036
     auto taproot_spent_script_pubkey{ScriptPubkey{hex_string_to_byte_vec("5120339ce7e165e67d93adb3fef88a6d4beed33f01fa876f05a225242b82a631abc0")}};
-    auto taproot_spending_tx{Transaction{hex_string_to_byte_vec("01000000000101d1f1c1f8cdf6759167b90f52c9ad358a369f95284e841d7a2536cef31c0549580100000000fdffffff020000000000000000316a2f49206c696b65205363686e6f7272207369677320616e6420492063616e6e6f74206c69652e204062697462756734329e06010000000000225120a37c3903c8d0db6512e2b40b0dffa05e5a3ab73603ce8c9c4b7771e5412328f90140a60c383f71bac0ec919b1d7dbc3eb72dd56e7aa99583615564f9f99b8ae4e837b758773a5b2e4c51348854c8389f008e05029db7f464a5ff2e01d5e6e626174affd30a00")}};
+    auto taproot_spending_tx{require_parsed<Transaction>(hex_string_to_byte_vec("01000000000101d1f1c1f8cdf6759167b90f52c9ad358a369f95284e841d7a2536cef31c0549580100000000fdffffff020000000000000000316a2f49206c696b65205363686e6f7272207369677320616e6420492063616e6e6f74206c69652e204062697462756734329e06010000000000225120a37c3903c8d0db6512e2b40b0dffa05e5a3ab73603ce8c9c4b7771e5412328f90140a60c383f71bac0ec919b1d7dbc3eb72dd56e7aa99583615564f9f99b8ae4e837b758773a5b2e4c51348854c8389f008e05029db7f464a5ff2e01d5e6e626174affd30a00"))};
     std::vector<TransactionOutput> taproot_spent_outputs;
     taproot_spent_outputs.emplace_back(taproot_spent_script_pubkey, 88480);
     auto taproot_precomputed_txdata{PrecomputedTransactionData{
@@ -601,7 +810,7 @@ BOOST_AUTO_TEST_CASE(btck_script_verify_tests)
     // Two-input taproot transaction e8e8320f40c31ed511570e9cdf1d241f8ec9a5cc392e6105240ac8dbea2098de
     auto taproot2_spent_script_pubkey0{ScriptPubkey{hex_string_to_byte_vec("5120b7da80f57e36930b0515eb09293e25858d13e6b91fee6184943f5a584cb4248e")}};
     auto taproot2_spent_script_pubkey1{ScriptPubkey{hex_string_to_byte_vec("5120ab78e077d062e7b8acd7063668b4db5355a1b5d5fd2a46a8e98e62e5e63fab77")}};
-    auto taproot2_spending_tx{Transaction{hex_string_to_byte_vec("02000000000102c0f01ead18750892c84b1d4f595149ad38f16847df1fbf490e235b3b78c1f98a0100000000ffffffff456764a19c2682bf5b1567119f06a421849ad1664cf42b5ef95b69d6e2159e9d0000000000ffffffff022202000000000000225120b6c0c2a8ee25a2ae0322ab7f1a06f01746f81f6b90d179c3c2a51a356e6188f1d70e020000000000225120b7da80f57e36930b0515eb09293e25858d13e6b91fee6184943f5a584cb4248e0141933fdc49eb1af1f08ed1e9cf5559259309a8acd25ff1e6999b6955124438aef4fceaa4e6a5f85286631e24837329563595bc3cf4b31e1c687442abb01c4206818101401c9620faf1e8c84187762ad14d04ae3857f59a2f03f1dcbb99290e16dfc572a63b4ea435780a5787af59beb5742fd71cda8a95381517a1ff14b4c67996c4bf8100000000")}};
+    auto taproot2_spending_tx{require_parsed<Transaction>(hex_string_to_byte_vec("02000000000102c0f01ead18750892c84b1d4f595149ad38f16847df1fbf490e235b3b78c1f98a0100000000ffffffff456764a19c2682bf5b1567119f06a421849ad1664cf42b5ef95b69d6e2159e9d0000000000ffffffff022202000000000000225120b6c0c2a8ee25a2ae0322ab7f1a06f01746f81f6b90d179c3c2a51a356e6188f1d70e020000000000225120b7da80f57e36930b0515eb09293e25858d13e6b91fee6184943f5a584cb4248e0141933fdc49eb1af1f08ed1e9cf5559259309a8acd25ff1e6999b6955124438aef4fceaa4e6a5f85286631e24837329563595bc3cf4b31e1c687442abb01c4206818101401c9620faf1e8c84187762ad14d04ae3857f59a2f03f1dcbb99290e16dfc572a63b4ea435780a5787af59beb5742fd71cda8a95381517a1ff14b4c67996c4bf8100000000"))};
     std::vector<TransactionOutput> taproot2_spent_outputs;
     taproot2_spent_outputs.emplace_back(taproot2_spent_script_pubkey0, 546);
     taproot2_spent_outputs.emplace_back(taproot2_spent_script_pubkey1, 135125);
@@ -670,7 +879,20 @@ BOOST_AUTO_TEST_CASE(btck_context_tests)
         ChainParams regtest_params{ChainType::REGTEST};
         CheckHandle(params, regtest_params);
         options.SetChainParams(params);
-        options.SetNotifications(std::make_shared<TestKernelNotifications>());
+        options.SetNotifications(MakeTestKernelNotifications());
+        Context context{options};
+    }
+
+    { // test status-returning C option mutators
+        ContextOptions options{};
+        ChainParams params{ChainType::REGTEST};
+        btck_Error* error{nullptr};
+        BOOST_CHECK_EQUAL(btck_context_options_set_chainparams(options.get(), params.get(), &error), 0);
+        BOOST_CHECK(error == nullptr);
+        BOOST_CHECK_EQUAL(btck_context_options_set_notifications(options.get(), btck_NotificationInterfaceCallbacks{}, &error), 0);
+        BOOST_CHECK(error == nullptr);
+        BOOST_CHECK_EQUAL(btck_context_options_set_validation_interface(options.get(), btck_ValidationInterfaceCallbacks{}, &error), 0);
+        BOOST_CHECK(error == nullptr);
         Context context{options};
     }
 }
@@ -678,18 +900,50 @@ BOOST_AUTO_TEST_CASE(btck_context_tests)
 BOOST_AUTO_TEST_CASE(btck_block_header_tests)
 {
     // Block header format: version(4) + prev_hash(32) + merkle_root(32) + timestamp(4) + bits(4) + nonce(4) = 80 bytes
-    BlockHeader header_0{hex_string_to_byte_vec("00e07a26beaaeee2e71d7eb19279545edbaf15de0999983626ec00000000000000000000579cf78b65229bfb93f4a11463af2eaa5ad91780f27f5d147a423bea5f7e4cdf2a47e268b4dd01173a9662ee")};
+    auto header_0{require_parsed<BlockHeader>(hex_string_to_byte_vec("00e07a26beaaeee2e71d7eb19279545edbaf15de0999983626ec00000000000000000000579cf78b65229bfb93f4a11463af2eaa5ad91780f27f5d147a423bea5f7e4cdf2a47e268b4dd01173a9662ee"))};
     BOOST_CHECK_EQUAL(byte_span_to_hex_string_reversed(header_0.Hash().ToBytes()), "00000000000000000000325c7e14a4ee3b4fcb2343089a839287308a0ddbee4f");
-    BlockHeader header_1{hex_string_to_byte_vec("00c00020e7cb7b4de21d26d55bd384017b8bb9333ac3b2b55bed00000000000000000000d91b4484f801b99f03d36b9d26cfa83420b67f81da12d7e6c1e7f364e743c5ba9946e268b4dd011799c8533d")};
+    auto header_1{require_parsed<BlockHeader>(hex_string_to_byte_vec("00c00020e7cb7b4de21d26d55bd384017b8bb9333ac3b2b55bed00000000000000000000d91b4484f801b99f03d36b9d26cfa83420b67f81da12d7e6c1e7f364e743c5ba9946e268b4dd011799c8533d"))};
     CheckHandle(header_0, header_1);
 
     // Test error handling for invalid data
-    BOOST_CHECK_THROW(BlockHeader{hex_string_to_byte_vec("00")}, std::runtime_error);
-    BOOST_CHECK_THROW(BlockHeader{hex_string_to_byte_vec("")}, std::runtime_error);
+    auto short_header_data{hex_string_to_byte_vec("00")};
+    BOOST_CHECK(!BlockHeader::Parse(short_header_data).has_value());
+    CheckMalformedParseDoesNotSetError(
+        btck_block_header_parse_result,
+        btck_block_header_parse_result_get_status,
+        btck_block_header_parse_result_get_failure_code,
+        btck_block_header_parse_result_get_failure_offset,
+        btck_block_header_parse_result_destroy,
+        short_header_data,
+        btck_ParseFailureCode_TRUNCATED);
+    auto empty_header_data{hex_string_to_byte_vec("")};
+    BOOST_CHECK(!BlockHeader::Parse(empty_header_data).has_value());
+    CheckMalformedParseDoesNotSetError(
+        btck_block_header_parse_result,
+        btck_block_header_parse_result_get_status,
+        btck_block_header_parse_result_get_failure_code,
+        btck_block_header_parse_result_get_failure_offset,
+        btck_block_header_parse_result_destroy,
+        empty_header_data,
+        btck_ParseFailureCode_TRUNCATED,
+        size_t{0});
+    auto trailing_header{header_0.ToBytes()};
+    std::vector<std::byte> trailing_header_data{trailing_header.begin(), trailing_header.end()};
+    trailing_header_data.push_back(std::byte{0x00});
+    BOOST_CHECK(!BlockHeader::Parse(trailing_header_data).has_value());
+    CheckMalformedParseDoesNotSetError(
+        btck_block_header_parse_result,
+        btck_block_header_parse_result_get_status,
+        btck_block_header_parse_result_get_failure_code,
+        btck_block_header_parse_result_get_failure_offset,
+        btck_block_header_parse_result_destroy,
+        trailing_header_data,
+        btck_ParseFailureCode_TRAILING_DATA,
+        size_t{80});
 
     // Test all header field accessors using mainnet block 1
     auto mainnet_block_1_header = hex_string_to_byte_vec("010000006fe28c0ab6f1b372c1a6a246ae63f74f931e8365e15a089c68d6190000000000982051fd1e4ba744bbbe680e1fee14677ba1a3c3540bf7b1cdb606e857233e0e61bc6649ffff001d01e36299");
-    BlockHeader header{mainnet_block_1_header};
+    auto header{require_parsed<BlockHeader>(mainnet_block_1_header)};
     BOOST_CHECK_EQUAL(header.Version(), 1);
     BOOST_CHECK_EQUAL(header.Timestamp(), 1231469665);
     BOOST_CHECK_EQUAL(header.Bits(), 0x1d00ffff);
@@ -699,11 +953,11 @@ BOOST_AUTO_TEST_CASE(btck_block_header_tests)
     BOOST_CHECK_EQUAL(byte_span_to_hex_string_reversed(prev_hash.ToBytes()), "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f");
 
     // Test round-trip serialization of block header
-    auto header_roundtrip{BlockHeader{header.ToBytes()}};
+    auto header_roundtrip{require_parsed<BlockHeader>(header.ToBytes())};
     check_equal(header_roundtrip.ToBytes(), mainnet_block_1_header);
 
     auto raw_block = hex_string_to_byte_vec("010000006fe28c0ab6f1b372c1a6a246ae63f74f931e8365e15a089c68d6190000000000982051fd1e4ba744bbbe680e1fee14677ba1a3c3540bf7b1cdb606e857233e0e61bc6649ffff001d01e362990101000000010000000000000000000000000000000000000000000000000000000000000000ffffffff0704ffff001d0104ffffffff0100f2052a0100000043410496b538e853519c726a2c91e61ec11600ae1390813a627c66fb8be7947be63c52da7589379515d4e0a604f8141781e62294721166bf621e73a82cbf2342c858eeac00000000");
-    Block block{raw_block};
+    auto block{require_parsed<Block>(raw_block)};
     BlockHeader block_header{block.GetHeader()};
     BOOST_CHECK_EQUAL(block_header.Version(), 1);
     BOOST_CHECK_EQUAL(block_header.Timestamp(), 1231469665);
@@ -719,28 +973,66 @@ BOOST_AUTO_TEST_CASE(btck_block_header_tests)
 
 BOOST_AUTO_TEST_CASE(btck_block)
 {
-    Block block{hex_string_to_byte_vec(REGTEST_BLOCK_DATA[0])};
-    Block block_100{hex_string_to_byte_vec(REGTEST_BLOCK_DATA[100])};
+    auto block{require_parsed<Block>(hex_string_to_byte_vec(REGTEST_BLOCK_DATA[0]))};
+    auto block_100{require_parsed<Block>(hex_string_to_byte_vec(REGTEST_BLOCK_DATA[100]))};
     CheckHandle(block, block_100);
-    Block block_tx{hex_string_to_byte_vec(REGTEST_BLOCK_DATA[205])};
+    auto block_tx{require_parsed<Block>(hex_string_to_byte_vec(REGTEST_BLOCK_DATA[205]))};
     CheckRange(block_tx.Transactions(), block_tx.CountTransactions());
     auto invalid_data = hex_string_to_byte_vec("012300");
-    BOOST_CHECK_THROW(Block{invalid_data}, std::runtime_error);
+    BOOST_CHECK(!Block::Parse(invalid_data).has_value());
+    CheckMalformedParseDoesNotSetError(
+        btck_block_parse_result,
+        btck_block_parse_result_get_status,
+        btck_block_parse_result_get_failure_code,
+        btck_block_parse_result_get_failure_offset,
+        btck_block_parse_result_destroy,
+        invalid_data);
     auto empty_data = hex_string_to_byte_vec("");
-    BOOST_CHECK_THROW(Block{empty_data}, std::runtime_error);
+    BOOST_CHECK(!Block::Parse(empty_data).has_value());
+    CheckMalformedParseDoesNotSetError(
+        btck_block_parse_result,
+        btck_block_parse_result_get_status,
+        btck_block_parse_result_get_failure_code,
+        btck_block_parse_result_get_failure_offset,
+        btck_block_parse_result_destroy,
+        empty_data,
+        btck_ParseFailureCode_TRUNCATED,
+        size_t{0});
+    auto trailing_block_data{hex_string_to_byte_vec(REGTEST_BLOCK_DATA[0])};
+    trailing_block_data.push_back(std::byte{0x00});
+    BOOST_CHECK(!Block::Parse(trailing_block_data).has_value());
+    CheckMalformedParseDoesNotSetError(
+        btck_block_parse_result,
+        btck_block_parse_result_get_status,
+        btck_block_parse_result_get_failure_code,
+        btck_block_parse_result_get_failure_offset,
+        btck_block_parse_result_destroy,
+        trailing_block_data,
+        btck_ParseFailureCode_TRAILING_DATA,
+        trailing_block_data.size() - 1);
 }
 
-Context create_context(std::shared_ptr<TestKernelNotifications> notifications, ChainType chain_type, std::shared_ptr<TestValidationInterface> validation_interface = nullptr)
+Context create_context(KernelNotifications notifications, ChainType chain_type, ValidationInterface validation_interface = {})
 {
     ContextOptions options{};
     ChainParams params{chain_type};
     options.SetChainParams(params);
-    options.SetNotifications(notifications);
-    if (validation_interface) {
-        options.SetValidationInterface(validation_interface);
-    }
+    options.SetNotifications(std::move(notifications));
+    options.SetValidationInterface(std::move(validation_interface));
     auto context{Context{options}};
     return context;
+}
+
+ChainstateRuntime ChainstateRuntimeForTest(int64_t current_time)
+{
+    ChainstateRuntime options;
+    options.SetCurrentTime(current_time);
+    return options;
+}
+
+ChainstateRuntime ExplicitChainstateRuntimeForTest()
+{
+    return ChainstateRuntimeForTest(2'000'000'000);
 }
 
 BOOST_AUTO_TEST_CASE(btck_chainman_tests)
@@ -750,15 +1042,22 @@ BOOST_AUTO_TEST_CASE(btck_chainman_tests)
 
     { // test with default context
         Context context{};
-        ChainstateManagerOptions chainman_opts{context, PathToString(test_directory.m_directory), PathToString(test_directory.m_directory / "blocks")};
-        ChainMan chainman{context, chainman_opts};
+        ChainstateOptions chainman_opts{context, PathToString(test_directory.m_directory), PathToString(test_directory.m_directory / "blocks")};
+        ChainstateRuntime unset_runtime_options;
+        BOOST_CHECK_THROW(Chainstate(chainman_opts, unset_runtime_options), std::runtime_error);
+        btck_Error* error{nullptr};
+        BOOST_CHECK(btck_chainstate_open(chainman_opts.get(), unset_runtime_options.get(), &error) == nullptr);
+        BOOST_REQUIRE(error != nullptr);
+        BOOST_CHECK_EQUAL(btck_error_get_code(error), btck_ErrorCode_INVALID_ARGUMENT);
+        btck_error_destroy(error);
+        Chainstate chainman{chainman_opts, ExplicitChainstateRuntimeForTest()};
     }
 
     { // test with default context options
         ContextOptions options{};
         Context context{options};
-        ChainstateManagerOptions chainman_opts{context, PathToString(test_directory.m_directory), PathToString(test_directory.m_directory / "blocks")};
-        ChainMan chainman{context, chainman_opts};
+        ChainstateOptions chainman_opts{context, PathToString(test_directory.m_directory), PathToString(test_directory.m_directory / "blocks")};
+        Chainstate chainman{chainman_opts, ExplicitChainstateRuntimeForTest()};
     }
     { // null or empty data_directory or blocks_directory are not allowed
         Context context{};
@@ -770,89 +1069,297 @@ BOOST_AUTO_TEST_CASE(btck_chainman_tests)
             {{nullptr, 0}, {nullptr, 0}},
         };
         for (auto& [data_dir, blocks_dir] : illegal_cases) {
-            BOOST_CHECK_THROW(ChainstateManagerOptions(context, data_dir, blocks_dir),
+            BOOST_CHECK_THROW(ChainstateOptions(context, data_dir, blocks_dir),
                               std::runtime_error);
         };
     }
 
-    auto notifications{std::make_shared<TestKernelNotifications>()};
+    auto notifications{MakeTestKernelNotifications()};
     auto context{create_context(notifications, ChainType::MAINNET)};
 
-    ChainstateManagerOptions chainman_opts{context, PathToString(test_directory.m_directory), PathToString(test_directory.m_directory / "blocks")};
+    ChainstateOptions chainman_opts{context, PathToString(test_directory.m_directory), PathToString(test_directory.m_directory / "blocks")};
+    btck_Error* error{nullptr};
+    BOOST_CHECK_EQUAL(btck_chainstate_options_set_worker_threads_num(chainman_opts.get(), 4, &error), 0);
+    BOOST_CHECK(error == nullptr);
+    BOOST_CHECK_EQUAL(btck_chainstate_options_set_in_memory(chainman_opts.get(), 0, &error), 0);
+    BOOST_CHECK(error == nullptr);
     chainman_opts.SetWorkerThreads(4);
-    BOOST_CHECK(!chainman_opts.SetWipeDbs(/*wipe_block_tree=*/true, /*wipe_chainstate=*/false));
-    BOOST_CHECK(chainman_opts.SetWipeDbs(/*wipe_block_tree=*/true, /*wipe_chainstate=*/true));
-    BOOST_CHECK(chainman_opts.SetWipeDbs(/*wipe_block_tree=*/false, /*wipe_chainstate=*/true));
-    BOOST_CHECK(chainman_opts.SetWipeDbs(/*wipe_block_tree=*/false, /*wipe_chainstate=*/false));
-    ChainMan chainman{context, chainman_opts};
+    BOOST_CHECK(!chainman_opts.SetWipeState(/*reindex_block_files=*/true, /*wipe_chainstate=*/false));
+    BOOST_CHECK(chainman_opts.SetWipeState(/*reindex_block_files=*/true, /*wipe_chainstate=*/true));
+    BOOST_CHECK(chainman_opts.SetWipeState(/*reindex_block_files=*/false, /*wipe_chainstate=*/true));
+    BOOST_CHECK(chainman_opts.SetWipeState(/*reindex_block_files=*/false, /*wipe_chainstate=*/false));
+    {
+        auto runtime_options{ExplicitChainstateRuntimeForTest()};
+        btck_Error* error{nullptr};
+        btck_Chainstate* raw_chainman{btck_chainstate_open(chainman_opts.get(), runtime_options.get(), &error)};
+        BOOST_REQUIRE(raw_chainman != nullptr);
+        BOOST_CHECK(error == nullptr);
+        btck_BlockImportResult* import_result{btck_chainstate_import_blocks_result(raw_chainman, nullptr, nullptr, 1, runtime_options.get(), &error)};
+        BOOST_CHECK(import_result == nullptr);
+        BOOST_REQUIRE(error != nullptr);
+        BOOST_CHECK_EQUAL(btck_error_get_code(error), btck_ErrorCode_INVALID_ARGUMENT);
+        btck_error_destroy(error);
+        error = nullptr;
+
+        const char* null_path_entries[]{nullptr};
+        const size_t null_path_lens[]{1};
+        import_result = btck_chainstate_import_blocks_result(raw_chainman, null_path_entries, null_path_lens, 1, runtime_options.get(), &error);
+        BOOST_CHECK(import_result == nullptr);
+        BOOST_REQUIRE(error != nullptr);
+        BOOST_CHECK_EQUAL(btck_error_get_code(error), btck_ErrorCode_INVALID_ARGUMENT);
+        btck_error_destroy(error);
+        error = nullptr;
+
+        const std::string missing_path{PathToString(test_directory.m_directory / "missing-blk.dat")};
+        const char* missing_path_entries[]{missing_path.data()};
+        const size_t missing_path_lens[]{missing_path.size()};
+        import_result = btck_chainstate_import_blocks_result(raw_chainman, missing_path_entries, missing_path_lens, 1, runtime_options.get(), &error);
+        BOOST_CHECK(import_result == nullptr);
+        BOOST_REQUIRE(error != nullptr);
+        BOOST_CHECK_EQUAL(btck_error_get_code(error), btck_ErrorCode_IO_READ);
+        btck_error_destroy(error);
+        btck_chainstate_destroy(raw_chainman);
+    }
+    Chainstate chainman{chainman_opts, ExplicitChainstateRuntimeForTest()};
 }
 
-std::unique_ptr<ChainMan> create_chainman(TestDirectory& test_directory,
-                                          bool reindex,
-                                          bool wipe_chainstate,
-                                          bool block_tree_db_in_memory,
-                                          bool chainstate_db_in_memory,
-                                          Context& context)
+std::unique_ptr<Chainstate> create_chainman(TestDirectory& test_directory,
+                                            bool reindex,
+                                            bool wipe_chainstate,
+                                            bool in_memory,
+                                            Context& context)
 {
-    ChainstateManagerOptions chainman_opts{context, PathToString(test_directory.m_directory), PathToString(test_directory.m_directory / "blocks")};
+    ChainstateOptions chainman_opts{context, PathToString(test_directory.m_directory), PathToString(test_directory.m_directory / "blocks")};
 
     if (reindex) {
-        chainman_opts.SetWipeDbs(/*wipe_block_tree=*/reindex, /*wipe_chainstate=*/reindex);
+        chainman_opts.SetWipeState(/*reindex_block_files=*/reindex, /*wipe_chainstate=*/reindex);
     }
     if (wipe_chainstate) {
-        chainman_opts.SetWipeDbs(/*wipe_block_tree=*/false, /*wipe_chainstate=*/wipe_chainstate);
+        chainman_opts.SetWipeState(/*reindex_block_files=*/false, /*wipe_chainstate=*/wipe_chainstate);
     }
-    if (block_tree_db_in_memory) {
-        chainman_opts.UpdateBlockTreeDbInMemory(block_tree_db_in_memory);
-    }
-    if (chainstate_db_in_memory) {
-        chainman_opts.UpdateChainstateDbInMemory(chainstate_db_in_memory);
+    if (in_memory) {
+        chainman_opts.SetInMemory(true);
     }
 
-    auto chainman{std::make_unique<ChainMan>(context, chainman_opts)};
+    auto chainman{std::make_unique<Chainstate>(chainman_opts, ExplicitChainstateRuntimeForTest())};
     return chainman;
+}
+
+BlockValidationOptions ValidationTimeForTest(int64_t current_time)
+{
+    BlockValidationOptions options;
+    options.SetCurrentTime(current_time);
+    return options;
+}
+
+BlockValidationOptions ExplicitValidationTimeForTest()
+{
+    return ValidationTimeForTest(2'000'000'000);
+}
+
+BOOST_AUTO_TEST_CASE(btck_block_validation_options_tests)
+{
+    BlockValidationOptions options;
+    btck_Error* error{nullptr};
+    BOOST_CHECK_EQUAL(btck_block_validation_options_set_current_time(options.get(), -1, &error), -1);
+    BOOST_REQUIRE(error != nullptr);
+    BOOST_CHECK_EQUAL(btck_error_get_code(error), btck_ErrorCode_INVALID_ARGUMENT);
+    btck_error_destroy(error);
+    error = nullptr;
+    BOOST_CHECK_EQUAL(btck_block_validation_options_set_current_time(options.get(), std::numeric_limits<int64_t>::max(), &error), -1);
+    BOOST_REQUIRE(error != nullptr);
+    BOOST_CHECK_EQUAL(btck_error_get_code(error), btck_ErrorCode_INVALID_ARGUMENT);
+    btck_error_destroy(error);
+
+    auto header{require_parsed<BlockHeader>(hex_string_to_byte_vec("010000006fe28c0ab6f1b372c1a6a246ae63f74f931e8365e15a089c68d6190000000000982051fd1e4ba744bbbe680e1fee14677ba1a3c3540bf7b1cdb606e857233e0e61bc6649ffff001d01e36299"))};
+    auto test_directory{TestDirectory{"block_validation_options_test_bitcoin_kernel"}};
+    auto notifications{MakeTestKernelNotifications()};
+    auto context{create_context(notifications, ChainType::MAINNET)};
+    auto chainman{create_chainman(
+        test_directory, /*reindex=*/false, /*wipe_chainstate=*/false,
+        /*in_memory=*/true, context)};
+
+    BlockValidationOptions unset_options;
+    BOOST_CHECK_THROW(chainman->ProcessBlockHeader(header, unset_options), std::runtime_error);
+
+    options.SetCurrentTime(static_cast<int64_t>(header.Timestamp()) - 2 * 60 * 60 - 1);
+
+    const HeaderProcessResult result{chainman->ProcessBlockHeader(header, options)};
+    BOOST_CHECK(result.status == HeaderProcessStatus::REJECTED);
+    BOOST_CHECK(result.validation_state.GetValidationMode() == ValidationMode::INVALID);
+    BOOST_CHECK(result.validation_state.GetBlockValidationResult() == BlockValidationResult::TIME_FUTURE);
+}
+
+BOOST_AUTO_TEST_CASE(btck_validation_time_is_supplied_per_operation)
+{
+    auto block{require_parsed<Block>(hex_string_to_byte_vec(REGTEST_BLOCK_DATA[0]))};
+    BlockHeader header{block.GetHeader()};
+    const int64_t block_time{static_cast<int64_t>(header.Timestamp())};
+    const int64_t too_early{block_time - 2 * 60 * 60 - 1};
+
+    auto process_header_at = [&](int64_t current_time, std::string test_name) {
+        auto test_directory{TestDirectory{std::move(test_name)}};
+        auto notifications{MakeTestKernelNotifications()};
+        auto context{create_context(notifications, ChainType::REGTEST)};
+        auto chainman{create_chainman(
+            test_directory, /*reindex=*/false, /*wipe_chainstate=*/false,
+            /*in_memory=*/true, context)};
+        BlockValidationOptions options{ValidationTimeForTest(current_time)};
+        return chainman->ProcessBlockHeader(header, options);
+    };
+
+    const HeaderProcessResult future_header_result{
+        process_header_at(too_early, "header_future_time_test_bitcoin_kernel")};
+    BOOST_CHECK(future_header_result.status == HeaderProcessStatus::REJECTED);
+    BOOST_CHECK(future_header_result.validation_state.GetValidationMode() == ValidationMode::INVALID);
+    BOOST_CHECK(future_header_result.validation_state.GetBlockValidationResult() == BlockValidationResult::TIME_FUTURE);
+
+    const HeaderProcessResult accepted_header_result{
+        process_header_at(block_time, "header_current_time_test_bitcoin_kernel")};
+    BOOST_CHECK(accepted_header_result.status == HeaderProcessStatus::ACCEPTED);
+    BOOST_CHECK(accepted_header_result.validation_state.GetValidationMode() == ValidationMode::VALID);
+    BOOST_CHECK(accepted_header_result.validation_state.GetBlockValidationResult() == BlockValidationResult::UNSET);
+
+    auto process_block_at = [&](int64_t current_time, std::string test_name) {
+        auto test_directory{TestDirectory{std::move(test_name)}};
+        auto notifications{MakeTestKernelNotifications()};
+        auto context{create_context(notifications, ChainType::REGTEST)};
+        auto chainman{create_chainman(
+            test_directory, /*reindex=*/false, /*wipe_chainstate=*/false,
+            /*in_memory=*/true, context)};
+        BlockValidationOptions options{ValidationTimeForTest(current_time)};
+        return chainman->ProcessBlock(block, options);
+    };
+
+    const BlockProcessResult future_block_result{
+        process_block_at(too_early, "block_future_time_test_bitcoin_kernel")};
+    BOOST_CHECK(!future_block_result.processed);
+    BOOST_CHECK(!future_block_result.new_block);
+    BOOST_CHECK(future_block_result.validation_state.GetValidationMode() == ValidationMode::INVALID);
+    BOOST_CHECK(future_block_result.validation_state.GetBlockValidationResult() == BlockValidationResult::TIME_FUTURE);
+
+    const BlockProcessResult accepted_block_result{
+        process_block_at(block_time, "block_current_time_test_bitcoin_kernel")};
+    BOOST_CHECK(accepted_block_result.processed);
+    BOOST_CHECK(accepted_block_result.new_block);
+    BOOST_CHECK(accepted_block_result.validation_state.GetValidationMode() == ValidationMode::VALID);
+    BOOST_CHECK(accepted_block_result.validation_state.GetBlockValidationResult() == BlockValidationResult::UNSET);
+}
+
+BOOST_AUTO_TEST_CASE(btck_notification_callback_failure_is_reported)
+{
+    auto test_directory{TestDirectory{"notification_callback_failure_test_bitcoin_kernel"}};
+    auto callback_count{std::make_shared<int>(0)};
+    auto armed{std::make_shared<bool>(false)};
+    auto notifications{MakeTestKernelNotifications()};
+    notifications.header_tip = [callback_count, armed](SynchronizationState, int64_t, int64_t, bool) {
+        if (!*armed) return;
+        ++(*callback_count);
+        throw std::runtime_error{"header tip callback failed"};
+    };
+
+    auto context{create_context(std::move(notifications), ChainType::REGTEST)};
+    auto chainman{create_chainman(
+        test_directory,
+        /*reindex=*/false,
+        /*wipe_chainstate=*/false,
+        /*in_memory=*/true,
+        context)};
+
+    auto block{require_parsed<Block>(hex_string_to_byte_vec(REGTEST_BLOCK_DATA[0]))};
+    auto header{block.GetHeader()};
+    auto validation_options{ExplicitValidationTimeForTest()};
+
+    *armed = true;
+    try {
+        (void)chainman->ProcessBlockHeader(header, validation_options);
+        BOOST_FAIL("header notification callback failure was not reported");
+    } catch (const ApiError& e) {
+        BOOST_CHECK(e.code() == ErrorCode::CALLBACK);
+        BOOST_CHECK_NE(std::string{e.what()}.find("callback"), std::string::npos);
+    }
+    BOOST_CHECK_EQUAL(*callback_count, 1);
+
+    *armed = false;
+    BOOST_CHECK_NO_THROW((void)chainman->ProcessBlockHeader(header, validation_options));
+}
+
+BOOST_AUTO_TEST_CASE(btck_validation_interface_callback_failure_is_reported)
+{
+    auto test_directory{TestDirectory{"validation_interface_callback_failure_test_bitcoin_kernel"}};
+    auto callback_count{std::make_shared<int>(0)};
+    auto armed{std::make_shared<bool>(false)};
+    ValidationInterface validation_interface;
+    validation_interface.block_checked = [callback_count, armed](BlockView, BlockValidationStateView) {
+        if (!*armed) return;
+        ++(*callback_count);
+        throw std::runtime_error{"block checked callback failed"};
+    };
+
+    auto context{create_context(MakeTestKernelNotifications(), ChainType::REGTEST, std::move(validation_interface))};
+    auto chainman{create_chainman(
+        test_directory,
+        /*reindex=*/false,
+        /*wipe_chainstate=*/false,
+        /*in_memory=*/true,
+        context)};
+
+    auto block{require_parsed<Block>(hex_string_to_byte_vec(REGTEST_BLOCK_DATA[0]))};
+    auto validation_options{ExplicitValidationTimeForTest()};
+
+    *callback_count = 0;
+    *armed = true;
+    try {
+        (void)chainman->ProcessBlock(block, validation_options);
+        BOOST_FAIL("validation interface callback failure was not reported");
+    } catch (const ApiError& e) {
+        BOOST_CHECK(e.code() == ErrorCode::CALLBACK);
+        BOOST_CHECK_NE(std::string{e.what()}.find("callback"), std::string::npos);
+    }
+    BOOST_CHECK_EQUAL(*callback_count, 1);
 }
 
 void chainman_reindex_test(TestDirectory& test_directory)
 {
-    auto notifications{std::make_shared<TestKernelNotifications>()};
+    auto notifications{MakeTestKernelNotifications()};
     auto context{create_context(notifications, ChainType::MAINNET)};
     auto chainman{create_chainman(
         test_directory, /*reindex=*/true, /*wipe_chainstate=*/false,
-        /*block_tree_db_in_memory=*/false, /*chainstate_db_in_memory=*/false, context)};
+        /*in_memory=*/false, context)};
 
     std::vector<std::string> import_files;
-    BOOST_CHECK(chainman->ImportBlocks(import_files));
+    const BlockImportResult reindex_result{chainman->ImportBlocks(import_files, ExplicitChainstateRuntimeForTest())};
+    BOOST_CHECK(reindex_result.status == BlockImportStatus::COMPLETED);
 
     // Sanity check some block retrievals
-    auto chain{chainman->GetChain()};
+    auto chain{chainman->SnapshotActiveChain()};
     BOOST_CHECK_THROW(chain.GetByHeight(1000), std::runtime_error);
-    auto genesis_index{chain.Entries().front()};
-    BOOST_CHECK(!genesis_index.GetPrevious());
-    auto genesis_block_raw{chainman->ReadBlock(genesis_index).value().ToBytes()};
-    auto first_index{chain.GetByHeight(0)};
-    auto first_block_raw{chainman->ReadBlock(genesis_index).value().ToBytes()};
+    auto genesis_info{chain.Entries().front()};
+    BOOST_CHECK(!genesis_info.PreviousHash());
+    auto genesis_block_raw{chainman->ReadBlock(genesis_info).value().ToBytes()};
+    auto first_info{chain.GetByHeight(0)};
+    auto first_block_raw{chainman->ReadBlock(genesis_info).value().ToBytes()};
     check_equal(genesis_block_raw, first_block_raw);
-    auto height{first_index.GetHeight()};
+    auto height{first_info.GetHeight()};
     BOOST_CHECK_EQUAL(height, 0);
 
-    auto next_index{chain.GetByHeight(first_index.GetHeight() + 1)};
-    BOOST_CHECK(chain.Contains(next_index));
-    auto next_block_data{chainman->ReadBlock(next_index).value().ToBytes()};
-    auto tip_index{chain.Entries().back()};
-    auto tip_block_data{chainman->ReadBlock(tip_index).value().ToBytes()};
-    auto second_index{chain.GetByHeight(1)};
-    auto second_block{chainman->ReadBlock(second_index).value()};
+    auto next_info{chain.GetByHeight(first_info.GetHeight() + 1)};
+    BOOST_CHECK(chain.Contains(next_info));
+    auto next_block_data{chainman->ReadBlock(next_info).value().ToBytes()};
+    auto tip_info{chain.Entries().back()};
+    auto tip_block_data{chainman->ReadBlock(tip_info).value().ToBytes()};
+    auto second_info{chain.GetByHeight(1)};
+    auto second_block{chainman->ReadBlock(second_info).value()};
     auto second_block_data{second_block.ToBytes()};
-    auto second_height{second_index.GetHeight()};
+    auto second_height{second_info.GetHeight()};
     BOOST_CHECK_EQUAL(second_height, 1);
     check_equal(next_block_data, tip_block_data);
     check_equal(next_block_data, second_block_data);
 
-    auto second_hash{second_index.GetHash()};
-    auto another_second_index{chainman->GetBlockTreeEntry(second_hash)};
-    BOOST_CHECK(another_second_index);
-    auto another_second_height{another_second_index->GetHeight()};
+    auto second_hash{second_info.GetHash()};
+    auto another_second_info{chainman->GetBlockInfo(second_hash)};
+    BOOST_CHECK(another_second_info);
+    auto another_second_height{another_second_info->GetHeight()};
     auto second_block_hash{second_block.GetHash()};
     check_equal(second_block_hash.ToBytes(), second_hash.ToBytes());
     BOOST_CHECK_EQUAL(second_height, another_second_height);
@@ -860,29 +1367,30 @@ void chainman_reindex_test(TestDirectory& test_directory)
 
 void chainman_reindex_chainstate_test(TestDirectory& test_directory)
 {
-    auto notifications{std::make_shared<TestKernelNotifications>()};
+    auto notifications{MakeTestKernelNotifications()};
     auto context{create_context(notifications, ChainType::MAINNET)};
     auto chainman{create_chainman(
         test_directory, /*reindex=*/false, /*wipe_chainstate=*/true,
-        /*block_tree_db_in_memory=*/false, /*chainstate_db_in_memory=*/false, context)};
+        /*in_memory=*/false, context)};
 
     std::vector<std::string> import_files;
     import_files.push_back(PathToString(test_directory.m_directory / "blocks" / "blk00000.dat"));
-    BOOST_CHECK(chainman->ImportBlocks(import_files));
+    const BlockImportResult import_result{chainman->ImportBlocks(import_files, ExplicitChainstateRuntimeForTest())};
+    BOOST_CHECK(import_result.status == BlockImportStatus::COMPLETED);
 }
 
 void chainman_mainnet_validation_test(TestDirectory& test_directory)
 {
-    auto notifications{std::make_shared<TestKernelNotifications>()};
-    auto validation_interface{std::make_shared<TestValidationInterface>()};
-    auto context{create_context(notifications, ChainType::MAINNET, validation_interface)};
+    auto notifications{MakeTestKernelNotifications()};
+    auto validation_state{std::make_shared<TestValidationInterfaceState>()};
+    auto context{create_context(notifications, ChainType::MAINNET, MakeTestValidationInterface(validation_state))};
     auto chainman{create_chainman(
         test_directory, /*reindex=*/false, /*wipe_chainstate=*/false,
-        /*block_tree_db_in_memory=*/false, /*chainstate_db_in_memory=*/false, context)};
+        /*in_memory=*/false, context)};
 
     // mainnet block 1
     auto raw_block = hex_string_to_byte_vec("010000006fe28c0ab6f1b372c1a6a246ae63f74f931e8365e15a089c68d6190000000000982051fd1e4ba744bbbe680e1fee14677ba1a3c3540bf7b1cdb606e857233e0e61bc6649ffff001d01e362990101000000010000000000000000000000000000000000000000000000000000000000000000ffffffff0704ffff001d0104ffffffff0100f2052a0100000043410496b538e853519c726a2c91e61ec11600ae1390813a627c66fb8be7947be63c52da7589379515d4e0a604f8141781e62294721166bf621e73a82cbf2342c858eeac00000000");
-    Block block{raw_block};
+    auto block{require_parsed<Block>(raw_block)};
     BlockHeader header{block.GetHeader()};
     TransactionView tx{block.GetTransaction(block.CountTransactions() - 1)};
     BOOST_CHECK_EQUAL(byte_span_to_hex_string_reversed(tx.Txid().ToBytes()), "0e3e2357e806b6cdb1f70b54c3a3a17b6714ee1f0e68bebb44a74b1efd512098");
@@ -901,37 +1409,81 @@ void chainman_mainnet_validation_test(TestDirectory& test_directory)
                            })).begin();
     BOOST_CHECK_EQUAL(output_counts, 1);
 
-    validation_interface->m_expected_valid_block.emplace(raw_block);
+    validation_state->m_expected_valid_block.emplace(raw_block);
     auto ser_block{block.ToBytes()};
     check_equal(ser_block, raw_block);
-    BlockProcessResult process_result{chainman->ProcessBlock(block)};
+    BlockValidationOptions validation_options{ExplicitValidationTimeForTest()};
+    BlockProcessResult process_result{chainman->ProcessBlock(block, validation_options)};
     BOOST_CHECK(process_result.processed);
     BOOST_CHECK(process_result.new_block);
+    BOOST_CHECK(process_result.validation_state.GetValidationMode() == ValidationMode::VALID);
 
-    validation_interface->m_expected_valid_block = std::nullopt;
-    Block invalid_block{hex_string_to_byte_vec(REGTEST_BLOCK_DATA[REGTEST_BLOCK_DATA.size() - 1])};
-    process_result = chainman->ProcessBlock(invalid_block);
+    validation_state->m_expected_valid_block = std::nullopt;
+    auto invalid_block{require_parsed<Block>(hex_string_to_byte_vec(REGTEST_BLOCK_DATA[REGTEST_BLOCK_DATA.size() - 1]))};
+    process_result = chainman->ProcessBlock(invalid_block, validation_options);
     BOOST_CHECK(!process_result.processed);
     BOOST_CHECK(!process_result.new_block);
+    BOOST_CHECK(process_result.validation_state.GetValidationMode() == ValidationMode::INVALID);
 
-    auto chain{chainman->GetChain()};
+    auto chain{chainman->SnapshotActiveChain()};
     BOOST_CHECK_EQUAL(chain.Height(), 1);
     auto tip{chain.Entries().back()};
     auto read_block{chainman->ReadBlock(tip)};
     BOOST_REQUIRE(read_block);
     check_equal(read_block.value().ToBytes(), raw_block);
+    {
+        btck_Error* error{nullptr};
+        auto tip_hash{tip.GetHash()};
+        btck_BlockReadResult* block_read_result{btck_chainstate_read_block_result(chainman->get(), tip_hash.get(), &error)};
+        BOOST_REQUIRE(block_read_result != nullptr);
+        BOOST_CHECK(error == nullptr);
+        BOOST_CHECK_EQUAL(btck_block_read_result_get_status(block_read_result), btck_BlockReadStatus_FOUND);
+        BOOST_CHECK(btck_block_read_result_get_block(block_read_result) != nullptr);
+        btck_block_read_result_destroy(block_read_result);
+
+        btck_BlockSpentOutputsReadResult* spent_outputs_result{btck_chainstate_read_block_spent_outputs_result(chainman->get(), tip_hash.get(), &error)};
+        BOOST_REQUIRE(spent_outputs_result != nullptr);
+        BOOST_CHECK(error == nullptr);
+        BOOST_CHECK_EQUAL(btck_block_spent_outputs_read_result_get_status(spent_outputs_result), btck_BlockSpentOutputsReadStatus_FOUND);
+        BOOST_CHECK(btck_block_spent_outputs_read_result_get_spent_outputs(spent_outputs_result) != nullptr);
+        btck_block_spent_outputs_read_result_destroy(spent_outputs_result);
+
+        std::array<std::byte, 32> unknown_hash_bytes{};
+        unknown_hash_bytes[0] = std::byte{0x7f};
+        BlockHash unknown_hash{unknown_hash_bytes};
+        block_read_result = btck_chainstate_read_block_result(chainman->get(), unknown_hash.get(), &error);
+        BOOST_REQUIRE(block_read_result != nullptr);
+        BOOST_CHECK(error == nullptr);
+        BOOST_CHECK_EQUAL(btck_block_read_result_get_status(block_read_result), btck_BlockReadStatus_NOT_INDEXED);
+        BOOST_CHECK(btck_block_read_result_get_block(block_read_result) == nullptr);
+        btck_block_read_result_destroy(block_read_result);
+
+        spent_outputs_result = btck_chainstate_read_block_spent_outputs_result(chainman->get(), unknown_hash.get(), &error);
+        BOOST_REQUIRE(spent_outputs_result != nullptr);
+        BOOST_CHECK(error == nullptr);
+        BOOST_CHECK_EQUAL(btck_block_spent_outputs_read_result_get_status(spent_outputs_result), btck_BlockSpentOutputsReadStatus_NOT_INDEXED);
+        BOOST_CHECK(btck_block_spent_outputs_read_result_get_spent_outputs(spent_outputs_result) == nullptr);
+        btck_block_spent_outputs_read_result_destroy(spent_outputs_result);
+    }
 
     // Check that we can read the previous block
-    BlockTreeEntry tip_2{*tip.GetPrevious()};
-    Block read_block_2{*chainman->ReadBlock(tip_2)};
-    BOOST_CHECK_EQUAL(chainman->ReadBlockSpentOutputs(tip_2).Count(), 0);
-    BOOST_CHECK_EQUAL(chainman->ReadBlockSpentOutputs(tip).Count(), 0);
+    auto tip_2_hash{tip.PreviousHash()};
+    BOOST_REQUIRE(tip_2_hash);
+    auto tip_2{chainman->GetBlockInfo(*tip_2_hash)};
+    BOOST_REQUIRE(tip_2);
+    Block read_block_2{*chainman->ReadBlock(*tip_2)};
+    auto tip_2_spent_outputs{chainman->ReadBlockSpentOutputs(*tip_2)};
+    BOOST_REQUIRE(tip_2_spent_outputs);
+    BOOST_CHECK_EQUAL(tip_2_spent_outputs->Count(), 0);
+    auto tip_spent_outputs{chainman->ReadBlockSpentOutputs(tip)};
+    BOOST_REQUIRE(tip_spent_outputs);
+    BOOST_CHECK_EQUAL(tip_spent_outputs->Count(), 0);
 
-    // It should be an error if we go another block back, since the genesis has no ancestor
-    BOOST_CHECK(!tip_2.GetPrevious());
+    // The previous block is genesis and has no previous hash.
+    BOOST_CHECK(!tip_2->PreviousHash());
 
     // If we try to validate it again, it should be a duplicate
-    process_result = chainman->ProcessBlock(block);
+    process_result = chainman->ProcessBlock(block, validation_options);
     BOOST_CHECK(process_result.processed);
     BOOST_CHECK(!process_result.new_block);
 }
@@ -950,7 +1502,7 @@ BOOST_AUTO_TEST_CASE(btck_check_block_context_free)
     ChainParams mainnet_params{ChainType::MAINNET};
     auto consensus_params = mainnet_params.GetConsensusParams();
 
-    Block block{raw_block};
+    auto block{require_parsed<Block>(raw_block)};
     BlockValidationState state;
 
     BOOST_CHECK(block.Check(consensus_params, BlockCheckFlags::BASE, state));
@@ -959,9 +1511,27 @@ BOOST_AUTO_TEST_CASE(btck_check_block_context_free)
     BOOST_CHECK(block.Check(consensus_params, BlockCheckFlags::ALL, state));
     BOOST_CHECK(state.GetValidationMode() == ValidationMode::VALID);
 
+    auto invalid_block_flags{static_cast<BlockCheckFlags>(1U << 31)};
+    BOOST_CHECK_EXCEPTION(
+        block.Check(consensus_params, invalid_block_flags, state),
+        ApiError,
+        [](const ApiError& e) { return e.code() == ErrorCode::INVALID_ARGUMENT; });
+
+    btck_Error* error{nullptr};
+    btck_BlockCheckResult* check_result{
+        btck_block_check_result(
+            block.get(),
+            consensus_params.get(),
+            static_cast<btck_BlockCheckFlags>(1U << 31),
+            &error)};
+    BOOST_CHECK(check_result == nullptr);
+    BOOST_REQUIRE(error != nullptr);
+    BOOST_CHECK_EQUAL(btck_error_get_code(error), btck_ErrorCode_INVALID_ARGUMENT);
+    btck_error_destroy(error);
+
     auto bad_merkle_block_data = raw_block;
     bad_merkle_block_data[MERKLE_ROOT_OFFSET] ^= std::byte{0x01};
-    Block bad_merkle_block{bad_merkle_block_data};
+    auto bad_merkle_block{require_parsed<Block>(bad_merkle_block_data)};
 
     BOOST_CHECK(!bad_merkle_block.Check(consensus_params, BlockCheckFlags::MERKLE, state));
     BOOST_CHECK(state.GetValidationMode() == ValidationMode::INVALID);
@@ -972,7 +1542,7 @@ BOOST_AUTO_TEST_CASE(btck_check_block_context_free)
 
     auto bad_pow_block_data = raw_block;
     bad_pow_block_data[NBITS_OFFSET + 3] = std::byte{0x1c};
-    Block bad_pow_block{bad_pow_block_data};
+    auto bad_pow_block{require_parsed<Block>(bad_pow_block_data)};
 
     BOOST_CHECK(!bad_pow_block.Check(consensus_params, BlockCheckFlags::POW, state));
     BOOST_CHECK(state.GetValidationMode() == ValidationMode::INVALID);
@@ -983,7 +1553,7 @@ BOOST_AUTO_TEST_CASE(btck_check_block_context_free)
 
     auto bad_base_block_data = raw_block;
     bad_base_block_data[COINBASE_PREVOUT_N_OFFSET] = std::byte{0x00};
-    Block bad_base_block{bad_base_block_data};
+    auto bad_base_block{require_parsed<Block>(bad_base_block_data)};
 
     BOOST_CHECK(!bad_base_block.Check(consensus_params, BlockCheckFlags::BASE, state));
     BOOST_CHECK(state.GetValidationMode() == ValidationMode::INVALID);
@@ -991,8 +1561,160 @@ BOOST_AUTO_TEST_CASE(btck_check_block_context_free)
 
     // Test with invalid truncated block data.
     auto truncated_block_data = hex_string_to_byte_vec("010000006fe28c0ab6f1b372c1a6a246ae63f74f931e8365e15a089c68d6190000000000982051fd1e4ba744bbbe680e1fee14677ba1a3c3540bf7b1cdb606e857233e0e61bc6649ffff001d01e36299");
-    BOOST_CHECK_EXCEPTION(Block{truncated_block_data}, std::runtime_error,
-                          HasReason{"failed to instantiate btck object"});
+    BOOST_CHECK(!Block::Parse(truncated_block_data).has_value());
+}
+
+BOOST_AUTO_TEST_CASE(btck_validation_library_c_abi_reports_exact_spend_rules)
+{
+    constexpr size_t CANDIDATE_INDEX{REGTEST_BLOCK_DATA.size() - 1};
+    auto ancestors{RegtestAncestorHeaders(CANDIDATE_INDEX)};
+    auto ancestor_pointers{HeaderPointers(ancestors)};
+    auto candidate{require_parsed<Block>(hex_string_to_byte_vec(REGTEST_BLOCK_DATA[CANDIDATE_INDEX]))};
+    BOOST_REQUIRE_GT(candidate.CountTransactions(), size_t{1});
+
+    ChainParams regtest_params{ChainType::REGTEST};
+    const auto consensus_params{regtest_params.GetConsensusParams()};
+
+    btck_BlockValidationLibraryOptions options{};
+    options.operation_time = 2'000'000'000;
+    options.segwit_active = 1;
+    options.height_in_coinbase_active = 1;
+    options.enforce_bip30 = 0;
+    options.subsidy = 5'000'000'000;
+    options.coinbase_maturity = 100;
+    options.script_flags = btck_ValidationScriptFlags_NONE;
+    options.max_sigop_cost = 0;
+
+    RuleLookupCallbacks missing_lookup{
+        .status = btck_CoinLookupStatus_MISSING,
+        .coin = nullptr};
+    btck_ValidationCoinIndex missing_coin_index{
+        .user_data = &missing_lookup,
+        .lookup = rule_lookup_callback};
+
+    btck_Error* error{nullptr};
+    btck_BlockVerifyResult* missing_raw{btck_block_verify_result(
+        candidate.get(),
+        ancestor_pointers.data(),
+        ancestor_pointers.size(),
+        consensus_params.get(),
+        options,
+        missing_coin_index,
+        &error)};
+    ReportUnexpectedError(error);
+    BOOST_REQUIRE(missing_raw != nullptr);
+    UniqueHandle<btck_BlockVerifyResult, btck_block_verify_result_destroy> missing_result{missing_raw};
+    BOOST_CHECK(error == nullptr);
+    if (error != nullptr) {
+        btck_error_destroy(error);
+        error = nullptr;
+    }
+    CheckBlockVerifyRejection(missing_result.get(), btck_ValidationRule_S02_PREVOUTS_UNSPENT, "S02");
+
+    const std::array<std::byte, 1> false_script{std::byte{0x00}};
+    UniqueHandle<btck_ScriptPubkey, btck_script_pubkey_destroy> script{
+        btck_script_pubkey_create(false_script.data(), false_script.size(), &error)};
+    BOOST_REQUIRE(error == nullptr);
+    UniqueHandle<btck_TransactionOutput, btck_transaction_output_destroy> output{
+        btck_transaction_output_create(script.get(), 5'000'000'000, &error)};
+    BOOST_REQUIRE(error == nullptr);
+    UniqueHandle<btck_Coin, btck_coin_destroy> coin{
+        btck_coin_create(output.get(), 1, 0, 0, &error)};
+    BOOST_REQUIRE(error == nullptr);
+
+    RuleLookupCallbacks found_lookup{
+        .status = btck_CoinLookupStatus_FOUND,
+        .coin = coin.get()};
+    btck_ValidationCoinIndex found_coin_index{
+        .user_data = &found_lookup,
+        .lookup = rule_lookup_callback};
+
+    btck_BlockVerifyResult* script_raw{btck_block_verify_result(
+        candidate.get(),
+        ancestor_pointers.data(),
+        ancestor_pointers.size(),
+        consensus_params.get(),
+        options,
+        found_coin_index,
+        &error)};
+    ReportUnexpectedError(error);
+    BOOST_REQUIRE(script_raw != nullptr);
+    UniqueHandle<btck_BlockVerifyResult, btck_block_verify_result_destroy> script_result{script_raw};
+    BOOST_CHECK(error == nullptr);
+    if (error != nullptr) {
+        btck_error_destroy(error);
+        error = nullptr;
+    }
+    CheckBlockVerifyRejection(script_result.get(), btck_ValidationRule_S07_SCRIPTS_VALIDATE, "S07");
+}
+
+BOOST_AUTO_TEST_CASE(btck_validation_library_c_abi_reports_invalid_header_context_evidence)
+{
+    constexpr size_t CANDIDATE_INDEX{REGTEST_BLOCK_DATA.size() - 1};
+    auto ancestors{RegtestAncestorHeaders(CANDIDATE_INDEX)};
+    auto candidate{require_parsed<Block>(hex_string_to_byte_vec(REGTEST_BLOCK_DATA[CANDIDATE_INDEX]))};
+
+    ChainParams regtest_params{ChainType::REGTEST};
+    const auto consensus_params{regtest_params.GetConsensusParams()};
+
+    btck_BlockValidationLibraryOptions options{};
+    options.operation_time = 2'000'000'000;
+    options.segwit_active = 1;
+    options.height_in_coinbase_active = 1;
+    options.enforce_bip30 = 0;
+    options.subsidy = 5'000'000'000;
+    options.coinbase_maturity = 100;
+    options.script_flags = btck_ValidationScriptFlags_NONE;
+    options.max_sigop_cost = 0;
+
+    RuleLookupCallbacks missing_lookup{
+        .status = btck_CoinLookupStatus_MISSING,
+        .coin = nullptr};
+    btck_ValidationCoinIndex missing_coin_index{
+        .user_data = &missing_lookup,
+        .lookup = rule_lookup_callback};
+
+    std::vector<BlockHeader> bad_genesis_ancestors;
+    bad_genesis_ancestors.push_back(ancestors.at(1));
+    auto bad_genesis_pointers{HeaderPointers(bad_genesis_ancestors)};
+
+    btck_Error* error{nullptr};
+    btck_BlockVerifyResult* bad_genesis_raw{btck_block_verify_result(
+        candidate.get(),
+        bad_genesis_pointers.data(),
+        bad_genesis_pointers.size(),
+        consensus_params.get(),
+        options,
+        missing_coin_index,
+        &error)};
+    ReportUnexpectedError(error);
+    BOOST_REQUIRE(bad_genesis_raw != nullptr);
+    UniqueHandle<btck_BlockVerifyResult, btck_block_verify_result_destroy> bad_genesis_result{bad_genesis_raw};
+    BOOST_CHECK(error == nullptr);
+    CheckBlockVerifyInvalidContextEvidence(
+        bad_genesis_result.get(),
+        btck_HeaderContextEvidenceCode_GENESIS_PARENT_NOT_NULL);
+
+    std::vector<BlockHeader> non_contiguous_ancestors;
+    non_contiguous_ancestors.push_back(ancestors.at(0));
+    non_contiguous_ancestors.push_back(ancestors.at(2));
+    auto non_contiguous_pointers{HeaderPointers(non_contiguous_ancestors)};
+
+    btck_BlockVerifyResult* non_contiguous_raw{btck_block_verify_result(
+        candidate.get(),
+        non_contiguous_pointers.data(),
+        non_contiguous_pointers.size(),
+        consensus_params.get(),
+        options,
+        missing_coin_index,
+        &error)};
+    ReportUnexpectedError(error);
+    BOOST_REQUIRE(non_contiguous_raw != nullptr);
+    UniqueHandle<btck_BlockVerifyResult, btck_block_verify_result_destroy> non_contiguous_result{non_contiguous_raw};
+    BOOST_CHECK(error == nullptr);
+    CheckBlockVerifyInvalidContextEvidence(
+        non_contiguous_result.get(),
+        btck_HeaderContextEvidenceCode_NON_CONTIGUOUS_ANCESTRY);
 }
 
 BOOST_AUTO_TEST_CASE(btck_chainman_mainnet_tests)
@@ -1018,65 +1740,138 @@ BOOST_AUTO_TEST_CASE(btck_block_hash_tests)
     CheckHandle(block_hash, block_hash_2);
 }
 
-BOOST_AUTO_TEST_CASE(btck_block_tree_entry_tests)
+BOOST_AUTO_TEST_CASE(btck_block_info_snapshot_tests)
 {
-    auto test_directory{TestDirectory{"block_tree_entry_test_bitcoin_kernel"}};
-    auto notifications{std::make_shared<TestKernelNotifications>()};
+    auto test_directory{TestDirectory{"block_info_snapshot_test_bitcoin_kernel"}};
+    auto notifications{MakeTestKernelNotifications()};
     auto context{create_context(notifications, ChainType::REGTEST)};
     auto chainman{create_chainman(
         test_directory,
         /*reindex=*/false,
         /*wipe_chainstate=*/false,
-        /*block_tree_db_in_memory=*/true,
-        /*chainstate_db_in_memory=*/true,
+        /*in_memory=*/true,
         context)};
 
     // Process a couple of blocks
+    BlockValidationOptions validation_options{ExplicitValidationTimeForTest()};
     for (size_t i{0}; i < 3; i++) {
-        Block block{hex_string_to_byte_vec(REGTEST_BLOCK_DATA[i])};
-        const BlockProcessResult process_result{chainman->ProcessBlock(block)};
+        auto block{require_parsed<Block>(hex_string_to_byte_vec(REGTEST_BLOCK_DATA[i]))};
+        const BlockProcessResult process_result{chainman->ProcessBlock(block, validation_options)};
         BOOST_CHECK(process_result.new_block);
     }
 
-    auto chain{chainman->GetChain()};
-    auto entry_0{chain.GetByHeight(0)};
-    auto entry_1{chain.GetByHeight(1)};
-    auto entry_2{chain.GetByHeight(2)};
+    auto chain{chainman->SnapshotActiveChain()};
+    auto info_0{chain.GetByHeight(0)};
+    auto info_1{chain.GetByHeight(1)};
+    auto info_2{chain.GetByHeight(2)};
 
     // Test inequality
-    BOOST_CHECK(entry_0 != entry_1);
-    BOOST_CHECK(entry_1 != entry_2);
-    BOOST_CHECK(entry_0 != entry_2);
+    BOOST_CHECK(info_0 != info_1);
+    BOOST_CHECK(info_1 != info_2);
+    BOOST_CHECK(info_0 != info_2);
 
-    // Test equality with same entry
-    BOOST_CHECK(entry_0 == chain.GetByHeight(0));
-    BOOST_CHECK(entry_0 == BlockTreeEntry{entry_0});
-    BOOST_CHECK(entry_1 == entry_1);
+    // Test equality by block hash.
+    BOOST_CHECK(info_0 == chain.GetByHeight(0));
+    BOOST_CHECK(BlockInfo{info_0} == BlockInfo{info_0});
+    BOOST_CHECK(info_1 == info_1);
 
-    // Test GetPrevious
-    auto prev{entry_1.GetPrevious()};
-    BOOST_CHECK(prev.has_value());
-    BOOST_CHECK(prev.value() == entry_0);
+    // Parent relationships are exposed as values, not as public block-index pointers.
+    auto prev_hash{info_1.PreviousHash()};
+    BOOST_REQUIRE(prev_hash.has_value());
+    BOOST_CHECK(prev_hash.value() == info_0.GetHash());
+    BOOST_CHECK(!info_0.PreviousHash().has_value());
 
-    // Test GetAncestor
-    BOOST_CHECK(entry_2.GetAncestor(2) == entry_2);
-    BOOST_CHECK(entry_2.GetAncestor(1) == entry_1);
-    BOOST_CHECK(entry_2.GetAncestor(0) == entry_0);
+    // Ancestor queries are chain snapshot indexing operations.
+    BOOST_CHECK(chain.GetByHeight(2) == info_2);
+    BOOST_CHECK(chain.GetByHeight(1) == info_1);
+    BOOST_CHECK(chain.GetByHeight(0) == info_0);
+
+    // Copied block info and old chain snapshots remain stable after mutation.
+    BlockInfo copied_info_2{info_2};
+    auto copied_hash{copied_info_2.GetHash().ToBytes()};
+    auto copied_header_hash{copied_info_2.GetHeader().Hash().ToBytes()};
+    const int32_t old_count{chain.CountEntries()};
+
+    auto block{require_parsed<Block>(hex_string_to_byte_vec(REGTEST_BLOCK_DATA[3]))};
+    const BlockProcessResult process_result{chainman->ProcessBlock(block, validation_options)};
+    BOOST_CHECK(process_result.new_block);
+
+    BOOST_CHECK_EQUAL(chain.CountEntries(), old_count);
+    BOOST_CHECK_EQUAL(chainman->SnapshotActiveChain().CountEntries(), old_count + 1);
+    BOOST_CHECK_EQUAL(copied_info_2.GetHeight(), 2);
+    check_equal(copied_info_2.GetHash().ToBytes(), copied_hash);
+    check_equal(copied_info_2.GetHeader().Hash().ToBytes(), copied_header_hash);
+}
+
+BOOST_AUTO_TEST_CASE(btck_chainstate_open_uses_supplied_time_for_loaded_tip)
+{
+    auto test_directory{TestDirectory{"chainstate_open_runtime_time_test_bitcoin_kernel"}};
+    int64_t tip_time{0};
+    int32_t expected_height{0};
+
+    {
+        auto notifications{MakeTestKernelNotifications()};
+        auto context{create_context(notifications, ChainType::REGTEST)};
+        auto chainman{create_chainman(
+            test_directory,
+            /*reindex=*/false,
+            /*wipe_chainstate=*/false,
+            /*in_memory=*/false,
+            context)};
+
+        BlockValidationOptions validation_options{ExplicitValidationTimeForTest()};
+        for (size_t i{0}; i < 3; ++i) {
+            auto block{require_parsed<Block>(hex_string_to_byte_vec(REGTEST_BLOCK_DATA[i]))};
+            const BlockProcessResult process_result{chainman->ProcessBlock(block, validation_options)};
+            BOOST_CHECK(process_result.processed);
+            BOOST_CHECK(process_result.new_block);
+        }
+
+        auto chain{chainman->SnapshotActiveChain()};
+        expected_height = chain.Height();
+        BOOST_REQUIRE_GT(expected_height, 0);
+        auto tip{chain.Entries().back()};
+        tip_time = static_cast<int64_t>(tip.GetHeader().Timestamp());
+    }
+
+    auto open_progress_values_at = [&](int64_t current_time) {
+        auto probe{std::make_shared<TipProgressProbe>()};
+        auto context{create_context(MakeTipProgressNotifications(probe), ChainType::REGTEST)};
+        ChainstateOptions chainman_opts{
+            context,
+            PathToString(test_directory.m_directory),
+            PathToString(test_directory.m_directory / "blocks")};
+        ChainstateRuntime runtime{ChainstateRuntimeForTest(current_time)};
+        Chainstate chainman{chainman_opts, runtime};
+        BOOST_CHECK_EQUAL(chainman.SnapshotActiveChain().Height(), expected_height);
+        return probe->progress_values;
+    };
+
+    const std::vector<double> near_tip_progress{
+        open_progress_values_at(tip_time - 2 * 60 * 60 + 1)};
+    const std::vector<double> later_progress{
+        open_progress_values_at(2'000'000'000)};
+
+    BOOST_REQUIRE(!near_tip_progress.empty());
+    BOOST_REQUIRE(!later_progress.empty());
+    BOOST_CHECK_EQUAL(near_tip_progress.front(), 1.0);
+    BOOST_CHECK_LT(later_progress.front(), near_tip_progress.front());
 }
 
 BOOST_AUTO_TEST_CASE(btck_chainman_in_memory_tests)
 {
     auto in_memory_test_directory{TestDirectory{"in-memory_test_bitcoin_kernel"}};
 
-    auto notifications{std::make_shared<TestKernelNotifications>()};
+    auto notifications{MakeTestKernelNotifications()};
     auto context{create_context(notifications, ChainType::REGTEST)};
     auto chainman{create_chainman(
         in_memory_test_directory, /*reindex=*/false, /*wipe_chainstate=*/false,
-        /*block_tree_db_in_memory=*/true, /*chainstate_db_in_memory=*/true, context)};
+        /*in_memory=*/true, context)};
 
+    BlockValidationOptions validation_options{ExplicitValidationTimeForTest()};
     for (auto& raw_block : REGTEST_BLOCK_DATA) {
-        Block block{hex_string_to_byte_vec(raw_block)};
-        const BlockProcessResult process_result{chainman->ProcessBlock(block)};
+        auto block{require_parsed<Block>(hex_string_to_byte_vec(raw_block))};
+        const BlockProcessResult process_result{chainman->ProcessBlock(block, validation_options)};
         BOOST_CHECK(process_result.new_block);
     }
 
@@ -1091,24 +1886,27 @@ BOOST_AUTO_TEST_CASE(btck_chainman_regtest_tests)
 {
     auto test_directory{TestDirectory{"regtest_test_bitcoin_kernel"}};
 
-    auto notifications{std::make_shared<TestKernelNotifications>()};
+    auto notifications{MakeTestKernelNotifications()};
     auto context{create_context(notifications, ChainType::REGTEST)};
+    BlockValidationOptions validation_options{ExplicitValidationTimeForTest()};
 
     {
         auto chainman{create_chainman(
             test_directory, /*reindex=*/false, /*wipe_chainstate=*/false,
-            /*block_tree_db_in_memory=*/false, /*chainstate_db_in_memory=*/false, context)};
+            /*in_memory=*/false, context)};
         for (const auto& data : REGTEST_BLOCK_DATA) {
-            Block block{hex_string_to_byte_vec(data)};
+            auto block{require_parsed<Block>(hex_string_to_byte_vec(data))};
             BlockHeader header = block.GetHeader();
-            BlockValidationState state = chainman->ProcessBlockHeader(header);
-            BOOST_CHECK(state.GetValidationMode() == ValidationMode::VALID);
-            BOOST_CHECK(state.GetBlockValidationResult() == BlockValidationResult::UNSET);
-            BlockTreeEntry entry{*chainman->GetBlockTreeEntry(header.Hash())};
-            BOOST_CHECK(!chainman->GetChain().Contains(entry));
-            BlockTreeEntry best_entry{chainman->GetBestEntry()};
-            BlockHash hash{entry.GetHash()};
-            BOOST_CHECK(hash == best_entry.GetHeader().Hash());
+            HeaderProcessResult result = chainman->ProcessBlockHeader(header, validation_options);
+            BOOST_CHECK(result.status == HeaderProcessStatus::ACCEPTED);
+            BOOST_CHECK(result.validation_state.GetValidationMode() == ValidationMode::VALID);
+            BOOST_CHECK(result.validation_state.GetBlockValidationResult() == BlockValidationResult::UNSET);
+            BlockInfo info{*chainman->GetBlockInfo(header.Hash())};
+            BOOST_CHECK(!chainman->SnapshotActiveChain().Contains(info));
+            auto best_info{chainman->GetBestHeaderInfo()};
+            BOOST_REQUIRE(best_info);
+            BlockHash hash{info.GetHash()};
+            BOOST_CHECK(hash == best_info->GetHeader().Hash());
         }
     }
 
@@ -1120,10 +1918,10 @@ BOOST_AUTO_TEST_CASE(btck_chainman_regtest_tests)
     {
         auto chainman{create_chainman(
             test_directory, /*reindex=*/false, /*wipe_chainstate=*/false,
-            /*block_tree_db_in_memory=*/false, /*chainstate_db_in_memory=*/false, context)};
+            /*in_memory=*/false, context)};
         for (size_t i{0}; i < mid; i++) {
-            Block block{hex_string_to_byte_vec(REGTEST_BLOCK_DATA[i])};
-            const BlockProcessResult process_result{chainman->ProcessBlock(block)};
+            auto block{require_parsed<Block>(hex_string_to_byte_vec(REGTEST_BLOCK_DATA[i]))};
+            const BlockProcessResult process_result{chainman->ProcessBlock(block, validation_options)};
             BOOST_CHECK(process_result.processed);
             BOOST_CHECK(process_result.new_block);
         }
@@ -1131,21 +1929,22 @@ BOOST_AUTO_TEST_CASE(btck_chainman_regtest_tests)
 
     auto chainman{create_chainman(
         test_directory, /*reindex=*/false, /*wipe_chainstate=*/false,
-        /*block_tree_db_in_memory=*/false, /*chainstate_db_in_memory=*/false, context)};
+        /*in_memory=*/false, context)};
 
     for (size_t i{mid}; i < REGTEST_BLOCK_DATA.size(); i++) {
-        Block block{hex_string_to_byte_vec(REGTEST_BLOCK_DATA[i])};
-        const BlockProcessResult process_result{chainman->ProcessBlock(block)};
+        auto block{require_parsed<Block>(hex_string_to_byte_vec(REGTEST_BLOCK_DATA[i]))};
+        const BlockProcessResult process_result{chainman->ProcessBlock(block, validation_options)};
         BOOST_CHECK(process_result.processed);
         BOOST_CHECK(process_result.new_block);
     }
 
-    auto chain = chainman->GetChain();
+    auto chain = chainman->SnapshotActiveChain();
     auto tip = chain.Entries().back();
     auto read_block = chainman->ReadBlock(tip).value();
     check_equal(read_block.ToBytes(), hex_string_to_byte_vec(REGTEST_BLOCK_DATA[REGTEST_BLOCK_DATA.size() - 1]));
 
-    auto tip_2 = tip.GetPrevious().value();
+    auto tip_2_hash = tip.PreviousHash().value();
+    auto tip_2 = chainman->GetBlockInfo(tip_2_hash).value();
     auto read_block_2 = chainman->ReadBlock(tip_2).value();
     check_equal(read_block_2.ToBytes(), hex_string_to_byte_vec(REGTEST_BLOCK_DATA[REGTEST_BLOCK_DATA.size() - 2]));
 
@@ -1155,10 +1954,10 @@ BOOST_AUTO_TEST_CASE(btck_chainman_regtest_tests)
     BOOST_CHECK(txid == txid);
     CheckHandle(txid, txid_2);
 
-    auto find_transaction = [&chainman](const TxidView& target_txid) -> std::optional<Transaction> {
-        auto chain = chainman->GetChain();
-        for (const auto block_tree_entry : chain.Entries()) {
-            auto block{chainman->ReadBlock(block_tree_entry)};
+    auto find_transaction = [&chainman](const Txid& target_txid) -> std::optional<Transaction> {
+        auto chain = chainman->SnapshotActiveChain();
+        for (const auto info : chain.Entries()) {
+            auto block{chainman->ReadBlock(info)};
             for (const TransactionView transaction : block->Transactions()) {
                 if (transaction.Txid() == target_txid) {
                     return Transaction{transaction};
@@ -1168,13 +1967,13 @@ BOOST_AUTO_TEST_CASE(btck_chainman_regtest_tests)
         return std::nullopt;
     };
 
-    for (const auto block_tree_entry : chain.Entries()) {
-        auto block{chainman->ReadBlock(block_tree_entry)};
+    for (const auto info : chain.Entries()) {
+        auto block{chainman->ReadBlock(info)};
         for (const auto transaction : block->Transactions()) {
             std::vector<TransactionInput> inputs;
             std::vector<TransactionOutput> spent_outputs;
             for (const auto input : transaction.Inputs()) {
-                OutPointView point = input.OutPoint();
+                OutPoint point = input.OutPoint();
                 if (point.index() == std::numeric_limits<uint32_t>::max()) {
                     continue;
                 }
@@ -1195,8 +1994,12 @@ BOOST_AUTO_TEST_CASE(btck_chainman_regtest_tests)
     }
 
     // Read spent outputs for current tip and its previous block
-    BlockSpentOutputs block_spent_outputs{chainman->ReadBlockSpentOutputs(tip)};
-    BlockSpentOutputs block_spent_outputs_prev{chainman->ReadBlockSpentOutputs(*tip.GetPrevious())};
+    auto maybe_block_spent_outputs{chainman->ReadBlockSpentOutputs(tip)};
+    auto maybe_block_spent_outputs_prev{chainman->ReadBlockSpentOutputs(tip_2)};
+    BOOST_REQUIRE(maybe_block_spent_outputs);
+    BOOST_REQUIRE(maybe_block_spent_outputs_prev);
+    BlockSpentOutputs block_spent_outputs{*maybe_block_spent_outputs};
+    BlockSpentOutputs block_spent_outputs_prev{*maybe_block_spent_outputs_prev};
     CheckHandle(block_spent_outputs, block_spent_outputs_prev);
     CheckRange(block_spent_outputs_prev.TxsSpentOutputs(), block_spent_outputs_prev.Count());
     BOOST_CHECK_EQUAL(block_spent_outputs.Count(), 1);
@@ -1236,7 +2039,7 @@ BOOST_AUTO_TEST_CASE(btck_chainman_regtest_tests)
 
     CheckRange(chain.Entries(), chain.CountEntries());
 
-    for (const BlockTreeEntry entry : chain.Entries()) {
+    for (const auto entry : chain.Entries()) {
         std::optional<Block> block{chainman->ReadBlock(entry)};
         if (block) {
             for (const TransactionView transaction : block->Transactions()) {
@@ -1260,9 +2063,15 @@ BOOST_AUTO_TEST_CASE(btck_chainman_regtest_tests)
 
 
     fs::remove(test_directory.m_directory / "blocks" / "blk00000.dat");
-    BOOST_CHECK(!chainman->ReadBlock(tip_2).has_value());
+    BOOST_CHECK_EXCEPTION(
+        chainman->ReadBlock(tip_2),
+        ApiError,
+        [](const ApiError& e) { return e.code() == ErrorCode::IO_READ; });
     fs::remove(test_directory.m_directory / "blocks" / "rev00000.dat");
-    BOOST_CHECK_THROW(chainman->ReadBlockSpentOutputs(tip), std::runtime_error);
+    BOOST_CHECK_EXCEPTION(
+        chainman->ReadBlockSpentOutputs(tip),
+        ApiError,
+        [](const ApiError& e) { return e.code() == ErrorCode::IO_READ; });
 }
 
 // -----------------------------------------------------------------------------
@@ -1294,7 +2103,7 @@ BOOST_AUTO_TEST_CASE(btck_transaction_check_tests)
         "51c7acffffffff0000000000"};
 
     auto expect_valid = [](std::string_view hex) {
-        Transaction tx{hex_string_to_byte_vec(hex)};
+        auto tx{require_parsed<Transaction>(hex_string_to_byte_vec(hex))};
         TxValidationState st;
         BOOST_CHECK(CheckTransaction(tx, st));
         BOOST_CHECK(st.GetValidationMode() == ValidationMode::VALID);
@@ -1302,7 +2111,7 @@ BOOST_AUTO_TEST_CASE(btck_transaction_check_tests)
     };
 
     auto expect_invalid = [](std::string_view hex) {
-        Transaction tx{hex_string_to_byte_vec(hex)};
+        auto tx{require_parsed<Transaction>(hex_string_to_byte_vec(hex))};
         TxValidationState st;
         BOOST_CHECK(!CheckTransaction(tx, st));
         BOOST_CHECK(st.GetValidationMode() == ValidationMode::INVALID);
@@ -1321,17 +2130,29 @@ BOOST_AUTO_TEST_CASE(btck_transaction_check_tests)
     expect_invalid(no_outputs_tx_hex);
 
     {
-        Transaction valid_tx{hex_string_to_byte_vec(valid_tx_hex)};
-        Transaction invalid_tx{hex_string_to_byte_vec(no_outputs_tx_hex)};
-        TxValidationState state;
+        auto valid_tx{require_parsed<Transaction>(hex_string_to_byte_vec(valid_tx_hex))};
+        auto invalid_tx{require_parsed<Transaction>(hex_string_to_byte_vec(no_outputs_tx_hex))};
 
-        BOOST_CHECK(btck_transaction_check(valid_tx.get(), state.get()) == 1);
-        BOOST_CHECK(state.GetValidationMode() == ValidationMode::VALID);
-        BOOST_CHECK(state.GetTxValidationResult() == TxValidationResult::UNSET);
+        btck_Error* error{nullptr};
+        btck_TransactionCheckResult* valid_result{btck_transaction_check_result(valid_tx.get(), &error)};
+        BOOST_REQUIRE(valid_result != nullptr);
+        BOOST_CHECK(error == nullptr);
+        BOOST_CHECK_EQUAL(btck_transaction_check_result_get_status(valid_result), btck_CheckStatus_VALID);
+        const btck_TxValidationState* valid_state{btck_transaction_check_result_get_validation_state(valid_result)};
+        BOOST_REQUIRE(valid_state != nullptr);
+        BOOST_CHECK_EQUAL(btck_tx_validation_state_get_validation_mode(valid_state), btck_ValidationMode_VALID);
+        BOOST_CHECK_EQUAL(btck_tx_validation_state_get_tx_validation_result(valid_state), btck_TxValidationResult_UNSET);
+        btck_transaction_check_result_destroy(valid_result);
 
-        BOOST_CHECK(btck_transaction_check(invalid_tx.get(), state.get()) == 0);
-        BOOST_CHECK(state.GetValidationMode() == ValidationMode::INVALID);
-        BOOST_CHECK(state.GetTxValidationResult() == TxValidationResult::CONSENSUS);
+        btck_TransactionCheckResult* invalid_result{btck_transaction_check_result(invalid_tx.get(), &error)};
+        BOOST_REQUIRE(invalid_result != nullptr);
+        BOOST_CHECK(error == nullptr);
+        BOOST_CHECK_EQUAL(btck_transaction_check_result_get_status(invalid_result), btck_CheckStatus_INVALID);
+        const btck_TxValidationState* invalid_state{btck_transaction_check_result_get_validation_state(invalid_result)};
+        BOOST_REQUIRE(invalid_state != nullptr);
+        BOOST_CHECK_EQUAL(btck_tx_validation_state_get_validation_mode(invalid_state), btck_ValidationMode_INVALID);
+        BOOST_CHECK_EQUAL(btck_tx_validation_state_get_tx_validation_result(invalid_state), btck_TxValidationResult_CONSENSUS);
+        btck_transaction_check_result_destroy(invalid_result);
     }
 
     // Negative output (BADTX)

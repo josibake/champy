@@ -6,10 +6,12 @@
 #define BITCOIN_KERNEL_CHAINSTATE_LOAD_H
 
 #include <util/translation.h>
+#include <util/time.h>
 #include <chainstate.h>
 
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <tuple>
 
 namespace kernel {
@@ -30,6 +32,7 @@ struct ChainstateLoadOptions {
     int64_t check_blocks{DEFAULT_CHECKBLOCKS};
     int64_t check_level{DEFAULT_CHECKLEVEL};
     std::function<void()> coins_error_cb;
+    std::optional<NodeSeconds> current_time;
 };
 
 //! Chainstate load status. Simple applications can just check for the success

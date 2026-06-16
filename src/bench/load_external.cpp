@@ -6,34 +6,36 @@
 #include <bench/data/block413567.raw.h>
 #include <chainparams.h>
 #include <flatfile.h>
+#include <kernel/block_import_pipeline.h>
 #include <kernel/blockstorage.h>
 #include <span.h>
 #include <streams.h>
 #include <test/util/setup_common.h>
 #include <uint256.h>
 #include <util/fs.h>
+#include <util/result.h>
+#include <validation/runtime_time.h>
 #include <chainstate.h>
 
 #include <cstdint>
 #include <cstdio>
-#include <map>
 #include <memory>
 #include <stdexcept>
 #include <vector>
 
 /**
- * The LoadExternalBlockFile() function is used during -reindex and -loadblock.
+ * The ImportExternalBlockFile() pipeline is used during -reindex and -loadblock.
  *
  * Create a test file that's similar to a datadir/blocks/blk?????.dat file,
  * It contains around 134 copies of the same block (typical size of real block files).
- * For each block in the file, LoadExternalBlockFile() won't find its parent,
+ * For each block in the file, ImportExternalBlockFile() won't find its parent,
  * and so will skip the block. (In the real system, it will re-read the block
  * from disk later when it encounters its parent.)
  *
  * This benchmark measures the performance of deserializing the block (or just
  * its header, beginning with PR 16981).
  */
-static void LoadExternalBlockFile(benchmark::Bench& bench)
+static void ImportExternalBlockFile(benchmark::Bench& bench)
 {
     const auto testing_setup{MakeNoLogFileContext<const TestingSetup>(ChainType::MAIN)};
 
@@ -60,19 +62,30 @@ static void LoadExternalBlockFile(benchmark::Bench& bench)
         fclose(file);
     }
 
-    std::multimap<uint256, FlatFilePos> blocks_with_unknown_parent;
+    kernel::UnknownParentIndex blocks_with_unknown_parent;
     FlatFilePos pos;
     bench.setup([&] {
-            blocks_with_unknown_parent.clear();
+            blocks_with_unknown_parent = {};
             pos = FlatFilePos{};
         })
         .run([&] {
             // "rb" is "binary, O_RDONLY", positioned to the start of the file.
-            // The file will be closed by LoadExternalBlockFile().
+            // The file will be closed by AutoFile.
             AutoFile file{fsbridge::fopen(blkfile, "rb")};
-            testing_setup->m_node.chainman->LoadExternalBlockFile(file, &pos, &blocks_with_unknown_parent);
+            if (auto result{kernel::ImportExternalBlockFile({
+                    .chainman = *testing_setup->m_node.chainman,
+                .file = file,
+                .mode = kernel::ExternalBlockFileReindex{
+                    .file_number = pos.nFile,
+                    .unknown_parent_index = blocks_with_unknown_parent,
+                },
+                    .current_time = CurrentNodeTime(),
+                })};
+                !result) {
+                throw std::runtime_error{util::ErrorString(result).original};
+            }
         });
     fs::remove(blkfile);
 }
 
-BENCHMARK(LoadExternalBlockFile);
+BENCHMARK(ImportExternalBlockFile);

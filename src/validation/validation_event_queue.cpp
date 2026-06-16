@@ -10,39 +10,39 @@
 
 namespace validation {
 
-void CoreValidationEventQueue::BlockChecked(const std::shared_ptr<const CBlock>& block, const BlockValidationState& state)
+void CoreValidationEventQueue::BlockChecked(BlockCheckedEvent event)
 {
-    if (m_signals) m_signals->BlockChecked(block, state);
+    if (m_signals) m_signals->BlockChecked(std::move(event));
 }
 
-void CoreValidationEventQueue::NewPoWValidBlock(const CBlockIndex* index, const std::shared_ptr<const CBlock>& block)
+void CoreValidationEventQueue::NewPoWValidBlock(PoWValidBlockEvent event)
 {
-    if (m_signals) m_signals->NewPoWValidBlock(index, block);
+    if (m_signals) m_signals->NewPoWValidBlock(std::move(event));
 }
 
-void CoreValidationEventQueue::BlockConnected(std::shared_ptr<const CBlock> block, const CBlockIndex* index)
+void CoreValidationEventQueue::BlockConnected(BlockConnectedEvent event)
 {
-    if (m_signals) m_signals->BlockConnected(std::move(block), index);
+    if (m_signals) m_signals->BlockConnected(std::move(event));
 }
 
-void CoreValidationEventQueue::BlockDisconnected(std::shared_ptr<const CBlock> block, const CBlockIndex* index)
+void CoreValidationEventQueue::BlockDisconnected(BlockDisconnectedEvent event)
 {
-    if (m_signals) m_signals->BlockDisconnected(std::move(block), index);
+    if (m_signals) m_signals->BlockDisconnected(std::move(event));
 }
 
-void CoreValidationEventQueue::ChainStateFlushed(const CBlockLocator& locator)
+void CoreValidationEventQueue::ChainStateFlushed(ChainStateFlushedEvent event)
 {
-    if (m_signals) m_signals->ChainStateFlushed(locator);
+    if (m_signals) m_signals->ChainStateFlushed(std::move(event));
 }
 
-void CoreValidationEventQueue::UpdatedBlockTip(const CBlockIndex* new_tip, const CBlockIndex* fork, bool initial_download)
+void CoreValidationEventQueue::UpdatedBlockTip(TipUpdatedEvent event)
 {
-    if (m_signals) m_signals->UpdatedBlockTip(new_tip, fork, initial_download);
+    if (m_signals) m_signals->UpdatedBlockTip(std::move(event));
 }
 
-void CoreValidationEventQueue::ActiveTipChange(const CBlockIndex& new_tip, bool initial_download)
+void CoreValidationEventQueue::ActiveTipChange(ActiveTipChangedEvent event)
 {
-    if (m_signals) m_signals->ActiveTipChange(new_tip, initial_download);
+    if (m_signals) m_signals->ActiveTipChange(std::move(event));
 }
 
 } // namespace validation

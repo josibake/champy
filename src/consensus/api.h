@@ -28,7 +28,9 @@
 #include <consensus/predicates.h>
 #include <consensus/script_checker.h>
 #include <consensus/script_view.h>
+#include <consensus/serialization.h>
 #include <consensus/snapshot_spend_state.h>
+#include <consensus/spend_state_batch.h>
 #include <consensus/spend_state.h>
 #include <consensus/tx_check.h>
 

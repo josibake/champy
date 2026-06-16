@@ -17,6 +17,8 @@
 #include <latch>
 #include <ranges>
 #include <semaphore>
+#include <stdexcept>
+#include <utility>
 
 // General test values
 int NUM_WORKERS_DEFAULT = 0;
@@ -24,10 +26,21 @@ constexpr char POOL_NAME[] = "test";
 constexpr auto TEST_WAIT_TIMEOUT = 120s;
 
 struct ThreadPoolFixture {
-    ThreadPoolFixture() {
+    ThreadPoolFixture()
+    {
         NUM_WORKERS_DEFAULT = FastRandomContext().randrange(GetNumCores()) + 1;
         LogInfo("thread pool workers count: %d", NUM_WORKERS_DEFAULT);
     }
+};
+
+struct ThrowOnMoveTask {
+    ThrowOnMoveTask() = default;
+    ThrowOnMoveTask(const ThrowOnMoveTask&) = delete;
+    ThrowOnMoveTask& operator=(const ThrowOnMoveTask&) = delete;
+    ThrowOnMoveTask(ThrowOnMoveTask&&) { throw std::runtime_error{"callable move failed"}; }
+    ThrowOnMoveTask& operator=(ThrowOnMoveTask&&) = delete;
+
+    void operator()() const {}
 };
 
 // Test Cases Overview
@@ -48,11 +61,11 @@ struct ThreadPoolFixture {
 // 14) Submit range of tasks in one lock acquisition.
 BOOST_FIXTURE_TEST_SUITE(threadpool_tests, ThreadPoolFixture)
 
-#define WAIT_FOR(futures)                                                         \
-    do {                                                                          \
-        for (const auto& f : futures) {                                           \
+#define WAIT_FOR(futures)                                                              \
+    do {                                                                               \
+        for (const auto& f : futures) {                                                \
             BOOST_REQUIRE(f.wait_for(TEST_WAIT_TIMEOUT) == std::future_status::ready); \
-        }                                                                         \
+        }                                                                              \
     } while (0)
 
 // Helper to unwrap a valid pool submission
@@ -69,10 +82,11 @@ std::vector<std::future<void>> BlockWorkers(ThreadPool& threadPool, std::countin
     assert(threadPool.WorkersCount() >= num_of_threads_to_block);
     std::latch ready{static_cast<std::ptrdiff_t>(num_of_threads_to_block)};
     std::vector<std::future<void>> blocking_tasks(num_of_threads_to_block);
-    for (auto& f : blocking_tasks) f = Submit(threadPool, [&] {
-        ready.count_down();
-        release_sem.acquire();
-    });
+    for (auto& f : blocking_tasks)
+        f = Submit(threadPool, [&] {
+            ready.count_down();
+            release_sem.acquire();
+        });
     ready.wait();
     return blocking_tasks;
 }
@@ -119,6 +133,24 @@ BOOST_AUTO_TEST_CASE(submit_fails_with_correct_error)
     BOOST_CHECK_EQUAL(SubmitErrorString(range_res.error()), "No active workers");
 }
 
+BOOST_AUTO_TEST_CASE(submit_preserves_lifecycle_errors_and_propagates_construction_failures)
+{
+    static_assert(!noexcept(std::declval<ThreadPool&>().Submit(std::declval<ThrowOnMoveTask>())));
+    static_assert(!noexcept(std::declval<ThreadPool&>().Submit(std::declval<std::vector<std::function<void()>>>())));
+
+    ThreadPool threadPool(POOL_NAME);
+
+    auto inactive{threadPool.Submit(ThrowOnMoveTask{})};
+    BOOST_REQUIRE(!inactive);
+    BOOST_CHECK_EQUAL(SubmitErrorString(inactive.error()), "No active workers");
+
+    threadPool.Start(NUM_WORKERS_DEFAULT);
+    const auto submit_throwing_task = [&] {
+        (void)threadPool.Submit(ThrowOnMoveTask{});
+    };
+    BOOST_CHECK_EXCEPTION(submit_throwing_task(), std::runtime_error, HasReason{"callable move failed"});
+}
+
 // Test 1, submit tasks and verify completion
 BOOST_AUTO_TEST_CASE(submit_tasks_complete_successfully)
 {
@@ -159,7 +191,8 @@ BOOST_AUTO_TEST_CASE(single_available_worker_executes_all_tasks)
 
     // Store futures to wait on
     std::vector<std::future<void>> futures(num_tasks);
-    for (auto& f : futures) f = Submit(threadPool, [&counter]{ counter++; });
+    for (auto& f : futures)
+        f = Submit(threadPool, [&counter] { counter++; });
 
     WAIT_FOR(futures);
     BOOST_CHECK_EQUAL(counter, num_tasks);
@@ -329,7 +362,7 @@ BOOST_AUTO_TEST_CASE(interrupt_blocks_new_submissions)
     threadPool.Start(NUM_WORKERS_DEFAULT);
     threadPool.Interrupt();
 
-    auto res = threadPool.Submit([]{});
+    auto res = threadPool.Submit([] {});
     BOOST_CHECK(!res);
     BOOST_CHECK_EQUAL(SubmitErrorString(res.error()), "Interrupted");
 
@@ -347,7 +380,7 @@ BOOST_AUTO_TEST_CASE(interrupt_blocks_new_submissions)
     std::atomic<int> counter{0};
     std::counting_semaphore<> blocker(0);
     const auto blocking_tasks = BlockWorkers(threadPool, blocker, 1);
-    Submit(threadPool, [&threadPool, &counter]{
+    Submit(threadPool, [&threadPool, &counter] {
         threadPool.Interrupt();
         counter.fetch_add(1, std::memory_order_relaxed);
     }).get();
@@ -408,7 +441,7 @@ BOOST_AUTO_TEST_CASE(queued_tasks_complete_after_interrupt)
     std::vector<std::future<void>> futures;
     futures.reserve(num_tasks);
     for (int i = 0; i < num_tasks; i++) {
-        futures.emplace_back(Submit(threadPool, [&counter]{ counter.fetch_add(1, std::memory_order_relaxed); }));
+        futures.emplace_back(Submit(threadPool, [&counter] { counter.fetch_add(1, std::memory_order_relaxed); }));
     }
     threadPool.Interrupt();
 

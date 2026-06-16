@@ -2,8 +2,11 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
+#include <validation/block_connection.h>
+
 #include <addresstype.h>
 #include <bench/bench.h>
+#include <chainstate.h>
 #include <interfaces/chain.h>
 #include <kernel/cs_main.h>
 #include <policy/feerate.h>
@@ -12,14 +15,15 @@
 #include <test/util/setup_common.h>
 #include <validation/block_data_adapters.h>
 #include <validation/block_index_adapters.h>
-#include <validation/block_connection.h>
-#include <validation/core_coins_block_connection_state.h>
-#include <validation/core_chain_validation_context.h>
+#include <validation/core_block_commit_adapters.h>
+#include <validation/core_block_connection_context.h>
 #include <validation/core_block_connection_setup.h>
+#include <validation/core_chain_validation_runtimes.h>
+#include <validation/core_coins_block_connection_state.h>
 #include <validation_state.h>
-#include <chainstate.h>
 
 #include <cassert>
+#include <utility>
 #include <vector>
 
 /*
@@ -109,25 +113,53 @@ void BenchmarkBlockConnectionEngine(benchmark::Bench& bench, std::vector<CKey>& 
         CCoinsViewCache viewNew{&chainstate.CoinsTip()};
         CoreBlockDataStore block_store{chainstate.m_blockman};
         CoreBlockIndexStore block_index_store{chainstate.m_chainman};
-        CoreChainValidationRuntime validation_runtime{chainstate.m_chainman};
-        CoreChainValidationContext validation_context{chainstate.m_chainman, validation_runtime};
+        CoreActivationRuntime runtime{chainstate.m_chainman};
         const CoreBlockConnectionRuntimeInputs runtime_inputs{
-            .notifications = validation_context.Notifications(),
-            .undo_writer = block_store,
-            .block_index_committer = block_index_store,
-            .script_check_scheduler = validation_context.ScriptCheckScheduler(),
-            .validation_cache = validation_context.ScriptValidationCache(),
-            .trace_counters = validation_context.TraceCounters(),
+            .notifications = runtime.Notifications(),
+            .script_task_executor = runtime.ScriptTaskExecutor(),
+            .validation_cache = runtime.ScriptValidationCache(),
         };
+        BlockConnectionTrace trace{runtime.TraceCounters()};
+        CoreBlockConnectionPlan connection_plan{PlanCoreBlockConnection(
+            runtime.SnapshotConnectionPolicy(*pindex),
+            block_index_store,
+            *pindex)};
+        MaybeLogCoreBlockConnectionScriptPolicy(
+            chainstate.LastScriptCheckReasonLogged(),
+            *pindex,
+            test_block.GetHash(),
+            connection_plan);
         CoreBlockConnectionSetup connection_setup{
             runtime_inputs,
-            PlanCoreBlockConnection(SnapshotCoreBlockConnectionPolicy(validation_context, *pindex), block_index_store, *pindex),
-            *pindex,
+            std::move(connection_plan),
+            trace,
             /*cache_script_results=*/false};
-        connection_setup.MaybeLogScriptPolicy(chainstate.LastScriptCheckReasonLogged(), test_block.GetHash());
         validation::CoreCoinsBlockConnectionState connection_state{viewNew};
+        CoreBlockSpendEffectsCommitter spend_state_committer{viewNew};
+        CoreBlockConnectionCommitTarget commit_target{
+            block_store,
+            block_index_store,
+            connection_state,
+            *pindex};
         const validation::BlockConnectionRequest request{connection_setup.Request(test_block, connection_state)};
-        assert(validation::BlockConnectionEngine{}.Connect(request, test_block_state).Succeeded());
+        validation::BlockConnectionEngine engine;
+        auto connected{engine.ConnectPrepared(request, test_block_state)};
+        assert(connected.Succeeded());
+        assert(connected.commit_package);
+        const validation::BlockConnectionCommitRequest commit_request{
+            .runtime = {
+                .revert_data_writer = commit_target.RevertDataWriter(),
+                .spend_state_committer = spend_state_committer,
+                .metadata_committer = commit_target.MetadataCommitter(),
+                .trace = trace,
+            },
+            .context = {
+                .block = test_block,
+                .block_position = commit_target.BlockPosition(),
+                .connection_state = connection_state,
+            },
+        };
+        assert(engine.Commit(commit_request, std::move(*connected.commit_package), test_block_state).Succeeded());
     });
 }
 

@@ -5,12 +5,14 @@
 #include <chainparams.h>
 #include <clientversion.h>
 #include <flatfile.h>
+#include <kernel/block_import_pipeline.h>
 #include <test/fuzz/FuzzedDataProvider.h>
 #include <test/fuzz/fuzz.h>
 #include <test/fuzz/util.h>
 #include <test/util/setup_common.h>
 #include <test/util/time.h>
 #include <util/time.h>
+#include <validation/runtime_time.h>
 #include <chainstate.h>
 
 #include <cstdint>
@@ -37,11 +39,23 @@ FUZZ_TARGET(load_external_block_file, .init = initialize_load_external_block_fil
     }
     if (fuzzed_data_provider.ConsumeBool()) {
         // Corresponds to the -reindex case (track orphan blocks across files).
-        FlatFilePos flat_file_pos;
-        std::multimap<uint256, FlatFilePos> blocks_with_unknown_parent;
-        g_setup->m_node.chainman->LoadExternalBlockFile(fuzzed_block_file, &flat_file_pos, &blocks_with_unknown_parent);
+        kernel::UnknownParentIndex blocks_with_unknown_parent;
+        (void)kernel::ImportExternalBlockFile({
+            .chainman = *g_setup->m_node.chainman,
+            .file = fuzzed_block_file,
+            .mode = kernel::ExternalBlockFileReindex{
+                .file_number = 0,
+                .unknown_parent_index = blocks_with_unknown_parent,
+            },
+            .current_time = CurrentNodeTime(),
+        });
     } else {
         // Corresponds to the -loadblock= case (orphan blocks aren't tracked across files).
-        g_setup->m_node.chainman->LoadExternalBlockFile(fuzzed_block_file);
+        (void)kernel::ImportExternalBlockFile({
+            .chainman = *g_setup->m_node.chainman,
+            .file = fuzzed_block_file,
+            .mode = kernel::ExternalBlockFileLoadBlock{},
+            .current_time = CurrentNodeTime(),
+        });
     }
 }

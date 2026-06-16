@@ -4,110 +4,104 @@
 
 #include <test/util/consensus_serialization.h>
 
-#include <crypto/hex_base.h>
+#include <consensus/serialization.h>
 #include <primitives/block.h>
 #include <primitives/transaction.h>
-#include <streams.h>
 #include <util/strencodings.h>
 
-#include <cstdint>
-#include <exception>
+#include <cstddef>
+#include <span>
 #include <stdexcept>
 #include <string>
+#include <string_view>
+#include <utility>
 #include <vector>
 
 namespace test::consensus {
 namespace {
 
-std::vector<uint8_t> ParseFixtureHex(std::string_view hex, std::string_view type)
+std::vector<std::byte> ParseFixtureHex(std::string_view hex, std::string_view type)
 {
-    auto bytes{TryParseHex<uint8_t>(hex)};
+    auto bytes{TryParseHex<std::byte>(hex)};
     if (!bytes) {
         throw std::runtime_error{std::string{type} + " fixture is not valid hex"};
     }
     return std::move(*bytes);
 }
 
-void CheckFullyConsumed(const SpanReader& reader, std::string_view type)
+void AppendBytes(void* user_data, std::span<const std::byte> bytes)
 {
-    if (!reader.empty()) {
-        throw std::runtime_error{std::string{type} + " fixture has trailing bytes"};
-    }
+    auto& out{*static_cast<std::vector<std::byte>*>(user_data)};
+    out.insert(out.end(), bytes.begin(), bytes.end());
 }
 
 template <typename WriteFn>
 std::string SerializeFixtureHex(WriteFn write)
 {
-    std::vector<uint8_t> bytes;
-    VectorWriter writer{bytes, 0};
-    write(writer);
+    std::vector<std::byte> bytes;
+    write(Consensus::ByteSinkRef{&bytes, AppendBytes});
     return HexStr(bytes);
 }
 
-template <typename T, typename ReadFn>
-T ParseExactSerializedHex(std::string_view hex, std::string_view type, ReadFn read)
+template <typename T, typename ParseFn>
+T ParseExactSerializedHex(std::string_view hex, std::string_view type, ParseFn parse)
 {
     auto bytes{ParseFixtureHex(hex, type)};
-    SpanReader reader{bytes};
-    T value;
-    try {
-        read(reader, value);
-    } catch (const std::exception& e) {
-        throw std::runtime_error{std::string{type} + " fixture is not a complete serialized value: " + e.what()};
+    auto value{parse(bytes)};
+    if (!value) {
+        throw std::runtime_error{std::string{type} + " fixture is not exactly one complete serialized value"};
     }
-    CheckFullyConsumed(reader, type);
-    return value;
+    return std::move(*value);
 }
 
 } // namespace
 
 CBlock ParseExactBlockHex(std::string_view hex)
 {
-    return ParseExactSerializedHex<CBlock>(hex, "block", [](SpanReader& reader, CBlock& block) {
-        reader >> TX_WITH_WITNESS(block);
+    return ParseExactSerializedHex<CBlock>(hex, "block", [](std::span<const std::byte> bytes) {
+        return Consensus::ParseBlock(bytes);
     });
 }
 
 CBlockHeader ParseExactBlockHeaderHex(std::string_view hex)
 {
-    return ParseExactSerializedHex<CBlockHeader>(hex, "block header", [](SpanReader& reader, CBlockHeader& header) {
-        reader >> header;
+    return ParseExactSerializedHex<CBlockHeader>(hex, "block header", [](std::span<const std::byte> bytes) {
+        return Consensus::ParseBlockHeader(bytes);
     });
 }
 
 CTransaction ParseExactTransactionHex(std::string_view hex)
 {
-    CMutableTransaction tx{ParseExactSerializedHex<CMutableTransaction>(hex, "transaction", [](SpanReader& reader, CMutableTransaction& tx) {
-        reader >> TX_WITH_WITNESS(tx);
-    })};
-    return CTransaction{tx};
+    return ParseExactSerializedHex<CTransaction>(hex, "transaction", [](std::span<const std::byte> bytes) {
+        return Consensus::ParseTransaction(bytes);
+    });
 }
 
 CTxOut ParseExactTxOutHex(std::string_view hex)
 {
-    return ParseExactSerializedHex<CTxOut>(hex, "txout", [](SpanReader& reader, CTxOut& txout) {
-        reader >> txout;
+    return ParseExactSerializedHex<CTxOut>(hex, "txout", [](std::span<const std::byte> bytes) {
+        return Consensus::ParseTxOut(bytes);
     });
 }
 
 std::string SerializeBlockHex(const CBlock& block)
 {
-    return SerializeFixtureHex([&](VectorWriter& writer) { writer << TX_WITH_WITNESS(block); });
+    return SerializeFixtureHex([&](Consensus::ByteSinkRef out) { Consensus::SerializeBlock(block, out); });
 }
 
 std::string SerializeBlockHeaderHex(const CBlockHeader& header)
 {
-    return SerializeFixtureHex([&](VectorWriter& writer) { writer << header; });
+    return SerializeFixtureHex([&](Consensus::ByteSinkRef out) { Consensus::SerializeBlockHeader(header, out); });
 }
 
 std::string SerializeTransactionHex(const CTransaction& tx)
 {
-    return SerializeFixtureHex([&](VectorWriter& writer) { writer << TX_WITH_WITNESS(tx); });
+    return SerializeFixtureHex([&](Consensus::ByteSinkRef out) { Consensus::SerializeTransaction(tx, out); });
 }
 
 std::string SerializeTxOutHex(const CTxOut& txout)
 {
-    return SerializeFixtureHex([&](VectorWriter& writer) { writer << txout; });
+    return SerializeFixtureHex([&](Consensus::ByteSinkRef out) { Consensus::SerializeTxOut(txout, out); });
 }
 
 } // namespace test::consensus

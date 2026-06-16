@@ -10,6 +10,7 @@
 #include <validation/coins_view_spend_state.h>
 #include <consensus/consensus.h>
 #include <consensus/snapshot_spend_state.h>
+#include <consensus/spend_state_batch.h>
 #include <consensus/validation.h>
 #include <primitives/block.h>
 #include <primitives/transaction.h>
@@ -22,6 +23,7 @@
 
 #include <cassert>
 #include <cstddef>
+#include <limits>
 #include <map>
 #include <optional>
 #include <span>
@@ -39,15 +41,27 @@ CTransactionRef MakeCoinbase(CAmount value = 0)
     return MakeTransactionRef(tx);
 }
 
-CTransactionRef MakeSpendTx(const COutPoint& prevout, CAmount value, uint32_t sequence = CTxIn::SEQUENCE_FINAL)
+COutPoint OutPoint(uint8_t value, uint32_t index = 0)
+{
+    return COutPoint{Txid::FromUint256(uint256{value}), index};
+}
+
+CTransactionRef MakeSpendTx(std::vector<COutPoint> prevouts, CAmount value, uint32_t sequence = CTxIn::SEQUENCE_FINAL)
 {
     CMutableTransaction tx;
     tx.version = 2;
-    tx.vin.resize(1);
-    tx.vin[0].prevout = prevout;
-    tx.vin[0].nSequence = sequence;
+    tx.vin.reserve(prevouts.size());
+    for (const COutPoint& prevout : prevouts) {
+        tx.vin.emplace_back(prevout);
+        tx.vin.back().nSequence = sequence;
+    }
     tx.vout.emplace_back(value, CScript{} << OP_TRUE);
     return MakeTransactionRef(tx);
+}
+
+CTransactionRef MakeSpendTx(const COutPoint& prevout, CAmount value, uint32_t sequence = CTxIn::SEQUENCE_FINAL)
+{
+    return MakeSpendTx(std::vector<COutPoint>{prevout}, value, sequence);
 }
 
 CTransactionRef MakeCoinbaseWithSigOps(int sigops)
@@ -66,6 +80,15 @@ Consensus::BlockSpendContext BlockSpendContext(int block_height = 2, int64_t pre
     return Consensus::BlockSpendContext{
         .block_height = block_height,
         .previous_median_time_past = previous_median_time_past,
+    };
+}
+
+Consensus::CoinSnapshot InputCoin(CAmount value, int height = 1, bool coinbase = false)
+{
+    return Consensus::CoinSnapshot{
+        .output = CTxOut{value, CScript{} << OP_TRUE},
+        .height = height,
+        .is_coinbase = coinbase,
     };
 }
 
@@ -119,7 +142,7 @@ validation::CoinsViewSpendState SpendState(const CCoinsViewCache& coins)
     return validation::CoinsViewSpendState{coins};
 }
 
-class FakeSpendState final : public Consensus::SpendStateView {
+class FakeSpendState final : public Consensus::SpendLookupBackend {
 public:
     bool have_coin{false};
     COutPoint unspent_outpoint;
@@ -171,14 +194,14 @@ public:
     }
 };
 
-class FakeBlockSpendWorkspace final : public Consensus::BlockSpendWorkspace {
+class FakeSpendWorkspace final : public Consensus::SpendWorkspace {
 public:
     FakeSpendState view;
     FakeSequenceLockTimeView sequence_lock_times;
     int stages{0};
     std::optional<Consensus::BlockSpendError> stage_error;
 
-    const Consensus::SpendStateView& StagedSpendView() const override { return view; }
+    const Consensus::SpendLookupBackend& StagedSpendView() const override { return view; }
     const Consensus::SequenceLockTimeView& SequenceLockTimes() const override { return sequence_lock_times; }
 
     Consensus::BlockSpendResult<void> StageTransactionEffectsForIntraBlockView(const Consensus::TransactionCoinEffects& coin_effects, unsigned int transaction_index) override
@@ -192,8 +215,20 @@ public:
     }
 };
 
+class FakeBlockSpendJoiner final : public Consensus::BlockSpendJoiner {
+public:
+    mutable int joins{0};
+    Consensus::BlockSpentOutputJoin joined_inputs;
+
+    Consensus::BlockSpentOutputJoin Join(std::span<const CTransactionRef>, int) const override
+    {
+        ++joins;
+        return joined_inputs;
+    }
+};
+
 Consensus::BlockSpendResult<Consensus::BlockSpendEffects> ValidateTimeLockedSpendWithBackend(
-    Consensus::BlockSpendBackend& backend)
+    Consensus::SpendWorkspaceProvider& backend)
 {
     const Consensus::BlockSpendContext context{
         .block_height = 2,
@@ -448,6 +483,64 @@ BOOST_AUTO_TEST_CASE(transaction_inputs_for_block_rejects_input_value_out_of_ran
     CheckRejectReason(result, Consensus::BlockConsensusIssue::Consensus, "bad-txns-inputvalues-outofrange");
 }
 
+BOOST_AUTO_TEST_CASE(transaction_input_coin_value_check_rejects_negative_amount)
+{
+    const CTransactionRef tx{MakeSpendTx(OutPoint(2), /*value=*/0)};
+    const std::vector input_coins{InputCoin(-1)};
+
+    const auto result{Consensus::CheckTransactionInputCoinsForBlock(*tx, input_coins, SpendContext(/*block_height=*/2), /*locktime_flags=*/0)};
+
+    CheckRejectReason(result, Consensus::BlockConsensusIssue::Consensus, "bad-txns-inputvalues-outofrange");
+}
+
+BOOST_AUTO_TEST_CASE(transaction_input_coin_value_check_rejects_int64_max_amount)
+{
+    const CTransactionRef tx{MakeSpendTx(OutPoint(3), /*value=*/0)};
+    const std::vector input_coins{InputCoin(std::numeric_limits<CAmount>::max())};
+
+    const auto result{Consensus::CheckTransactionInputCoinsForBlock(*tx, input_coins, SpendContext(/*block_height=*/2), /*locktime_flags=*/0)};
+
+    CheckRejectReason(result, Consensus::BlockConsensusIssue::Consensus, "bad-txns-inputvalues-outofrange");
+}
+
+BOOST_AUTO_TEST_CASE(transaction_input_coin_value_check_rejects_max_money_plus_one_amount)
+{
+    const CTransactionRef tx{MakeSpendTx(OutPoint(4), /*value=*/0)};
+    const std::vector input_coins{InputCoin(MAX_MONEY + 1)};
+
+    const auto result{Consensus::CheckTransactionInputCoinsForBlock(*tx, input_coins, SpendContext(/*block_height=*/2), /*locktime_flags=*/0)};
+
+    CheckRejectReason(result, Consensus::BlockConsensusIssue::Consensus, "bad-txns-inputvalues-outofrange");
+}
+
+BOOST_AUTO_TEST_CASE(transaction_input_coin_value_check_rejects_sum_above_money_range)
+{
+    const std::vector prevouts{OutPoint(5), OutPoint(6)};
+    const CTransactionRef tx{MakeSpendTx(prevouts, /*value=*/0)};
+    const std::vector input_coins{
+        InputCoin(MAX_MONEY),
+        InputCoin(1),
+    };
+
+    const auto result{Consensus::CheckTransactionInputCoinsForBlock(*tx, input_coins, SpendContext(/*block_height=*/2), /*locktime_flags=*/0)};
+
+    CheckRejectReason(result, Consensus::BlockConsensusIssue::Consensus, "bad-txns-inputvalues-outofrange");
+}
+
+BOOST_AUTO_TEST_CASE(transaction_input_coin_value_check_rejects_overflow_before_add_amount)
+{
+    const std::vector prevouts{OutPoint(7), OutPoint(8)};
+    const CTransactionRef tx{MakeSpendTx(prevouts, /*value=*/0)};
+    const std::vector input_coins{
+        InputCoin(MAX_MONEY),
+        InputCoin(std::numeric_limits<CAmount>::max()),
+    };
+
+    const auto result{Consensus::CheckTransactionInputCoinsForBlock(*tx, input_coins, SpendContext(/*block_height=*/2), /*locktime_flags=*/0)};
+
+    CheckRejectReason(result, Consensus::BlockConsensusIssue::Consensus, "bad-txns-inputvalues-outofrange");
+}
+
 BOOST_AUTO_TEST_CASE(transaction_inputs_for_block_rejects_value_in_below_outputs)
 {
     const COutPoint prevout{Txid::FromUint256(uint256::ONE), 0};
@@ -559,6 +652,156 @@ BOOST_AUTO_TEST_CASE(spend_state_backends_agree_on_nonfinal_time_locked_spend)
     CheckRejectReason(core_result, Consensus::BlockConsensusIssue::Consensus, "bad-txns-nonfinal");
 }
 
+BOOST_AUTO_TEST_CASE(transaction_spend_evaluation_returns_accounting_without_script_work)
+{
+    const COutPoint prevout{Txid::FromUint256(uint256::ONE), 0};
+    const CTransactionRef tx{MakeSpendTx(prevout, /*value=*/40)};
+    const std::vector<Consensus::CoinSnapshot> input_coins{
+        Consensus::CoinSnapshot{
+            .output = CTxOut{50, CScript{} << OP_TRUE},
+            .height = 1,
+            .is_coinbase = false,
+        },
+    };
+
+    const auto result{Consensus::EvaluateTransactionSpendForBlock(
+        tx,
+        input_coins,
+        SpendContext(),
+        Consensus::BlockSpendConsensusOptions{},
+        Consensus::BlockSpendAccounting{.fees = 3, .sigop_cost = 0})};
+
+    BOOST_REQUIRE(result);
+    BOOST_CHECK_EQUAL(result->accounting.fees, 13);
+    BOOST_REQUIRE_EQUAL(result->coin_effects.spends.size(), 1);
+    BOOST_CHECK(result->coin_effects.spends[0].outpoint == prevout);
+    BOOST_REQUIRE_EQUAL(result->coin_effects.creates.size(), 1);
+}
+
+BOOST_AUTO_TEST_CASE(transaction_script_check_for_block_submits_spent_output_plan)
+{
+    const COutPoint prevout{Txid::FromUint256(uint256::ONE), 0};
+    const CTransactionRef tx{MakeSpendTx(prevout, /*value=*/40)};
+    const std::vector<Consensus::CoinSnapshot> input_coins{
+        Consensus::CoinSnapshot{
+            .output = CTxOut{50, CScript{} << OP_TRUE},
+            .height = 1,
+            .is_coinbase = false,
+        },
+    };
+
+    FakeBlockScriptChecker script_checker;
+    const auto result{Consensus::SubmitTransactionScriptCheckForBlock(tx, input_coins, script_checker, script_verify_flags{})};
+
+    BOOST_REQUIRE(result);
+    BOOST_CHECK_EQUAL(script_checker.checks, 1);
+    BOOST_CHECK_EQUAL(script_checker.last_input_count, 1U);
+}
+
+BOOST_AUTO_TEST_CASE(block_spend_stage_collects_script_plans_without_executing_them)
+{
+    const COutPoint prevout{Txid::FromUint256(uint256::ONE), 0};
+    const CTransactionRef spend_tx{MakeSpendTx(prevout, /*value=*/40)};
+    CBlock block;
+    block.vtx = {MakeCoinbase(/*value=*/50), spend_tx};
+
+    FakeSpendWorkspace spend_state;
+    spend_state.view.have_coin = true;
+    spend_state.view.unspent_outpoint = prevout;
+    spend_state.view.coin_output = CTxOut{50, CScript{} << OP_TRUE};
+    spend_state.view.coin_height = 1;
+
+    const auto stage{Consensus::ValidateAndStageBlockTransactions(
+        block.vtx,
+        spend_state,
+        BlockSpendContext(),
+        Consensus::BlockSpendConsensusOptions{},
+        Consensus::ScriptCheckPlanCollection::Collect)};
+
+    BOOST_REQUIRE(stage);
+    BOOST_CHECK_EQUAL(stage->effects.fees, 10);
+    BOOST_REQUIRE_EQUAL(stage->script_checks.size(), 1U);
+    BOOST_CHECK(stage->script_checks[0].tx == spend_tx);
+    BOOST_REQUIRE_EQUAL(stage->script_checks[0].spent_outputs.size(), 1U);
+    BOOST_CHECK_EQUAL(stage->script_checks[0].spent_outputs[0].nValue, 50);
+    BOOST_CHECK_EQUAL(spend_state.stages, 2);
+}
+
+BOOST_AUTO_TEST_CASE(block_spend_stage_accepts_explicit_joiner)
+{
+    const COutPoint prevout{Txid::FromUint256(uint256::ONE), 0};
+    const CTransactionRef spend_tx{MakeSpendTx(prevout, /*value=*/40)};
+    CBlock block;
+    block.vtx = {MakeCoinbase(/*value=*/50), spend_tx};
+
+    FakeSpendWorkspace spend_state;
+    FakeBlockSpendJoiner joiner;
+    joiner.joined_inputs = Consensus::BlockSpentOutputJoin{
+        .status = Consensus::BlockSpentOutputJoinStatus::Complete,
+        .failed_lookup = std::nullopt,
+        .input_coins_by_transaction = {
+            {},
+            {
+                Consensus::CoinSnapshot{
+                    .output = CTxOut{50, CScript{} << OP_TRUE},
+                    .height = 1,
+                    .is_coinbase = false,
+                },
+            },
+        },
+        .backend_mismatch = std::nullopt,
+    };
+
+    const auto stage{Consensus::ValidateAndStageBlockTransactions(
+        block.vtx,
+        spend_state,
+        joiner,
+        BlockSpendContext(),
+        Consensus::BlockSpendConsensusOptions{},
+        Consensus::ScriptCheckPlanCollection::Collect)};
+
+    BOOST_REQUIRE(stage);
+    BOOST_CHECK_EQUAL(joiner.joins, 1);
+    BOOST_CHECK_EQUAL(stage->effects.fees, 10);
+    BOOST_REQUIRE_EQUAL(stage->script_checks.size(), 1U);
+    BOOST_CHECK(stage->script_checks[0].tx == spend_tx);
+    BOOST_CHECK_EQUAL(spend_state.stages, 2);
+}
+
+BOOST_AUTO_TEST_CASE(block_spend_stage_reports_backend_mismatch_as_runtime_failure)
+{
+    const COutPoint prevout{Txid::FromUint256(uint256::ONE), 0};
+    const CTransactionRef spend_tx{MakeSpendTx(prevout, /*value=*/40)};
+    CBlock block;
+    block.vtx = {MakeCoinbase(/*value=*/50), spend_tx};
+
+    FakeSpendWorkspace spend_state;
+    FakeBlockSpendJoiner joiner;
+    joiner.joined_inputs = Consensus::BlockSpentOutputJoin{
+        .status = Consensus::BlockSpentOutputJoinStatus::BackendMismatch,
+        .failed_lookup = std::nullopt,
+        .input_coins_by_transaction = {},
+        .backend_mismatch = Consensus::BlockSpentOutputBatchMismatch{
+            .requested_count = 2,
+            .result_count = 1,
+        },
+    };
+
+    const auto stage{Consensus::ValidateAndStageBlockTransactions(
+        block.vtx,
+        spend_state,
+        joiner,
+        BlockSpendContext(),
+        Consensus::BlockSpendConsensusOptions{},
+        Consensus::ScriptCheckPlanCollection::Collect)};
+
+    CheckRejectReason(stage, Consensus::BlockConsensusIssue::ValidationRuntime, "spend-state-batch-mismatch");
+    BOOST_REQUIRE(stage.error().runtime_issue.has_value());
+    BOOST_CHECK(*stage.error().runtime_issue == Consensus::ValidationRuntimeIssue::BackendUnavailable);
+    BOOST_CHECK_EQUAL(stage.error().debug_message, "spend lookup backend returned 1 results for 2 requested outpoints");
+    BOOST_CHECK_EQUAL(spend_state.stages, 0);
+}
+
 BOOST_AUTO_TEST_CASE(transaction_spend_for_block_returns_accounting_and_coin_effects)
 {
     const COutPoint prevout{Txid::FromUint256(uint256::ONE), 0};
@@ -640,6 +883,33 @@ BOOST_AUTO_TEST_CASE(transaction_spend_for_block_returns_script_diagnostics)
     BOOST_CHECK_EQUAL(script_checker.checks, 1);
 }
 
+BOOST_AUTO_TEST_CASE(block_spend_for_block_returns_script_diagnostics_after_attempt_staging)
+{
+    const COutPoint prevout{Txid::FromUint256(uint256::ONE), 0};
+    const CTransactionRef spend_tx{MakeSpendTx(prevout, /*value=*/40)};
+    CBlock block;
+    block.vtx = {MakeCoinbase(/*value=*/50), spend_tx};
+
+    FakeSpendWorkspace spend_state;
+    spend_state.view.have_coin = true;
+    spend_state.view.unspent_outpoint = prevout;
+    spend_state.view.coin_output = CTxOut{50, CScript{} << OP_TRUE};
+    spend_state.view.coin_height = 1;
+
+    FakeBlockScriptChecker script_checker;
+    script_checker.fail = true;
+    const auto result{Consensus::ValidateAndStageBlockTransactions(
+        block.vtx,
+        spend_state,
+        script_checker,
+        BlockSpendContext(),
+        Consensus::BlockSpendConsensusOptions{})};
+
+    CheckRejectReason(result, Consensus::BlockConsensusIssue::Consensus, "fake-script");
+    BOOST_CHECK_EQUAL(spend_state.stages, 2);
+    BOOST_CHECK_EQUAL(script_checker.checks, 1);
+}
+
 BOOST_AUTO_TEST_CASE(block_spend_for_block_returns_effects)
 {
     const COutPoint prevout{Txid::FromUint256(uint256::ONE), 0};
@@ -647,7 +917,7 @@ BOOST_AUTO_TEST_CASE(block_spend_for_block_returns_effects)
     CBlock block;
     block.vtx = {MakeCoinbase(/*value=*/50), spend_tx};
 
-    FakeBlockSpendWorkspace spend_state;
+    FakeSpendWorkspace spend_state;
     spend_state.view.have_coin = true;
     spend_state.view.unspent_outpoint = prevout;
     spend_state.view.coin_output = CTxOut{50, CScript{} << OP_TRUE};
@@ -672,12 +942,81 @@ BOOST_AUTO_TEST_CASE(block_spend_for_block_returns_effects)
     BOOST_CHECK_EQUAL(script_checker.checks, 1);
 }
 
+BOOST_AUTO_TEST_CASE(block_spend_for_block_rejects_duplicate_spend_before_script_work)
+{
+    const COutPoint prevout{Txid::FromUint256(uint256::ONE), 0};
+    CBlock block;
+    block.vtx = {
+        MakeCoinbase(/*value=*/50),
+        MakeSpendTx(prevout, /*value=*/40),
+        MakeSpendTx(prevout, /*value=*/30),
+    };
+
+    FakeSpendWorkspace spend_state;
+    spend_state.view.have_coin = true;
+    spend_state.view.unspent_outpoint = prevout;
+    spend_state.view.coin_output = CTxOut{50, CScript{} << OP_TRUE};
+    spend_state.view.coin_height = 1;
+
+    FakeBlockScriptChecker script_checker;
+    const auto result{Consensus::ValidateAndStageBlockTransactions(
+        block.vtx,
+        spend_state,
+        script_checker,
+        BlockSpendContext(/*block_height=*/2, /*previous_median_time_past=*/0),
+        Consensus::BlockSpendConsensusOptions{})};
+
+    CheckRejectReason(result, Consensus::BlockConsensusIssue::Consensus, "bad-txns-inputs-missingorspent");
+    BOOST_CHECK_EQUAL(spend_state.stages, 0);
+    BOOST_CHECK_EQUAL(script_checker.checks, 0);
+}
+
+BOOST_AUTO_TEST_CASE(block_spend_for_block_accepts_earlier_transaction_output_spend)
+{
+    const COutPoint prevout{Txid::FromUint256(uint256::ONE), 0};
+    const CTransactionRef parent{MakeSpendTx(prevout, /*value=*/40)};
+    const CTransactionRef child{MakeSpendTx(COutPoint{parent->GetHash(), 0}, /*value=*/39)};
+    CBlock block;
+    block.vtx = {MakeCoinbase(/*value=*/50), parent, child};
+
+    Consensus::SnapshotSpendState spend_state;
+    spend_state.AddCoin(
+        prevout,
+        Consensus::CoinSnapshot{
+            .output = CTxOut{50, CScript{} << OP_TRUE},
+            .height = 1,
+            .is_coinbase = false,
+        });
+    auto workspace{spend_state.BeginBlockSpend(BlockSpendContext(/*block_height=*/2, /*previous_median_time_past=*/0))};
+    BOOST_REQUIRE(workspace);
+
+    FakeBlockScriptChecker script_checker;
+    const auto result{Consensus::ValidateAndStageBlockTransactions(
+        block.vtx,
+        **workspace,
+        script_checker,
+        BlockSpendContext(/*block_height=*/2, /*previous_median_time_past=*/0),
+        Consensus::BlockSpendConsensusOptions{})};
+
+    BOOST_REQUIRE(result);
+    BOOST_CHECK_EQUAL(result->fees, 11);
+    BOOST_CHECK_EQUAL(result->inputs, 3);
+    BOOST_REQUIRE_EQUAL(result->transaction_effects.size(), 3);
+    BOOST_REQUIRE_EQUAL(result->transaction_effects[2].spends.size(), 1);
+    const COutPoint parent_output{parent->GetHash(), 0};
+    BOOST_CHECK(result->transaction_effects[2].spends[0].outpoint == parent_output);
+    BOOST_CHECK_EQUAL(result->transaction_effects[2].spends[0].coin.output.nValue, 40);
+    BOOST_CHECK_EQUAL(result->transaction_effects[2].spends[0].coin.height, 2);
+    BOOST_CHECK(!result->transaction_effects[2].spends[0].coin.is_coinbase);
+    BOOST_CHECK_EQUAL(script_checker.checks, 2);
+}
+
 BOOST_AUTO_TEST_CASE(block_spend_for_block_checks_unspent_output_overwrite_before_staging)
 {
     CBlock block;
     block.vtx = {MakeCoinbase(/*value=*/50)};
 
-    FakeBlockSpendWorkspace spend_state;
+    FakeSpendWorkspace spend_state;
     spend_state.view.have_coin = true;
     spend_state.view.unspent_outpoint = COutPoint{block.vtx[0]->GetHash(), 0};
 
@@ -720,7 +1059,7 @@ BOOST_AUTO_TEST_CASE(block_spend_for_block_returns_stage_diagnostics)
     CBlock block;
     block.vtx = {MakeCoinbase(/*value=*/50), spend_tx};
 
-    FakeBlockSpendWorkspace spend_state;
+    FakeSpendWorkspace spend_state;
     spend_state.view.have_coin = true;
     spend_state.view.unspent_outpoint = prevout;
     spend_state.view.coin_output = CTxOut{50, CScript{} << OP_TRUE};

@@ -57,6 +57,7 @@
 #include <util/translation.h>
 #include <validation/block_validation.h>
 #include <validation/chain_validation.h>
+#include <validation/runtime_time.h>
 #include <validation_state.h>
 #include <validationinterface.h>
 
@@ -91,6 +92,18 @@ namespace node {
 // All members of the classes in this namespace are intentionally public, as the
 // classes themselves are private.
 namespace {
+interfaces::BlockInfo MakeNotificationBlockInfo(const validation::ValidationBlockInfo& info, const CBlock* block = nullptr)
+{
+    interfaces::BlockInfo notification_info{info.hash};
+    if (info.previous_hash) notification_info.prev_hash = &*info.previous_hash;
+    notification_info.height = info.height;
+    notification_info.file_number = info.file_number;
+    notification_info.data_pos = info.data_pos;
+    notification_info.chain_time_max = static_cast<unsigned int>(info.chain_time_max);
+    notification_info.data = block;
+    return notification_info;
+}
+
 class NodeImpl : public Node
 {
 public:
@@ -427,21 +440,21 @@ public:
     {
         m_notifications->transactionRemovedFromMempool(tx, reason);
     }
-    void BlockConnected(const std::shared_ptr<const CBlock>& block, const CBlockIndex* index) override
+    void BlockConnected(const validation::BlockConnectedEvent& event) override
     {
-        m_notifications->blockConnected(kernel::MakeBlockInfo(index, block.get()));
+        m_notifications->blockConnected(MakeNotificationBlockInfo(event.block_info, event.block.get()));
     }
-    void BlockDisconnected(const std::shared_ptr<const CBlock>& block, const CBlockIndex* index) override
+    void BlockDisconnected(const validation::BlockDisconnectedEvent& event) override
     {
-        m_notifications->blockDisconnected(kernel::MakeBlockInfo(index, block.get()));
+        m_notifications->blockDisconnected(MakeNotificationBlockInfo(event.block_info, event.block.get()));
     }
-    void UpdatedBlockTip(const CBlockIndex* index, const CBlockIndex* fork_index, bool is_ibd) override
+    void UpdatedBlockTip(const validation::TipUpdatedEvent& event) override
     {
         m_notifications->updatedBlockTip();
     }
-    void ChainStateFlushed(const CBlockLocator& locator) override
+    void ChainStateFlushed(const validation::ChainStateFlushedEvent& event) override
     {
-        m_notifications->chainStateFlushed(locator);
+        m_notifications->chainStateFlushed(event.locator);
     }
     std::shared_ptr<Chain::Notifications> m_notifications;
 };
@@ -906,13 +919,14 @@ public:
             AddMerkleRootAndCoinbase(block, std::move(coinbase), version, timestamp, nonce);
             std::optional<MempoolChainSync> chain_events;
             if (node->mempool) chain_events.emplace(Assert(node->chainman)->ActiveChainstate(), *node->mempool);
-            const bool processed{ChainValidationService{*Assert(node->chainman)}
-                                     .ProcessNewBlock(
-                                         chain_events ? &*chain_events : nullptr,
-                                         std::make_shared<const CBlock>(block),
-                                         {.block_data_storage = BlockDataStorageMode::ForceStore, .header = {.min_pow_checked = true}},
-                                         CurrentBlockValidationTime())
-                                     .processed()};
+            const bool processed{ProcessNewBlock({
+                                     .chainman = *Assert(node->chainman),
+                                     .chain_events = chain_events ? &*chain_events : nullptr,
+                                     .block = std::make_shared<const CBlock>(block),
+                                     .options = {.block_data_storage = BlockDataStorageMode::ForceStore, .header = {.min_pow_checked = true}},
+                                     .time = CurrentBlockValidationTime(),
+                                 })
+                                     .Processed()};
             if (!cancelled.load(std::memory_order_acquire)) fn(processed);
         });
     }
@@ -1193,7 +1207,12 @@ public:
             const Consensus::BlockCheckOptions validity_options{
                 .check_pow = options.check_pow,
                 .check_merkle_root = options.check_merkle_root};
-            BlockValidationState state{ChainValidationService{chainman()}.TestActiveBlockValidity(block, validity_options, CurrentBlockValidationTime())};
+            BlockValidationState state{TestActiveBlockValidity({
+                .chainman = chainman(),
+                .block = block,
+                .options = validity_options,
+                .time = CurrentBlockValidationTime(),
+            })};
             if (!cancelled.load(std::memory_order_acquire)) fn(state.IsValid(), state.GetRejectReason(), state.GetDebugMessage());
         });
     }

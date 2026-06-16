@@ -7,6 +7,8 @@ include(GNUInstallDirs)
 # libbitcoinkernel is Core's embeddable runtime. Keep node-only code out of
 # this target as validation and consensus boundaries continue to narrow.
 add_library(bitcoinkernel
+  block_import_pipeline.cpp
+  blk_file_scanner.cpp
   bitcoinkernel.cpp
   blockimport.cpp
   blockstorage.cpp
@@ -77,6 +79,7 @@ target_link_libraries(crc32c PRIVATE kernel_warn_interface)
 
 target_link_libraries(bitcoinkernel
   PRIVATE
+    bitcoin_validation_core_adapter
     bitcoin_consensus
     bitcoin_chain_validation
     core_interface
@@ -98,6 +101,9 @@ if(bitcoinkernel_type STREQUAL "STATIC_LIBRARY")
   target_compile_definitions(bitcoinkernel PUBLIC BITCOINKERNEL_STATIC)
 endif()
 
+# Core's libbitcoinkernel component remains experimental. It is not part of the
+# Champy shipped C ABI manifest until the C ABI versioning, symbol, struct, and
+# kernel/validation split gates pass.
 configure_file(${PROJECT_SOURCE_DIR}/libbitcoinkernel.pc.in ${PROJECT_BINARY_DIR}/libbitcoinkernel.pc @ONLY)
 install(FILES ${PROJECT_BINARY_DIR}/libbitcoinkernel.pc DESTINATION "${CMAKE_INSTALL_LIBDIR}/pkgconfig" COMPONENT libbitcoinkernel)
 

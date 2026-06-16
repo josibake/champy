@@ -7,7 +7,9 @@
 #include <test/util/json.h>
 
 #include <coins.h>
+#include <consensus/block_commit.h>
 #include <consensus/merkle.h>
+#include <consensus/script_checker.h>
 #include <script/script.h>
 #include <univalue.h>
 
@@ -35,6 +37,60 @@ void CheckConformanceResultsEqual(
     BOOST_CHECK_EQUAL(actual.fees, expected.fees);
     BOOST_CHECK_EQUAL(actual.inputs, expected.inputs);
     BOOST_CHECK_EQUAL(actual.sigop_cost, expected.sigop_cost);
+}
+
+class NoopCommitSideEffects final : public Consensus::BlockRevertDataWriter, public Consensus::BlockMetadataCommitter {
+public:
+    [[nodiscard]] Consensus::BlockCommitResult<void> WriteBlockRevertData(
+        const Consensus::BlockCommitContext&,
+        const Consensus::BlockSpendEffects&) override
+    {
+        return {};
+    }
+
+    [[nodiscard]] Consensus::BlockCommitResult<void> CommitBlockMetadata(
+        const Consensus::BlockCommitContext&,
+        const Consensus::BlockSpendEffects&) override
+    {
+        return {};
+    }
+};
+
+void CheckCoinMatches(const Consensus::CoinSnapshot& actual, const Consensus::CoinSnapshot& expected)
+{
+    BOOST_CHECK(actual.output == expected.output);
+    BOOST_CHECK_EQUAL(actual.height, expected.height);
+    BOOST_CHECK_EQUAL(actual.is_coinbase, expected.is_coinbase);
+}
+
+void CheckCommittedSpendState(
+    Consensus::SnapshotSpendState& spend_backend,
+    const Consensus::BlockConsensusContext& context,
+    const Consensus::BlockSpendEffects& effects)
+{
+    const Consensus::BlockSpendContext next_block_context{
+        .block_height = context.spend.block_height + 1,
+        .previous_median_time_past = context.spend.previous_median_time_past + 999,
+    };
+    const auto next_workspace{spend_backend.BeginBlockSpend(next_block_context)};
+    BOOST_REQUIRE(next_workspace);
+
+    for (const auto& transaction_effects : effects.transaction_effects) {
+        for (const auto& spend : transaction_effects.spends) {
+            BOOST_CHECK(!spend_backend.HaveCoin(spend.outpoint));
+            BOOST_CHECK(!(*next_workspace)->StagedSpendView().HaveCoin(spend.outpoint));
+        }
+
+        for (const auto& create : transaction_effects.creates) {
+            const auto committed_coin{spend_backend.GetCoin(create.outpoint)};
+            BOOST_REQUIRE(committed_coin);
+            CheckCoinMatches(*committed_coin, create.coin);
+            BOOST_CHECK_EQUAL(committed_coin->height, context.spend.block_height);
+            BOOST_CHECK_EQUAL(
+                (*next_workspace)->SequenceLockTimes().PreviousMedianTimePast(create.outpoint, committed_coin->height),
+                context.commit.previous_median_time_past);
+        }
+    }
 }
 
 } // namespace
@@ -165,6 +221,46 @@ BOOST_AUTO_TEST_CASE(spend_state_backends_agree_on_conformance_fixtures)
         const auto core_result{test::consensus::RunCoreSpendStateConsensusFixture(fixture)};
 
         CheckConformanceResultsEqual(snapshot_result, core_result);
+    }
+}
+
+BOOST_AUTO_TEST_CASE(snapshot_spend_backend_commits_valid_conformance_fixtures)
+{
+    const UniValue fixtures{read_json(json_tests::consensus_conformance)};
+    for (const auto& fixture_value : fixtures.getValues()) {
+        const auto fixture{test::consensus::ReadConformanceFixture(fixture_value)};
+        if (!fixture.expected.valid) continue;
+
+        const Consensus::BlockConsensusContext context{test::consensus::BuildBlockConsensusContext(fixture)};
+        Consensus::SnapshotSpendState spend_backend{test::consensus::LoadSnapshotSpendState(fixture)};
+        auto workspace{spend_backend.BeginBlockSpend(context.spend)};
+        BOOST_REQUIRE(workspace);
+
+        Consensus::DirectBlockScriptChecker script_checker;
+        const auto precommit_view{Consensus::BuildBlockPrecommitValidationView(fixture.block)};
+        auto effects{Consensus::ValidateBlockPrecommitStages(
+            precommit_view,
+            Consensus::BlockStructuralConsensusOptions{.check_merkle_root = true},
+            test::consensus::BuildBlockContextualConsensusOptions(fixture),
+            context,
+            **workspace,
+            script_checker,
+            fixture.spend_options)};
+        BOOST_REQUIRE(effects);
+        BOOST_CHECK_EQUAL(effects->fees, fixture.expected.fees);
+        BOOST_CHECK_EQUAL(effects->inputs, fixture.expected.inputs);
+        BOOST_CHECK_EQUAL(effects->sigop_cost, fixture.expected.sigop_cost);
+        BOOST_REQUIRE_EQUAL(effects->transaction_effects.size(), fixture.block.vtx.size());
+
+        NoopCommitSideEffects side_effects;
+        const auto commit{Consensus::CommitBlockStageEffects(
+            context.commit,
+            *effects,
+            side_effects,
+            spend_backend,
+            side_effects)};
+        BOOST_REQUIRE(commit);
+        CheckCommittedSpendState(spend_backend, context, *effects);
     }
 }
 
