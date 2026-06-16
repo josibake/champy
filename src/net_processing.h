@@ -12,7 +12,6 @@
 #include <private_broadcast.h>
 #include <protocol.h>
 #include <uint256.h>
-#include <util/expected.h>
 #include <validationinterface.h>
 
 #include <atomic>
@@ -20,14 +19,12 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
-#include <string>
 #include <vector>
 
 class AddrMan;
 class CTxMemPool;
 class ChainstateManager;
 class BanMan;
-class CBlockIndex;
 class CScheduler;
 class DataStream;
 class uint256;
@@ -99,14 +96,6 @@ public:
                                              BanMan* banman, ChainstateManager& chainman,
                                              CTxMemPool& pool, node::Warnings& warnings, Options opts);
     virtual ~PeerManager() = default;
-
-    /**
-     * Attempt to manually fetch block from a given peer. We must already have the header.
-     *
-     * @param[in]  peer_id      The peer id
-     * @param[in]  block_index  The blockindex
-     */
-    virtual util::Expected<void, std::string> FetchBlock(NodeId peer_id, const CBlockIndex& block_index) = 0;
 
     /** Begin running background tasks, should only be called once */
     virtual void StartScheduledTasks(CScheduler& scheduler) = 0;

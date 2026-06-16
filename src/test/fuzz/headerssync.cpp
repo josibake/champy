@@ -3,6 +3,7 @@
 // file COPYING or https://opensource.org/license/mit.
 
 #include <arith_uint256.h>
+#include <validation/block_validation.h>
 #include <chain.h>
 #include <chainparams.h>
 #include <headerssync.h>
@@ -13,7 +14,7 @@
 #include <uint256.h>
 #include <util/chaintype.h>
 #include <util/time.h>
-#include <validation.h>
+#include <chainstate.h>
 
 #include <iterator>
 #include <vector>
@@ -46,7 +47,18 @@ class FuzzedHeadersSyncState : public HeadersSyncState
 public:
     FuzzedHeadersSyncState(const HeadersSyncParams& sync_params, const size_t commit_offset,
                            const CBlockIndex& chain_start, const arith_uint256& minimum_required_work)
-        : HeadersSyncState(/*id=*/0, Params().GetConsensus(), sync_params, chain_start, minimum_required_work)
+        : HeadersSyncState(
+              /*id=*/0,
+              Params().GetConsensus(),
+              sync_params,
+              Start{
+                  .header = chain_start.GetBlockHeader(),
+                  .height = chain_start.nHeight,
+                  .chain_work = chain_start.nChainWork,
+                  .median_time_past = chain_start.GetMedianTimePast(),
+                  .locator = GetLocator(&chain_start),
+              },
+              minimum_required_work)
     {
         const_cast<size_t&>(m_commit_offset) = commit_offset;
     }

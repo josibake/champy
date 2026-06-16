@@ -7,7 +7,7 @@
 
 #include <common/system.h>
 #include <consensus/amount.h>
-#include <kernel/mempool_entry.h>
+#include <node/mempool_entry.h>
 #include <logging.h>
 #include <policy/feerate.h>
 #include <primitives/transaction.h>

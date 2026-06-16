@@ -848,8 +848,6 @@ CSubNet LookupSubNet(const std::string& subnet_str)
 
 bool IsBadPort(uint16_t port)
 {
-    /* Don't forget to update doc/p2p-bad-ports.md if you change this list. */
-
     switch (port) {
     case 1:     // tcpmux
     case 7:     // echo

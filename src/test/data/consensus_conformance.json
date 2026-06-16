@@ -1,0 +1,281 @@
+[
+  {
+    "network": "regtest",
+    "validation_time": 1710000000,
+    "block_subsidy": 50,
+    "headers": [],
+    "block": "01000000000000000000000000000000000000000000000000000000000000000000000080b9687cec8e0cb803a87be50083fc3c38739c6c53d544f1944baa6f88f47cfd0100000000000000000000000101000000010000000000000000000000000000000000000000000000000000000000000000ffffffff020000ffffffff013200000000000000015100000000",
+    "spend_state": {
+      "backend": "utxo",
+      "coins": []
+    },
+    "spend_context": {
+      "block_height": 2,
+      "previous_median_time_past": 0
+    },
+    "contextual_options": {
+      "difficulty_adjustment_interval": 2016,
+      "previous_block_time": 0,
+      "enforce_timewarp_protection": false,
+      "height_in_coinbase_active": false,
+      "der_signature_active": false,
+      "cltv_active": false,
+      "csv_active": false,
+      "segwit_active": false
+    },
+    "spend_options": {
+      "locktime_flags": 0,
+      "script_flags": 0,
+      "check_no_unspent_output_overwrite": false
+    },
+    "expected": {
+      "valid": true,
+      "stage": "commit",
+      "fees": 0,
+      "inputs": 1,
+      "sigop_cost": 0
+    }
+  },
+  {
+    "network": "regtest",
+    "validation_time": 1710000000,
+    "block_subsidy": 49,
+    "headers": [],
+    "block": "01000000000000000000000000000000000000000000000000000000000000000000000080b9687cec8e0cb803a87be50083fc3c38739c6c53d544f1944baa6f88f47cfd0100000000000000000000000101000000010000000000000000000000000000000000000000000000000000000000000000ffffffff020000ffffffff013200000000000000015100000000",
+    "spend_state": {
+      "backend": "utxo",
+      "coins": []
+    },
+    "spend_context": {
+      "block_height": 2,
+      "previous_median_time_past": 0
+    },
+    "contextual_options": {
+      "difficulty_adjustment_interval": 2016,
+      "previous_block_time": 0,
+      "enforce_timewarp_protection": false,
+      "height_in_coinbase_active": false,
+      "der_signature_active": false,
+      "cltv_active": false,
+      "csv_active": false,
+      "segwit_active": false
+    },
+    "spend_options": {
+      "locktime_flags": 0,
+      "script_flags": 0,
+      "check_no_unspent_output_overwrite": false
+    },
+    "expected": {
+      "valid": false,
+      "stage": "spend",
+      "reject_reason": "bad-cb-amount",
+      "fees": 0,
+      "inputs": 1,
+      "sigop_cost": 0
+    }
+  },
+  {
+    "network": "regtest",
+    "validation_time": 1710000000,
+    "block_subsidy": 50,
+    "headers": [],
+    "block": "010000000000000000000000000000000000000000000000000000000000000000000000275eb77be09b6a1923e1554dc3a5fe64aa7b91245e8155c1485149d24a28d50e0100000000000000000000000201000000010000000000000000000000000000000000000000000000000000000000000000ffffffff020000ffffffff013200000000000000015100000000010000000101000000000000000000000000000000000000000000000000000000000000000000000000ffffffff013100000000000000015100000000",
+    "spend_state": {
+      "backend": "utxo",
+      "coins": []
+    },
+    "spend_context": {
+      "block_height": 2,
+      "previous_median_time_past": 0
+    },
+    "contextual_options": {
+      "difficulty_adjustment_interval": 2016,
+      "previous_block_time": 0,
+      "enforce_timewarp_protection": false,
+      "height_in_coinbase_active": false,
+      "der_signature_active": false,
+      "cltv_active": false,
+      "csv_active": false,
+      "segwit_active": false
+    },
+    "spend_options": {
+      "locktime_flags": 0,
+      "script_flags": 0,
+      "check_no_unspent_output_overwrite": false
+    },
+    "expected": {
+      "valid": false,
+      "stage": "spend",
+      "reject_reason": "bad-txns-inputs-missingorspent",
+      "fees": 0,
+      "inputs": 0,
+      "sigop_cost": 0
+    }
+  },
+  {
+    "network": "regtest",
+    "validation_time": 1710000000,
+    "block_subsidy": 50,
+    "headers": [],
+    "block": "01000000000000000000000000000000000000000000000000000000000000000000000021293d50477122219d42b414531ccca414407a98684d2126cd88591eb060a7ad0100000000000000000000000201000000010000000000000000000000000000000000000000000000000000000000000000ffffffff020000ffffffff013300000000000000015100000000010000000101000000000000000000000000000000000000000000000000000000000000000000000000ffffffff013100000000000000015100000000",
+    "spend_state": {
+      "backend": "utxo",
+      "coins": [
+        {
+          "outpoint": "0000000000000000000000000000000000000000000000000000000000000001:0",
+          "height": 1,
+          "previous_median_time_past": 0,
+          "coinbase": false,
+          "output": "32000000000000000151"
+        }
+      ]
+    },
+    "spend_context": {
+      "block_height": 2,
+      "previous_median_time_past": 0
+    },
+    "contextual_options": {
+      "difficulty_adjustment_interval": 2016,
+      "previous_block_time": 0,
+      "enforce_timewarp_protection": false,
+      "height_in_coinbase_active": false,
+      "der_signature_active": false,
+      "cltv_active": false,
+      "csv_active": false,
+      "segwit_active": false
+    },
+    "spend_options": {
+      "locktime_flags": 0,
+      "script_flags": 0,
+      "check_no_unspent_output_overwrite": false
+    },
+    "expected": {
+      "valid": true,
+      "stage": "commit",
+      "fees": 1,
+      "inputs": 2,
+      "sigop_cost": 0
+    }
+  },
+  {
+    "network": "regtest",
+    "validation_time": 1710000000,
+    "block_subsidy": 50,
+    "headers": [],
+    "block": "01000000000000000000000000000000000000000000000000000000000000000000000021293d50477122219d42b414531ccca414407a98684d2126cd88591eb060a7ad0100000000000000000000000201000000010000000000000000000000000000000000000000000000000000000000000000ffffffff020000ffffffff013300000000000000015100000000010000000101000000000000000000000000000000000000000000000000000000000000000000000000ffffffff013100000000000000015100000000",
+    "spend_state": {
+      "backend": "utxo",
+      "coins": [
+        {
+          "outpoint": "0000000000000000000000000000000000000000000000000000000000000001:0",
+          "height": 1,
+          "coinbase": false,
+          "output": "32000000000000000100"
+        }
+      ]
+    },
+    "spend_context": {
+      "block_height": 2,
+      "previous_median_time_past": 0
+    },
+    "contextual_options": {
+      "difficulty_adjustment_interval": 2016,
+      "previous_block_time": 0,
+      "enforce_timewarp_protection": false,
+      "height_in_coinbase_active": false,
+      "der_signature_active": false,
+      "cltv_active": false,
+      "csv_active": false,
+      "segwit_active": false
+    },
+    "spend_options": {
+      "locktime_flags": 0,
+      "script_flags": 0,
+      "check_no_unspent_output_overwrite": false
+    },
+    "expected": {
+      "valid": false,
+      "stage": "spend",
+      "reject_reason": "block-script-verify-flag-failed (Script evaluated without error but finished with a false/empty top stack element)",
+      "fees": 0,
+      "inputs": 0,
+      "sigop_cost": 0
+    }
+  },
+  {
+    "network": "regtest",
+    "validation_time": 1710000000,
+    "block_subsidy": 50,
+    "headers": [],
+    "block": "01000000000000000000000000000000000000000000000000000000000000000000000081b9687cec8e0cb803a87be50083fc3c38739c6c53d544f1944baa6f88f47cfd0100000000000000000000000101000000010000000000000000000000000000000000000000000000000000000000000000ffffffff020000ffffffff013200000000000000015100000000",
+    "spend_state": {
+      "backend": "utxo",
+      "coins": []
+    },
+    "spend_context": {
+      "block_height": 2,
+      "previous_median_time_past": 0
+    },
+    "contextual_options": {
+      "difficulty_adjustment_interval": 2016,
+      "previous_block_time": 0,
+      "enforce_timewarp_protection": false,
+      "height_in_coinbase_active": false,
+      "der_signature_active": false,
+      "cltv_active": false,
+      "csv_active": false,
+      "segwit_active": false
+    },
+    "spend_options": {
+      "locktime_flags": 0,
+      "script_flags": 0,
+      "check_no_unspent_output_overwrite": false
+    },
+    "expected": {
+      "valid": false,
+      "stage": "structural",
+      "reject_reason": "bad-txnmrklroot",
+      "fees": 0,
+      "inputs": 0,
+      "sigop_cost": 0
+    }
+  },
+  {
+    "network": "regtest",
+    "validation_time": 1710000000,
+    "block_subsidy": 50,
+    "headers": [],
+    "block": "01000000000000000000000000000000000000000000000000000000000000000000000080b9687cec8e0cb803a87be50083fc3c38739c6c53d544f1944baa6f88f47cfd0100000000000000000000000101000000010000000000000000000000000000000000000000000000000000000000000000ffffffff020000ffffffff013200000000000000015100000000",
+    "spend_state": {
+      "backend": "utxo",
+      "coins": []
+    },
+    "spend_context": {
+      "block_height": 2,
+      "previous_median_time_past": 1
+    },
+    "contextual_options": {
+      "difficulty_adjustment_interval": 2016,
+      "previous_block_time": 0,
+      "enforce_timewarp_protection": false,
+      "height_in_coinbase_active": false,
+      "der_signature_active": false,
+      "cltv_active": false,
+      "csv_active": false,
+      "segwit_active": false
+    },
+    "spend_options": {
+      "locktime_flags": 0,
+      "script_flags": 0,
+      "check_no_unspent_output_overwrite": false
+    },
+    "expected": {
+      "valid": false,
+      "stage": "contextual",
+      "reject_reason": "time-too-old",
+      "fees": 0,
+      "inputs": 0,
+      "sigop_cost": 0
+    }
+  }
+]

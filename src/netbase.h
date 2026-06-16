@@ -345,14 +345,12 @@ extern CThreadInterrupt g_socks5_interrupt;
  *      Version 5</a>
  */
 bool Socks5(const std::string& strDest, uint16_t port, const ProxyCredentials* auth, const Sock& socket);
-
 /**
- * Determine if a port is "bad" from the perspective of attempting to connect
- * to a node on that port.
- * @see doc/p2p-bad-ports.md
- * @param[in] port Port to check.
- * @returns whether the port is bad
- */
+  * Determine if a port is "bad" from the perspective of attempting to connect
+  * to a node on that port.
+  * @param[in] port Port to check.
+  * @returns whether the port is bad
+  */
 bool IsBadPort(uint16_t port);
 
 /**

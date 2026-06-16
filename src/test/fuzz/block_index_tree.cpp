@@ -14,7 +14,7 @@
 #include <test/util/setup_common.h>
 #include <test/util/time.h>
 #include <test/util/validation.h>
-#include <validation.h>
+#include <chainstate.h>
 
 #include <ranges>
 #include <vector>
@@ -147,7 +147,7 @@ FUZZ_TARGET(block_index_tree, .init = initialize_block_index_tree)
                             break;
                         }
                     }
-                } while (node::CBlockIndexWorkComparator()(chain.Tip(), old_tip));
+                } while (kernel::CBlockIndexWorkComparator()(chain.Tip(), old_tip));
                 assert(chain.Tip()->nChainWork >= old_tip->nChainWork);
             },
             [&] {

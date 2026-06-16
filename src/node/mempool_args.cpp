@@ -4,8 +4,8 @@
 
 #include <node/mempool_args.h>
 
-#include <kernel/mempool_limits.h>
-#include <kernel/mempool_options.h>
+#include <node/mempool_limits.h>
+#include <node/mempool_options.h>
 
 #include <common/args.h>
 #include <common/messages.h>
@@ -22,8 +22,8 @@
 #include <memory>
 
 using common::AmountErrMsg;
-using kernel::MemPoolLimits;
-using kernel::MemPoolOptions;
+using node::MemPoolLimits;
+using node::MemPoolOptions;
 
 //! Maximum mempool size on 32-bit systems.
 static constexpr int MAX_32BIT_MEMPOOL_MB{500};

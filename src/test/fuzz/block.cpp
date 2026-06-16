@@ -2,9 +2,10 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
+#include <validation/block_validation.h>
 #include <chainparams.h>
 #include <consensus/merkle.h>
-#include <consensus/validation.h>
+#include <validation_state.h>
 #include <core_io.h>
 #include <core_memusage.h>
 #include <primitives/block.h>
@@ -12,7 +13,7 @@
 #include <streams.h>
 #include <test/fuzz/fuzz.h>
 #include <util/chaintype.h>
-#include <validation.h>
+#include <chainstate.h>
 
 #include <cassert>
 #include <string>
@@ -32,17 +33,25 @@ FUZZ_TARGET(block, .init = initialize_block)
     }
     const Consensus::Params& consensus_params = Params().GetConsensus();
     BlockValidationState validation_state_pow_and_merkle;
-    const bool valid_incl_pow_and_merkle = CheckBlock(block, validation_state_pow_and_merkle, consensus_params, /* fCheckPOW= */ true, /* fCheckMerkleRoot= */ true);
+    const bool valid_incl_pow_and_merkle = CheckBlock(block, validation_state_pow_and_merkle, consensus_params, {
+        .check_pow = true,
+        .check_merkle_root = true});
     assert(validation_state_pow_and_merkle.IsValid() || validation_state_pow_and_merkle.IsInvalid() || validation_state_pow_and_merkle.IsError());
     (void)validation_state_pow_and_merkle.Error("");
     BlockValidationState validation_state_pow;
-    const bool valid_incl_pow = CheckBlock(block, validation_state_pow, consensus_params, /* fCheckPOW= */ true, /* fCheckMerkleRoot= */ false);
+    const bool valid_incl_pow = CheckBlock(block, validation_state_pow, consensus_params, {
+        .check_pow = true,
+        .check_merkle_root = false});
     assert(validation_state_pow.IsValid() || validation_state_pow.IsInvalid() || validation_state_pow.IsError());
     BlockValidationState validation_state_merkle;
-    const bool valid_incl_merkle = CheckBlock(block, validation_state_merkle, consensus_params, /* fCheckPOW= */ false, /* fCheckMerkleRoot= */ true);
+    const bool valid_incl_merkle = CheckBlock(block, validation_state_merkle, consensus_params, {
+        .check_pow = false,
+        .check_merkle_root = true});
     assert(validation_state_merkle.IsValid() || validation_state_merkle.IsInvalid() || validation_state_merkle.IsError());
     BlockValidationState validation_state_none;
-    const bool valid_incl_none = CheckBlock(block, validation_state_none, consensus_params, /* fCheckPOW= */ false, /* fCheckMerkleRoot= */ false);
+    const bool valid_incl_none = CheckBlock(block, validation_state_none, consensus_params, {
+        .check_pow = false,
+        .check_merkle_root = false});
     assert(validation_state_none.IsValid() || validation_state_none.IsInvalid() || validation_state_none.IsError());
     if (valid_incl_pow_and_merkle) {
         assert(valid_incl_pow && valid_incl_merkle && valid_incl_none);

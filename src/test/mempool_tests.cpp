@@ -6,7 +6,7 @@
 #include <policy/policy.h>
 #include <test/util/time.h>
 #include <test/util/txmempool.h>
-#include <txmempool.h>
+#include <node/txmempool.h>
 #include <util/time.h>
 
 #include <test/util/setup_common.h>

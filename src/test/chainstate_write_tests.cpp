@@ -4,7 +4,7 @@
 
 #include <test/util/setup_common.h>
 #include <test/util/time.h>
-#include <validation.h>
+#include <chainstate.h>
 #include <validationinterface.h>
 
 #include <boost/test/unit_test.hpp>
@@ -74,7 +74,7 @@ BOOST_FIXTURE_TEST_CASE(write_during_multiblock_activation, TestChain100Setup)
     CBlockIndex* second_from_tip{tip->pprev};
 
     {
-        LOCK2(m_node.chainman->GetMutex(), chainstate.MempoolMutex());
+        LOCK(m_node.chainman->GetMutex());
         chainstate.DisconnectTip(state_dummy, nullptr);
         chainstate.DisconnectTip(state_dummy, nullptr);
     }

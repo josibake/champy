@@ -14,7 +14,7 @@
 #include <test/util/setup_common.h>
 #include <test/util/time.h>
 #include <test/util/txmempool.h>
-#include <txmempool.h>
+#include <node/txmempool.h>
 #include <util/check.h>
 #include <util/time.h>
 #include <util/translation.h>
@@ -39,7 +39,7 @@ void initialize_pdb()
 
 PartiallyDownloadedBlock::IsBlockMutatedFn FuzzedIsBlockMutated(bool result)
 {
-    return [result](const CBlock& block, bool) {
+    return [result](const CBlock& block, BlockMutationOptions) {
         return result;
     };
 }

@@ -2,6 +2,7 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
+#include <validation/block_validation.h>
 #include <chainparams.h>
 #include <consensus/amount.h>
 #include <consensus/merkle.h>
@@ -11,7 +12,7 @@
 #include <signet.h>
 #include <uint256.h>
 #include <util/chaintype.h>
-#include <validation.h>
+#include <chainstate.h>
 
 #include <string>
 
@@ -130,14 +131,9 @@ BOOST_AUTO_TEST_CASE(signet_parse_tests)
 
 BOOST_AUTO_TEST_CASE(block_malleation)
 {
-    // Test utilities that calls `IsBlockMutated` and then clears the validity
-    // cache flags on `CBlock`.
+    // Test utilities that call `IsBlockMutated`.
     auto is_mutated = [](CBlock& block, bool check_witness_root) {
-        bool mutated{IsBlockMutated(block, check_witness_root)};
-        block.fChecked = false;
-        block.m_checked_witness_commitment = false;
-        block.m_checked_merkle_root = false;
-        return mutated;
+        return IsBlockMutated(block, {.check_witness_root = check_witness_root});
     };
     auto is_not_mutated = [&is_mutated](CBlock& block, bool check_witness_root) {
         return !is_mutated(block, check_witness_root);

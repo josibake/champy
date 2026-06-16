@@ -18,8 +18,8 @@
 #include <policy/fees/block_policy_estimator.h>
 #include <scheduler.h>
 #include <torcontrol.h>
-#include <txmempool.h>
-#include <validation.h>
+#include <node/txmempool.h>
+#include <chainstate.h>
 #include <validationinterface.h>
 
 namespace node {

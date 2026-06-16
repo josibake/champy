@@ -1,0 +1,33 @@
+// Copyright (c) 2026-present The Bitcoin Core developers
+// Distributed under the MIT software license, see the accompanying
+// file COPYING or http://www.opensource.org/licenses/mit-license.php.
+
+#include <validation/block_header_context_adapters.h>
+
+#include <chain.h>
+#include <chainstate.h>
+
+Consensus::BlockHeaderContext CoreBlockHeaderContextProvider::BuildContext(const CBlockIndex* previous_index) const
+{
+    if (previous_index == nullptr) {
+        return {};
+    }
+
+    return Consensus::BlockHeaderContext{
+        previous_index->nHeight + 1,
+        previous_index->GetMedianTimePast(),
+        previous_index->GetBlockTime(),
+        Consensus::BlockDeploymentContext{
+            .height_in_coinbase_active = ::DeploymentActiveAfter(previous_index, m_chainman, Consensus::DEPLOYMENT_HEIGHTINCB),
+            .der_signature_active = ::DeploymentActiveAfter(previous_index, m_chainman, Consensus::DEPLOYMENT_DERSIG),
+            .cltv_active = ::DeploymentActiveAfter(previous_index, m_chainman, Consensus::DEPLOYMENT_CLTV),
+            .csv_active = ::DeploymentActiveAfter(previous_index, m_chainman, Consensus::DEPLOYMENT_CSV),
+            .segwit_active = ::DeploymentActiveAfter(previous_index, m_chainman, Consensus::DEPLOYMENT_SEGWIT),
+        },
+    };
+}
+
+Consensus::BlockHeaderContext BuildCoreBlockHeaderContext(const ChainstateManager& chainman, const CBlockIndex* previous_index)
+{
+    return CoreBlockHeaderContextProvider{chainman}.BuildContext(previous_index);
+}

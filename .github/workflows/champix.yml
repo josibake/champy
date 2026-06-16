@@ -1,0 +1,68 @@
+name: Champix Nix CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - "**"
+    tags-ignore:
+      - "**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: true
+
+env:
+  CHAMPIX_REPOSITORY: josibake/champix
+  CACHIX_CACHE_NAME: champix
+  CACHIX_AUTH_TOKEN: ${{ secrets.CACHIX_AUTH_TOKEN }}
+
+jobs:
+  champy:
+    name: Current Champy via Champix (${{ matrix.nix_system }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            nix_system: x86_64-linux
+          - runner: macos-15
+            nix_system: aarch64-darwin
+    steps:
+      - name: Checkout Champy
+        uses: actions/checkout@v6
+        with:
+          path: champy
+
+      - name: Checkout Champix
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ env.CHAMPIX_REPOSITORY }}
+          path: champix
+
+      - uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      # TODO: Add CACHIX_AUTH_TOKEN in GitHub secrets to enable binary cache pushes.
+      - uses: cachix/cachix-action@v17
+        if: ${{ env.CACHIX_AUTH_TOKEN != '' }}
+        with:
+          name: ${{ env.CACHIX_CACHE_NAME }}
+          authToken: "${{ env.CACHIX_AUTH_TOKEN }}"
+
+      # Champy CI is the authoritative per-branch/per-PR integration check.
+      # It uses Champix packaging, but overrides the Champy flake input with
+      # this checkout instead of Champix's pinned flake.lock input.
+      - name: Evaluate Champix against this Champy checkout
+        working-directory: champix
+        run: nix flake check --no-build --all-systems --override-input champy path:${{ github.workspace }}/champy --print-build-logs
+
+      - name: Build and test Champy
+        working-directory: champix
+        run: nix build .#packages.${{ matrix.nix_system }}.champy --override-input champy path:${{ github.workspace }}/champy --no-link --print-build-logs

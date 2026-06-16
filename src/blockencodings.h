@@ -12,6 +12,7 @@
 
 class CTxMemPool;
 class BlockValidationState;
+struct BlockMutationOptions;
 namespace Consensus {
 struct Params;
 };
@@ -139,7 +140,7 @@ public:
     CBlockHeader header;
 
     // Can be overridden for testing
-    using IsBlockMutatedFn = std::function<bool(const CBlock&, bool)>;
+    using IsBlockMutatedFn = std::function<bool(const CBlock&, BlockMutationOptions)>;
     IsBlockMutatedFn m_check_block_mutated_mock{nullptr};
 
     explicit PartiallyDownloadedBlock(CTxMemPool* poolIn) : pool(poolIn) {}

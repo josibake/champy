@@ -2,6 +2,8 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 //
+#include <validation/block_validation.h>
+#include <validation/chain_validation.h>
 #include <chainparams.h>
 #include <consensus/amount.h>
 #include <consensus/validation.h>
@@ -17,7 +19,7 @@
 #include <uint256.h>
 #include <util/byte_units.h>
 #include <util/check.h>
-#include <validation.h>
+#include <chainstate.h>
 
 #include <vector>
 
@@ -30,8 +32,7 @@ BOOST_FIXTURE_TEST_SUITE(validation_chainstate_tests, ChainTestingSetup)
 BOOST_AUTO_TEST_CASE(validation_chainstate_resize_caches)
 {
     ChainstateManager& manager = *Assert(m_node.chainman);
-    CTxMemPool& mempool = *Assert(m_node.mempool);
-    Chainstate& c1 = WITH_LOCK(cs_main, return manager.InitializeChainstate(&mempool));
+    Chainstate& c1 = WITH_LOCK(cs_main, return manager.InitializeChainstate());
     c1.InitCoinsDB(
         /*cache_size_bytes=*/8_MiB, /*in_memory=*/true, /*should_wipe=*/false);
     WITH_LOCK(::cs_main, c1.InitCoinsCache(8_MiB));
@@ -66,6 +67,24 @@ BOOST_AUTO_TEST_CASE(validation_chainstate_resize_caches)
     }
 }
 
+BOOST_AUTO_TEST_CASE(chainstatemanager_get_unspent_output_returns_copied_coin)
+{
+    ChainstateManager& manager = *Assert(m_node.chainman);
+    Chainstate& chainstate = WITH_LOCK(cs_main, return manager.InitializeChainstate());
+    chainstate.InitCoinsDB(
+        /*cache_size_bytes=*/8_MiB, /*in_memory=*/true, /*should_wipe=*/false);
+    WITH_LOCK(::cs_main, chainstate.InitCoinsCache(8_MiB));
+
+    COutPoint outpoint;
+    {
+        LOCK(::cs_main);
+        outpoint = AddTestCoin(m_rng, chainstate.CoinsTip());
+    }
+
+    BOOST_CHECK(manager.GetUnspentOutput(outpoint).has_value());
+    BOOST_CHECK(!manager.GetUnspentOutput(COutPoint{Txid::FromUint256(m_rng.rand256()), 0}).has_value());
+}
+
 BOOST_FIXTURE_TEST_CASE(connect_tip_does_not_cache_inputs_on_failed_connect, TestChain100Setup)
 {
     Chainstate& chainstate{Assert(m_node.chainman)->ActiveChainstate()};
@@ -83,7 +102,11 @@ BOOST_FIXTURE_TEST_CASE(connect_tip_does_not_cache_inputs_on_failed_connect, Tes
 
     const auto tip{WITH_LOCK(cs_main, return chainstate.m_chain.Tip()->GetBlockHash())};
     const CBlock block{CreateBlock({tx}, CScript{} << OP_TRUE, chainstate)};
-    BOOST_CHECK(Assert(m_node.chainman)->ProcessNewBlock(std::make_shared<CBlock>(block), true, true, nullptr));
+    BOOST_CHECK(ChainValidationService{*Assert(m_node.chainman)}.ProcessNewBlock(
+        std::make_shared<CBlock>(block),
+        {.block_data_storage = BlockDataStorageMode::ForceStore, .header = {.min_pow_checked = true}},
+        CurrentBlockValidationTime())
+        .processed());
 
     LOCK(cs_main);
     BOOST_CHECK_EQUAL(tip, chainstate.m_chain.Tip()->GetBlockHash()); // block rejected

@@ -6,7 +6,7 @@
 #define BITCOIN_TEST_UTIL_TXMEMPOOL_H
 
 #include <policy/packages.h>
-#include <txmempool.h>
+#include <node/txmempool.h>
 #include <util/time.h>
 
 namespace node {

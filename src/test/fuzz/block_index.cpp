@@ -4,14 +4,14 @@
 
 #include <chain.h>
 #include <chainparams.h>
-#include <node/blockstorage.h>
+#include <kernel/blockstorage.h>
 #include <test/fuzz/FuzzedDataProvider.h>
 #include <test/fuzz/fuzz.h>
 #include <test/fuzz/util.h>
 #include <test/util/setup_common.h>
 #include <txdb.h>
 #include <util/byte_units.h>
-#include <validation.h>
+#include <chainstate.h>
 
 using kernel::CBlockFileInfo;
 

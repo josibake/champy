@@ -6,15 +6,16 @@
 #include <validationinterface.h>
 
 #include <chain.h>
-#include <consensus/validation.h>
-#include <kernel/mempool_entry.h>
-#include <kernel/mempool_removal_reason.h>
+#include <validation_state.h>
+#include <node/mempool_entry.h>
+#include <node/mempool_removal_reason.h>
 #include <primitives/block.h>
 #include <primitives/transaction.h>
 #include <util/check.h>
 #include <util/log.h>
 #include <util/task_runner.h>
 
+#include <cassert>
 #include <future>
 #include <memory>
 #include <unordered_map>
@@ -90,6 +91,23 @@ public:
         }
     }
 };
+
+namespace {
+
+const char* RemovalReasonLogString(MemPoolRemovalReason reason) noexcept
+{
+    switch (reason) {
+    case MemPoolRemovalReason::SIZELIMIT: return "sizelimit";
+    case MemPoolRemovalReason::REORG: return "reorg";
+    case MemPoolRemovalReason::BLOCK: return "block";
+    case MemPoolRemovalReason::CONFLICT: return "conflict";
+    case MemPoolRemovalReason::REPLACED: return "replaced";
+    }
+    assert(false);
+    return "unknown";
+}
+
+} // namespace
 
 ValidationSignals::ValidationSignals(std::unique_ptr<util::TaskRunnerInterface> task_runner)
     : m_internals{std::make_unique<ValidationSignalsImpl>(std::move(task_runner))} {}
@@ -209,7 +227,7 @@ void ValidationSignals::TransactionRemovedFromMempool(const CTransactionRef& tx,
     auto log_msg = LOG_MSG("%s: txid=%s wtxid=%s reason=%s", __func__,
                           tx->GetHash().ToString(),
                           tx->GetWitnessHash().ToString(),
-                          RemovalReasonToString(reason));
+                          RemovalReasonLogString(reason));
     auto event = [tx, reason, mempool_sequence, this] {
         m_internals->Iterate([&](CValidationInterface& callbacks) { callbacks.TransactionRemovedFromMempool(tx, reason, mempool_sequence); });
     };

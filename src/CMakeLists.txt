@@ -3,9 +3,15 @@
 # file COPYING or https://opensource.org/license/mit/.
 
 include(AddWindowsResources)
+include(GNUInstallDirs)
 
 configure_file(${PROJECT_SOURCE_DIR}/cmake/bitcoin-build-config.h.in bitcoin-build-config.h USE_SOURCE_PERMISSIONS @ONLY)
-include_directories(${CMAKE_CURRENT_BINARY_DIR} ${CMAKE_CURRENT_SOURCE_DIR})
+add_library(bitcoin_source_interface INTERFACE)
+target_include_directories(bitcoin_source_interface INTERFACE
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}>
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
+)
+target_link_libraries(core_interface INTERFACE bitcoin_source_interface)
 
 #=============================
 # Subprojects
@@ -19,12 +25,8 @@ include(../cmake/crc32c.cmake)
 include(../cmake/leveldb.cmake)
 include(../cmake/minisketch.cmake)
 add_subdirectory(univalue)
-if (NOT WITH_EXTERNAL_LIBMULTIPROCESS)
-  include(../cmake/libmultiprocess.cmake)
-  add_libmultiprocess(ipc/libmultiprocess)
-endif()
 include(../cmake/secp256k1.cmake)
-add_secp256k1(secp256k1)
+find_secp256k1()
 
 # Set top-level target output locations.
 if(NOT CMAKE_RUNTIME_OUTPUT_DIRECTORY)
@@ -62,10 +64,27 @@ add_subdirectory(crypto)
 add_subdirectory(util)
 add_subdirectory(ipc)
 
+include(${PROJECT_SOURCE_DIR}/cmake/BitcoinConsensusApi.cmake)
+
 add_library(bitcoin_consensus STATIC EXCLUDE_FROM_ALL
   arith_uint256.cpp
+  consensus/amount.cpp
+  consensus/block_commit.cpp
+  consensus/block_spend.cpp
+  consensus/block_check.cpp
+  consensus/block_facts.cpp
+  consensus/coin_effects.cpp
+  consensus/locktime.cpp
   consensus/merkle.cpp
+  consensus/predicates.cpp
+  consensus/pow.cpp
+  consensus/sequence_locks.cpp
+  consensus/script_view.cpp
+  consensus/script_checker.cpp
+  consensus/sigops.cpp
+  consensus/snapshot_spend_state.cpp
   consensus/tx_check.cpp
+  consensus/block_consensus_pipeline.cpp
   hash.cpp
   primitives/block.cpp
   primitives/transaction.cpp
@@ -75,16 +94,55 @@ add_library(bitcoin_consensus STATIC EXCLUDE_FROM_ALL
   script/script_error.cpp
   uint256.cpp
 )
+target_sources(bitcoin_consensus
+  PRIVATE
+    ${BITCOIN_CONSENSUS_PUBLIC_API_HEADERS}
+    ${BITCOIN_CONSENSUS_SUPPORT_HEADERS}
+    ${BITCOIN_CONSENSUS_PUBLIC_PROTOCOL_HEADERS}
+    ${BITCOIN_CONSENSUS_PUBLIC_TRANSITIVE_HEADERS}
+    ${BITCOIN_CONSENSUS_INTERNAL_PROTOCOL_HEADERS}
+)
+target_compile_features(bitcoin_consensus
+  PUBLIC
+    cxx_std_20
+)
+target_include_directories(bitcoin_consensus
+  PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}>
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
+)
+# Keep this dependency list explicit. It is the build-level consensus extraction
+# boundary and is checked by CheckConsensusBoundary.cmake.
 target_link_libraries(bitcoin_consensus
   PRIVATE
     core_interface
     bitcoin_crypto
     secp256k1
 )
-
-if(WITH_ZMQ)
-  add_subdirectory(zmq)
-endif()
+set_target_properties(bitcoin_consensus PROPERTIES
+  BITCOIN_CONSENSUS_PUBLIC_API_HEADERS "${BITCOIN_CONSENSUS_PUBLIC_API_HEADERS}"
+  BITCOIN_CONSENSUS_PUBLIC_PROTOCOL_HEADERS "${BITCOIN_CONSENSUS_PUBLIC_PROTOCOL_HEADERS}"
+  BITCOIN_CONSENSUS_PUBLIC_TRANSITIVE_HEADERS "${BITCOIN_CONSENSUS_PUBLIC_TRANSITIVE_HEADERS}"
+  BITCOIN_CONSENSUS_SUPPORT_HEADERS "${BITCOIN_CONSENSUS_SUPPORT_HEADERS}"
+  BITCOIN_CONSENSUS_INTERNAL_PROTOCOL_HEADERS "${BITCOIN_CONSENSUS_INTERNAL_PROTOCOL_HEADERS}"
+  BITCOIN_CONSENSUS_INSTALL_HEADERS "${BITCOIN_CONSENSUS_INSTALL_HEADERS}"
+)
+install(TARGETS bitcoin_consensus
+  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR} COMPONENT bitcoin_consensus
+  LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR} COMPONENT bitcoin_consensus
+  ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR} COMPONENT bitcoin_consensus
+)
+configure_file(${PROJECT_SOURCE_DIR}/libbitcoinconsensus.pc.in ${PROJECT_BINARY_DIR}/libbitcoinconsensus.pc @ONLY)
+install(FILES ${PROJECT_BINARY_DIR}/libbitcoinconsensus.pc DESTINATION "${CMAKE_INSTALL_LIBDIR}/pkgconfig" COMPONENT bitcoin_consensus)
+foreach(header IN LISTS BITCOIN_CONSENSUS_INSTALL_HEADERS)
+  get_filename_component(header_directory "${header}" DIRECTORY)
+  if(header_directory STREQUAL "")
+    set(header_destination "${CMAKE_INSTALL_INCLUDEDIR}")
+  else()
+    set(header_destination "${CMAKE_INSTALL_INCLUDEDIR}/${header_directory}")
+  endif()
+  install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/${header}" DESTINATION "${header_destination}" COMPONENT bitcoin_consensus)
+endforeach()
 
 # Home for common functionality shared by different executables and libraries.
 # Similar to `bitcoin_util` library, but higher-level.
@@ -151,6 +209,90 @@ target_link_libraries(bitcoin_common
 include(InstallBinaryComponent)
 
 
+# Core's default storage and spend-state adapters. These are implementation
+# choices for the Core runtime, not consensus requirements.
+set(BITCOIN_CORE_STORAGE_ADAPTER_SOURCES
+  ${CMAKE_CURRENT_SOURCE_DIR}/validation/block_data_adapters.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/validation/block_index_adapters.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/validation/block_coin_effects.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/validation/block_replay.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/validation/coins_view_spend_state.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/validation/core_block_commit_adapters.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/validation/core_coins_block_connection_state.cpp
+)
+
+add_library(bitcoin_core_storage_adapters STATIC EXCLUDE_FROM_ALL
+  ${BITCOIN_CORE_STORAGE_ADAPTER_SOURCES}
+)
+target_link_libraries(bitcoin_core_storage_adapters
+  PRIVATE
+    core_interface
+    bitcoin_consensus
+    Boost::headers
+    $<TARGET_NAME_IF_EXISTS:USDT::headers>
+)
+target_include_directories(bitcoin_core_storage_adapters PRIVATE $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/src/leveldb/include>)
+
+# Core chain-validation sources shared by bitcoin_node and bitcoinkernel while
+# the consensus boundary is being extracted.
+set(BITCOIN_CHAIN_VALIDATION_SOURCES
+  ${CMAKE_CURRENT_SOURCE_DIR}/validation/block_data_admission.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/validation/block_header_context_adapters.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/validation/block_connection.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/validation/block_script_check_adapters.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/validation/block_validation.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/validation/block_validation_error.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/validation/block_validation_policy.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/validation/chain_validation.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/validation/block_connection_trace.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/validation/core_chain_activation.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/validation/core_chain_validation_context.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/validation/core_block_connection_context.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/validation/core_block_connection_setup.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/validation/core_block_connection_attempt.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/validation/core_block_policy.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/validation/sequence_locks_adapters.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/validation/script_check_scheduler.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/validation/validation_event_queue.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/validation/tx_check_adapters.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/validation/tx_verify.cpp
+)
+
+add_library(bitcoin_chain_validation STATIC EXCLUDE_FROM_ALL
+  ${BITCOIN_CHAIN_VALIDATION_SOURCES}
+)
+target_link_libraries(bitcoin_chain_validation
+  PRIVATE
+    core_interface
+    bitcoin_consensus
+    bitcoin_core_storage_adapters
+    Boost::headers
+    $<TARGET_NAME_IF_EXISTS:USDT::headers>
+)
+
+# Local transaction admission, mempool state, and mempool-specific policy.
+add_library(bitcoin_mempool_policy OBJECT EXCLUDE_FROM_ALL
+  node/disconnected_transactions.cpp
+  node/mempool_chain_sync.cpp
+  node/mempool_removal_reason.cpp
+  node/mempool_validation.cpp
+  node/txmempool.cpp
+  policy/ephemeral_policy.cpp
+  policy/packages.cpp
+  policy/rbf.cpp
+  policy/truc_policy.cpp
+  txgraph.cpp
+)
+target_link_libraries(bitcoin_mempool_policy
+  PRIVATE
+    core_interface
+    bitcoin_common
+    bitcoin_consensus
+    bitcoin_util
+    Boost::headers
+    $<TARGET_NAME_IF_EXISTS:USDT::headers>
+)
+
 # P2P and RPC server functionality used by `bitcoind` executable.
 add_library(bitcoin_node STATIC EXCLUDE_FROM_ALL
   addrdb.cpp
@@ -158,7 +300,6 @@ add_library(bitcoin_node STATIC EXCLUDE_FROM_ALL
   banman.cpp
   bip324.cpp
   blockencodings.cpp
-  consensus/tx_verify.cpp
   dbwrapper.cpp
   deploymentstatus.cpp
   flatfile.cpp
@@ -170,17 +311,16 @@ add_library(bitcoin_node STATIC EXCLUDE_FROM_ALL
   kernel/coinstats.cpp
   kernel/context.cpp
   kernel/cs_main.cpp
-  kernel/disconnected_transactions.cpp
-  kernel/mempool_removal_reason.cpp
+  kernel/blockimport.cpp
+  kernel/blockstorage.cpp
+  kernel/chainstate_load.cpp
   mapport.cpp
   net.cpp
   net_processing.cpp
   netgroup.cpp
   node/abort.cpp
   node/blockmanager_args.cpp
-  node/blockstorage.cpp
   node/caches.cpp
-  node/chainstate.cpp
   node/chainstatemanager_args.cpp
   node/coin.cpp
   node/coins_view_args.cpp
@@ -205,33 +345,29 @@ add_library(bitcoin_node STATIC EXCLUDE_FROM_ALL
   node/txreconciliation.cpp
   node/warnings.cpp
   noui.cpp
-  policy/ephemeral_policy.cpp
   policy/fees/block_policy_estimator.cpp
   policy/fees/block_policy_estimator_args.cpp
-  policy/packages.cpp
-  policy/rbf.cpp
   policy/settings.cpp
-  policy/truc_policy.cpp
   private_broadcast.cpp
+  script/script_check.cpp
   script/sigcache.cpp
   signet.cpp
   torcontrol.cpp
   txdb.cpp
-  txgraph.cpp
-  txmempool.cpp
   txrequest.cpp
-  validation.cpp
+  chainstate.cpp
   validationinterface.cpp
   versionbits.cpp
+  $<TARGET_OBJECTS:bitcoin_mempool_policy>
 )
 target_link_libraries(bitcoin_node
   PUBLIC
     univalue
   PRIVATE
     core_interface
+    bitcoin_chain_validation
     bitcoin_common
     bitcoin_util
-    $<TARGET_NAME_IF_EXISTS:bitcoin_zmq>
     leveldb
     minisketch
     Boost::headers
@@ -251,7 +387,7 @@ if(BUILD_BITCOIN_BIN)
   add_windows_resources(bitcoin bitcoin-res.rc)
   add_windows_application_manifest(bitcoin)
   target_link_libraries(bitcoin core_interface bitcoin_common bitcoin_util)
-  install_binary_component(bitcoin HAS_MANPAGE)
+  install_binary_component(bitcoin)
 endif()
 
 # Bitcoin Core bitcoind.
@@ -267,7 +403,7 @@ if(BUILD_DAEMON)
     bitcoin_node
     bitcoin_ipc
   )
-  install_binary_component(bitcoind HAS_MANPAGE)
+  install_binary_component(bitcoind)
 endif()
 if(BUILD_DAEMON)
   add_executable(bitcoin-node
@@ -304,7 +440,7 @@ if(BUILD_CLI)
     bitcoin_ipc
     bitcoin_util
   )
-  install_binary_component(bitcoin-cli HAS_MANPAGE)
+  install_binary_component(bitcoin-cli)
 endif()
 
 

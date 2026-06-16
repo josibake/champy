@@ -3,6 +3,7 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #include <addrman.h>
+#include <validation/block_validation.h>
 #include <blockencodings.h>
 #include <chain.h>
 #include <chainparams.h>
@@ -13,7 +14,7 @@
 #include <net.h>
 #include <net_processing.h>
 #include <netmessagemaker.h>
-#include <node/blockstorage.h>
+#include <kernel/blockstorage.h>
 #include <node/miner.h>
 #include <policy/truc_policy.h>
 #include <primitives/block.h>
@@ -33,13 +34,13 @@
 #include <test/util/time.h>
 #include <test/util/txmempool.h>
 #include <test/util/validation.h>
-#include <txmempool.h>
+#include <node/txmempool.h>
 #include <uint256.h>
 #include <util/check.h>
 #include <util/task_runner.h>
 #include <util/time.h>
 #include <util/translation.h>
-#include <validation.h>
+#include <chainstate.h>
 #include <validationinterface.h>
 
 #include <boost/multi_index/detail/hash_index_iterator.hpp>
@@ -171,7 +172,7 @@ FUZZ_TARGET(cmpctblock, .init = initialize_cmpctblock)
     auto& chainman = static_cast<TestChainstateManager&>(*setup->m_node.chainman);
     chainman.ResetIbd();
     chainman.DisableNextWrite();
-    const size_t initial_index_size{WITH_LOCK(chainman.GetMutex(), return chainman.BlockIndex().size())};
+    const size_t initial_index_size{WITH_LOCK(chainman.GetMutex(), return chainman.BlockIndexSizeLocked())};
 
     AddrMan addrman{*setup->m_node.netgroupman, /*deterministic=*/true, /*consistency_check_ratio=*/0};
     auto& connman = *static_cast<ConnmanTestMsg*>(setup->m_node.connman.get());
@@ -309,10 +310,9 @@ FUZZ_TARGET(cmpctblock, .init = initialize_cmpctblock)
         }
 
         CBlockIndex* pindexPrev{WITH_LOCK(::cs_main, return chainman.m_blockman.LookupBlockIndex(prev))};
-        chainman.GenerateCoinbaseCommitment(*block, pindexPrev);
+        node::GenerateCoinbaseCommitment(chainman, *block, pindexPrev);
 
-        bool mutated;
-        block->hashMerkleRoot = BlockMerkleRoot(*block, &mutated);
+        block->hashMerkleRoot = BlockMerkleRoot(*block);
         FinalizeHeader(*block, chainman);
 
         BlockInfo block_info;
@@ -505,7 +505,7 @@ FUZZ_TARGET(cmpctblock, .init = initialize_cmpctblock)
     setup->m_node.validation_signals->UnregisterAllValidationInterfaces();
     connman.StopNodes();
 
-    const size_t end_index_size{WITH_LOCK(chainman.GetMutex(), return chainman.BlockIndex().size())};
+    const size_t end_index_size{WITH_LOCK(chainman.GetMutex(), return chainman.BlockIndexSizeLocked())};
     const uint64_t end_sequence{WITH_LOCK(mempool.cs, return mempool.GetSequence())};
 
     if (initial_index_size != end_index_size || initial_sequence != end_sequence) {

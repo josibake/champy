@@ -4,60 +4,39 @@
 
 include(GNUInstallDirs)
 
-# TODO: libbitcoinkernel is a work in progress consensus engine
-#       library, as more and more modules are decoupled from the
-#       consensus engine, this list will shrink to only those
-#       which are absolutely necessary.
+# libbitcoinkernel is Core's embeddable runtime. Keep node-only code out of
+# this target as validation and consensus boundaries continue to narrow.
 add_library(bitcoinkernel
   bitcoinkernel.cpp
+  blockimport.cpp
+  blockstorage.cpp
   chain.cpp
+  chainstate_load.cpp
   checks.cpp
   chainparams.cpp
   coinstats.cpp
   context.cpp
   cs_main.cpp
-  disconnected_transactions.cpp
-  mempool_removal_reason.cpp
-  ../arith_uint256.cpp
   ../chain.cpp
   ../coins.cpp
   ../compressor.cpp
-  ../consensus/merkle.cpp
-  ../consensus/tx_check.cpp
-  ../consensus/tx_verify.cpp
   ../dbwrapper.cpp
   ../deploymentinfo.cpp
   ../deploymentstatus.cpp
   ../flatfile.cpp
-  ../hash.cpp
   ../logging.cpp
-  ../node/blockstorage.cpp
-  ../node/chainstate.cpp
-  ../policy/ephemeral_policy.cpp
   ../policy/feerate.cpp
-  ../policy/packages.cpp
   ../policy/policy.cpp
-  ../policy/rbf.cpp
   ../policy/settings.cpp
-  ../policy/truc_policy.cpp
   ../pow.cpp
-  ../primitives/block.cpp
-  ../primitives/transaction.cpp
-  ../pubkey.cpp
   ../random.cpp
   ../randomenv.cpp
-  ../script/interpreter.cpp
-  ../script/script.cpp
-  ../script/script_error.cpp
   ../script/sigcache.cpp
   ../script/solver.cpp
   ../signet.cpp
   ../streams.cpp
   ../sync.cpp
   ../txdb.cpp
-  ../txgraph.cpp
-  ../txmempool.cpp
-  ../uint256.cpp
   ../util/chaintype.cpp
   ../util/check.cpp
   ../util/expected.cpp
@@ -72,7 +51,8 @@ add_library(bitcoinkernel
   ../util/threadnames.cpp
   ../util/time.cpp
   ../util/tokenpipe.cpp
-  ../validation.cpp
+  ../script/script_check.cpp
+  ../chainstate.cpp
   ../validationinterface.cpp
   ../versionbits.cpp
   $<TARGET_OBJECTS:bitcoin_clientversion>
@@ -97,9 +77,11 @@ target_link_libraries(crc32c PRIVATE kernel_warn_interface)
 
 target_link_libraries(bitcoinkernel
   PRIVATE
+    bitcoin_consensus
+    bitcoin_chain_validation
     core_interface
     kernel_warn_interface
-    secp256k1_objs
+    secp256k1
     $<$<PLATFORM_ID:Windows>:bcrypt>
     $<TARGET_NAME_IF_EXISTS:USDT::headers>
     Boost::headers

@@ -3,6 +3,8 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #include <blockencodings.h>
+
+#include <validation/block_validation.h>
 #include <chainparams.h>
 #include <common/system.h>
 #include <consensus/consensus.h>
@@ -12,8 +14,8 @@
 #include <logging.h>
 #include <random.h>
 #include <streams.h>
-#include <txmempool.h>
-#include <validation.h>
+#include <node/txmempool.h>
+#include <chainstate.h>
 
 #include <unordered_map>
 
@@ -215,7 +217,7 @@ ReadStatus PartiallyDownloadedBlock::FillBlock(CBlock& block, const std::vector<
 
     // Check for possible mutations early now that we have a seemingly good block
     IsBlockMutatedFn check_mutated{m_check_block_mutated_mock ? m_check_block_mutated_mock : IsBlockMutated};
-    if (check_mutated(/*block=*/block, /*check_witness_root=*/segwit_active)) {
+    if (check_mutated(block, {.check_witness_root = segwit_active})) {
         return READ_STATUS_FAILED; // Possible Short ID collision
     }
 

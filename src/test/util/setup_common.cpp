@@ -6,24 +6,28 @@
 
 #include <addrman.h>
 #include <banman.h>
+#include <validation/block_validation.h>
+#include <validation/chain_validation.h>
 #include <chainparams.h>
 #include <common/system.h>
 #include <consensus/consensus.h>
 #include <consensus/params.h>
-#include <consensus/validation.h>
+#include <validation_state.h>
 #include <crypto/sha256.h>
 #include <init.h>
 #include <init/common.h>
+#include <node/mempool_validation.h>
 #include <interfaces/chain.h>
-#include <kernel/mempool_entry.h>
+#include <node/mempool_entry.h>
 #include <logging.h>
 #include <net.h>
 #include <net_processing.h>
-#include <node/blockstorage.h>
-#include <node/chainstate.h>
+#include <kernel/blockstorage.h>
+#include <kernel/chainstate_load.h>
 #include <node/context.h>
 #include <node/kernel_notifications.h>
 #include <node/mempool_args.h>
+#include <node/mempool_chain_sync.h>
 #include <node/miner.h>
 #include <node/peerman_args.h>
 #include <node/warnings.h>
@@ -40,7 +44,7 @@
 #include <test/util/transaction_utils.h>
 #include <test/util/txmempool.h>
 #include <txdb.h>
-#include <txmempool.h>
+#include <node/txmempool.h>
 #include <util/chaintype.h>
 #include <util/check.h>
 #include <util/fs_helpers.h>
@@ -53,22 +57,23 @@
 #include <util/time.h>
 #include <util/translation.h>
 #include <util/vector.h>
-#include <validation.h>
+#include <chainstate.h>
 #include <validationinterface.h>
 
 #include <algorithm>
 #include <future>
 #include <functional>
+#include <optional>
 #include <stdexcept>
 
 using namespace util::hex_literals;
 using node::ApplyArgsManOptions;
 using node::BlockAssembler;
-using node::BlockManager;
+using kernel::BlockManager;
 using node::KernelNotifications;
-using node::LoadChainstate;
+using kernel::LoadChainstate;
 using node::RegenerateCommitments;
-using node::VerifyLoadedChainstate;
+using kernel::VerifyLoadedChainstate;
 
 const TranslateFn G_TRANSLATION_FUN{nullptr};
 
@@ -311,8 +316,7 @@ ChainTestingSetup::~ChainTestingSetup()
 void ChainTestingSetup::LoadVerifyActivateChainstate()
 {
     auto& chainman{*Assert(m_node.chainman)};
-    node::ChainstateLoadOptions options;
-    options.mempool = Assert(m_node.mempool.get());
+    kernel::ChainstateLoadOptions options;
     options.coins_db_in_memory = m_coins_db_in_memory;
     options.wipe_chainstate_db = m_args.GetBoolArg("-reindex", false) || m_args.GetBoolArg("-reindex-chainstate", false);
     options.prune = chainman.m_blockman.IsPruneMode();
@@ -320,10 +324,10 @@ void ChainTestingSetup::LoadVerifyActivateChainstate()
     options.check_level = m_args.GetIntArg("-checklevel", DEFAULT_CHECKLEVEL);
     options.require_full_verification = m_args.IsArgSet("-checkblocks") || m_args.IsArgSet("-checklevel");
     auto [status, error] = LoadChainstate(chainman, m_kernel_cache_sizes, options);
-    assert(status == node::ChainstateLoadStatus::SUCCESS);
+    assert(status == kernel::ChainstateLoadStatus::SUCCESS);
 
     std::tie(status, error) = VerifyLoadedChainstate(chainman, options);
-    assert(status == node::ChainstateLoadStatus::SUCCESS);
+    assert(status == kernel::ChainstateLoadStatus::SUCCESS);
 
     BlockValidationState state;
     if (!chainman.ActiveChainstate().ActivateBestChain(state)) {
@@ -426,7 +430,13 @@ CBlock TestChain100Setup::CreateAndProcessBlock(
 
     CBlock block = this->CreateBlock(txns, scriptPubKey, *chainstate);
     std::shared_ptr<const CBlock> shared_pblock = std::make_shared<const CBlock>(block);
-    Assert(m_node.chainman)->ProcessNewBlock(shared_pblock, true, true, nullptr);
+    std::optional<node::MempoolChainSync> chain_events;
+    if (m_node.mempool) chain_events.emplace(*chainstate, *m_node.mempool);
+    (void)ChainValidationService{*Assert(m_node.chainman)}.ProcessNewBlock(
+        chain_events ? &*chain_events : nullptr,
+        shared_pblock,
+        {.block_data_storage = BlockDataStorageMode::ForceStore, .header = {.min_pow_checked = true}},
+        CurrentBlockValidationTime());
 
     return block;
 }
@@ -505,7 +515,7 @@ CMutableTransaction TestChain100Setup::CreateValidMempoolTransaction(const std::
     // If submit=true, add transaction to the mempool.
     if (submit) {
         LOCK(cs_main);
-        const MempoolAcceptResult result = m_node.chainman->ProcessTransaction(MakeTransactionRef(mempool_txn));
+        const MempoolAcceptResult result = ProcessTransaction(*m_node.chainman, m_node.mempool.get(), MakeTransactionRef(mempool_txn));
         assert(result.m_result_type == MempoolAcceptResult::ResultType::VALID);
     }
     return mempool_txn;

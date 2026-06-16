@@ -80,19 +80,9 @@ enum class BlockValidationResult : btck_BlockValidationResult {
 };
 
 enum class TxValidationResult : btck_TxValidationResult {
-    UNSET               = btck_TxValidationResult_UNSET,
-    CONSENSUS           = btck_TxValidationResult_CONSENSUS,
-    INPUTS_NOT_STANDARD = btck_TxValidationResult_INPUTS_NOT_STANDARD,
-    NOT_STANDARD        = btck_TxValidationResult_NOT_STANDARD,
-    MISSING_INPUTS      = btck_TxValidationResult_MISSING_INPUTS,
-    PREMATURE_SPEND     = btck_TxValidationResult_PREMATURE_SPEND,
-    WITNESS_MUTATED     = btck_TxValidationResult_WITNESS_MUTATED,
-    WITNESS_STRIPPED    = btck_TxValidationResult_WITNESS_STRIPPED,
-    CONFLICT            = btck_TxValidationResult_CONFLICT,
-    MEMPOOL_POLICY      = btck_TxValidationResult_MEMPOOL_POLICY,
-    NO_MEMPOOL          = btck_TxValidationResult_NO_MEMPOOL,
-    RECONSIDERABLE      = btck_TxValidationResult_RECONSIDERABLE,
-    UNKNOWN             = btck_TxValidationResult_UNKNOWN
+    UNSET     = btck_TxValidationResult_UNSET,
+    CONSENSUS = btck_TxValidationResult_CONSENSUS,
+    UNKNOWN   = btck_TxValidationResult_UNKNOWN
 };
 
 enum class ScriptVerifyStatus : btck_ScriptVerifyStatus {
@@ -118,6 +108,11 @@ enum class BlockCheckFlags : btck_BlockCheckFlags {
     POW = btck_BlockCheckFlags_POW,
     MERKLE = btck_BlockCheckFlags_MERKLE,
     ALL = btck_BlockCheckFlags_ALL
+};
+
+struct BlockProcessResult {
+    bool processed{false};
+    bool new_block{false};
 };
 
 template <typename T>
@@ -1311,12 +1306,11 @@ public:
         return btck_chainstate_manager_import_blocks(get(), c_paths.data(), c_paths_lens.data(), c_paths.size()) == 0;
     }
 
-    bool ProcessBlock(const Block& block, bool* new_block)
+    BlockProcessResult ProcessBlock(const Block& block)
     {
         int _new_block;
-        int res = btck_chainstate_manager_process_block(get(), block.get(), &_new_block);
-        if (new_block) *new_block = _new_block == 1;
-        return res == 0;
+        const int res{btck_chainstate_manager_process_block(get(), block.get(), &_new_block)};
+        return {.processed = res == 0, .new_block = _new_block == 1};
     }
 
     BlockValidationState ProcessBlockHeader(const BlockHeader& header)

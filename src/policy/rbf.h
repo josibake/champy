@@ -8,7 +8,7 @@
 #include <consensus/amount.h>
 #include <primitives/transaction.h>
 #include <sync.h>
-#include <txmempool.h>
+#include <node/txmempool.h>
 #include <util/feefrac.h>
 
 #include <compare>

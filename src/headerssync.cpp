@@ -10,6 +10,8 @@
 #include <util/time.h>
 #include <util/vector.h>
 
+#include <utility>
+
 // Our memory analysis in headerssync-params.py assumes this many bytes for a
 // CompressedHeader (we should re-calculate parameters if we compress further).
 static_assert(sizeof(CompressedHeader) == 48);
@@ -17,18 +19,18 @@ static_assert(sizeof(CompressedHeader) == 48);
 HeadersSyncState::HeadersSyncState(NodeId id,
                                    const Consensus::Params& consensus_params,
                                    const HeadersSyncParams& params,
-                                   const CBlockIndex& chain_start,
+                                   Start chain_start,
                                    const arith_uint256& minimum_required_work)
     : m_commit_offset((assert(params.commitment_period > 0), // HeadersSyncParams field must be initialized to non-zero.
                        FastRandomContext().randrange(params.commitment_period))),
       m_id(id),
       m_consensus_params(consensus_params),
       m_params(params),
-      m_chain_start(chain_start),
+      m_chain_start(std::move(chain_start)),
       m_minimum_required_work(minimum_required_work),
-      m_current_chain_work(chain_start.nChainWork),
-      m_last_header_received(m_chain_start.GetBlockHeader()),
-      m_current_height(chain_start.nHeight)
+      m_current_chain_work(m_chain_start.chain_work),
+      m_last_header_received(m_chain_start.header),
+      m_current_height(m_chain_start.height)
 {
     // Estimate the number of blocks that could possibly exist on the peer's
     // chain *right now* using 6 blocks/second (fastest blockrate given the MTP
@@ -38,7 +40,7 @@ HeadersSyncState::HeadersSyncState(NodeId id,
     // exceeds this bound, because it's not possible for a consensus-valid
     // chain to be longer than this (at the current time -- in the future we
     // could try again, if necessary, to sync a longer chain).
-    const auto max_seconds_since_start{(Ticks<std::chrono::seconds>(NodeClock::now() - NodeSeconds{std::chrono::seconds{chain_start.GetMedianTimePast()}}))
+    const auto max_seconds_since_start{(Ticks<std::chrono::seconds>(NodeClock::now() - NodeSeconds{std::chrono::seconds{m_chain_start.median_time_past}}))
                                        + MAX_FUTURE_BLOCK_TIME};
     m_max_commitments = 6 * max_seconds_since_start / m_params.commitment_period;
 
@@ -164,10 +166,10 @@ bool HeadersSyncState::ValidateAndStoreHeadersCommitments(std::span<const CBlock
 
     if (m_current_chain_work >= m_minimum_required_work) {
         m_redownloaded_headers.clear();
-        m_redownload_buffer_last_height = m_chain_start.nHeight;
-        m_redownload_buffer_first_prev_hash = m_chain_start.GetBlockHash();
-        m_redownload_buffer_last_hash = m_chain_start.GetBlockHash();
-        m_redownload_chain_work = m_chain_start.nChainWork;
+        m_redownload_buffer_last_height = m_chain_start.height;
+        m_redownload_buffer_first_prev_hash = m_chain_start.header.GetHash();
+        m_redownload_buffer_last_hash = m_chain_start.header.GetHash();
+        m_redownload_chain_work = m_chain_start.chain_work;
         m_download_state = State::REDOWNLOAD;
         LogDebug(BCLog::NET, "Initial headers sync transition with peer=%d: reached sufficient work at height=%i, redownloading from height=%i\n", m_id, m_current_height, m_redownload_buffer_last_height);
     }
@@ -231,7 +233,7 @@ bool HeadersSyncState::ValidateAndStoreRedownloadedHeader(const CBlockHeader& he
     if (!m_redownloaded_headers.empty()) {
         previous_nBits = m_redownloaded_headers.back().nBits;
     } else {
-        previous_nBits = m_chain_start.nBits;
+        previous_nBits = m_chain_start.header.nBits;
     }
 
     if (!PermittedDifficultyTransition(m_consensus_params, next_height,
@@ -298,7 +300,7 @@ CBlockLocator HeadersSyncState::NextHeadersRequestLocator() const
     Assume(m_download_state != State::FINAL);
     if (m_download_state == State::FINAL) return {};
 
-    auto chain_start_locator = LocatorEntries(&m_chain_start);
+    const auto& chain_start_locator = m_chain_start.locator.vHave;
     std::vector<uint256> locator;
 
     if (m_download_state == State::PRESYNC) {

@@ -3,12 +3,12 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #include <chain.h>
-#include <consensus/validation.h>
-#include <node/blockstorage.h>
+#include <validation_state.h>
+#include <kernel/blockstorage.h>
 #include <sync.h>
 #include <test/util/setup_common.h>
 #include <util/string.h>
-#include <validation.h>
+#include <chainstate.h>
 
 #include <boost/test/unit_test.hpp>
 
@@ -25,7 +25,7 @@ static double GetDifficulty(const CBlockIndex& blockindex)
     return dDiff;
 }
 
-static std::optional<int> GetPruneHeight(const node::BlockManager& blockman, const CChain& chain) EXCLUSIVE_LOCKS_REQUIRED(::cs_main)
+static std::optional<int> GetPruneHeight(const kernel::BlockManager& blockman, const CChain& chain) EXCLUSIVE_LOCKS_REQUIRED(::cs_main)
 {
     AssertLockHeld(::cs_main);
     const CBlockIndex* first_block{chain[1]};
@@ -102,7 +102,7 @@ BOOST_AUTO_TEST_CASE(get_difficulty_for_very_high_target)
 
 //! Prune chain from height down to genesis block and check that
 //! GetPruneHeight returns the correct value
-static void CheckGetPruneHeight(const node::BlockManager& blockman, const CChain& chain, int height) EXCLUSIVE_LOCKS_REQUIRED(::cs_main)
+static void CheckGetPruneHeight(const kernel::BlockManager& blockman, const CChain& chain, int height) EXCLUSIVE_LOCKS_REQUIRED(::cs_main)
 {
     AssertLockHeld(::cs_main);
 

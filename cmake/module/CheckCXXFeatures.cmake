@@ -32,9 +32,7 @@ function(check_cxx_features)
     message(FATAL_ERROR
       "Compiler lacks Class Template Argument Deduction (CTAD) for aggregates.\n"
       "This C++ feature is required for src/util/overloaded.h.\n"
-      "You are probably using an old compiler version\n"
-      "The recommended compiler versions can be checked in\n"
-      "doc/dependencies.md#compiler.\n"
+      "You are probably using an old compiler version.\n"
     )
   endif()
 

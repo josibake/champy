@@ -24,6 +24,8 @@
 #include <functional>
 #include <unordered_map>
 
+class CTxUndo;
+
 /**
  * A UTXO entry.
  *
@@ -558,7 +560,7 @@ private:
  * This is achieved by fetching coins from the base view using PeekCoin() instead of GetCoin(),
  * so intermediate CCoinsViewCache layers are not filled.
  *
- * Used during ConnectBlock() as an ephemeral, resettable top-level view that is flushed only
+ * Used during block connection as an ephemeral, resettable top-level view that is flushed only
  * on success, so invalid blocks don't pollute the underlying cache.
  */
 class CoinsViewOverlay : public CCoinsViewCache
@@ -612,5 +614,24 @@ private:
     std::vector<std::function<void()>> m_err_callbacks;
 
 };
+
+enum DisconnectResult
+{
+    DISCONNECT_OK,      // All good.
+    DISCONNECT_UNCLEAN, // Rolled back, but UTXO set was inconsistent with block.
+    DISCONNECT_FAILED   // Something else went wrong.
+};
+
+/**
+ * Restore the UTXO in a Coin at a given COutPoint
+ * @param undo The Coin to be restored.
+ * @param view The coins view to which to apply the changes.
+ * @param out The out point that corresponds to the tx input.
+ * @return A DisconnectResult.
+ */
+DisconnectResult ApplyTxInUndo(Coin&& undo, CCoinsViewCache& view, const COutPoint& out);
+
+/** Apply the effects of this transaction on the UTXO set represented by view */
+void UpdateCoins(const CTransaction& tx, CCoinsViewCache& inputs, CTxUndo& txundo, int nHeight);
 
 #endif // BITCOIN_COINS_H

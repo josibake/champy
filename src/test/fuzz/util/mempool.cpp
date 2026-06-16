@@ -4,7 +4,7 @@
 
 #include <consensus/amount.h>
 #include <consensus/consensus.h>
-#include <kernel/mempool_entry.h>
+#include <node/mempool_entry.h>
 #include <primitives/transaction.h>
 #include <test/fuzz/FuzzedDataProvider.h>
 #include <test/fuzz/util.h>

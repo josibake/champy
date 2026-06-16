@@ -6,7 +6,7 @@
 #include <policy/fees/block_policy_estimator_args.h>
 #include <policy/policy.h>
 #include <test/util/txmempool.h>
-#include <txmempool.h>
+#include <node/txmempool.h>
 #include <uint256.h>
 #include <util/time.h>
 #include <validationinterface.h>

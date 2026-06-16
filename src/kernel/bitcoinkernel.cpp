@@ -6,10 +6,15 @@
 
 #include <kernel/bitcoinkernel.h>
 
+#include <validation/block_data_adapters.h>
+#include <validation/block_index_adapters.h>
+#include <validation/block_validation.h>
 #include <chain.h>
+#include <validation/chain_validation.h>
 #include <coins.h>
-#include <consensus/tx_check.h>
-#include <consensus/validation.h>
+#include <consensus/block_check.h>
+#include <validation/tx_check_adapters.h>
+#include <validation_state.h>
 #include <dbwrapper.h>
 #include <kernel/caches.h>
 #include <kernel/chainparams.h>
@@ -18,8 +23,9 @@
 #include <kernel/notifications_interface.h>
 #include <kernel/warning.h>
 #include <logging.h>
-#include <node/blockstorage.h>
-#include <node/chainstate.h>
+#include <kernel/blockimport.h>
+#include <kernel/blockstorage.h>
+#include <kernel/chainstate_load.h>
 #include <primitives/block.h>
 #include <primitives/transaction.h>
 #include <script/interpreter.h>
@@ -35,7 +41,7 @@
 #include <util/signalinterrupt.h>
 #include <util/task_runner.h>
 #include <util/translation.h>
-#include <validation.h>
+#include <chainstate.h>
 #include <validationinterface.h>
 
 #include <cstddef>
@@ -449,9 +455,9 @@ public:
 struct ChainstateManagerOptions {
     mutable Mutex m_mutex;
     ChainstateManager::Options m_chainman_options GUARDED_BY(m_mutex);
-    node::BlockManager::Options m_blockman_options GUARDED_BY(m_mutex);
+    kernel::BlockManager::Options m_blockman_options GUARDED_BY(m_mutex);
     std::shared_ptr<const Context> m_context;
-    node::ChainstateLoadOptions m_chainstate_load_options GUARDED_BY(m_mutex);
+    kernel::ChainstateLoadOptions m_chainstate_load_options GUARDED_BY(m_mutex);
 
     ChainstateManagerOptions(const std::shared_ptr<const Context>& context, const fs::path& data_dir, const fs::path& blocks_dir)
         : m_chainman_options{ChainstateManager::Options{
@@ -459,7 +465,7 @@ struct ChainstateManagerOptions {
               .datadir = data_dir,
               .notifications = *context->m_notifications,
               .signals = context->m_signals.get()}},
-          m_blockman_options{node::BlockManager::Options{
+          m_blockman_options{kernel::BlockManager::Options{
               .chainparams = *context->m_chainparams,
               .blocks_dir = blocks_dir,
               .notifications = *context->m_notifications,
@@ -467,7 +473,7 @@ struct ChainstateManagerOptions {
                   .path = data_dir / "blocks" / "index",
                   .cache_bytes = kernel::CacheSizes{DEFAULT_KERNEL_CACHE}.block_tree_db,
               }}},
-          m_context{context}, m_chainstate_load_options{node::ChainstateLoadOptions{}}
+          m_context{context}, m_chainstate_load_options{kernel::ChainstateLoadOptions{}}
     {
     }
 };
@@ -1039,13 +1045,13 @@ btck_ChainstateManager* btck_chainstate_manager_create(
         const auto chainstate_load_opts{WITH_LOCK(opts.m_mutex, return opts.m_chainstate_load_options)};
 
         kernel::CacheSizes cache_sizes{DEFAULT_KERNEL_CACHE};
-        auto [status, chainstate_err]{node::LoadChainstate(*chainman, cache_sizes, chainstate_load_opts)};
-        if (status != node::ChainstateLoadStatus::SUCCESS) {
+        auto [status, chainstate_err]{kernel::LoadChainstate(*chainman, cache_sizes, chainstate_load_opts)};
+        if (status != kernel::ChainstateLoadStatus::SUCCESS) {
             LogError("Failed to load chain state from your data directory: %s", chainstate_err.original);
             return nullptr;
         }
-        std::tie(status, chainstate_err) = node::VerifyLoadedChainstate(*chainman, chainstate_load_opts);
-        if (status != node::ChainstateLoadStatus::SUCCESS) {
+        std::tie(status, chainstate_err) = kernel::VerifyLoadedChainstate(*chainman, chainstate_load_opts);
+        if (status != kernel::ChainstateLoadStatus::SUCCESS) {
             LogError("Failed to verify loaded chain state from your datadir: %s", chainstate_err.original);
             return nullptr;
         }
@@ -1063,8 +1069,10 @@ btck_ChainstateManager* btck_chainstate_manager_create(
 
 const btck_BlockTreeEntry* btck_chainstate_manager_get_block_tree_entry_by_hash(const btck_ChainstateManager* chainman, const btck_BlockHash* block_hash)
 {
-    auto block_index = WITH_LOCK(btck_ChainstateManager::get(chainman).m_chainman->GetMutex(),
-                                 return btck_ChainstateManager::get(chainman).m_chainman->m_blockman.LookupBlockIndex(btck_BlockHash::get(block_hash)));
+    auto& chainman_ref{*btck_ChainstateManager::get(chainman).m_chainman};
+    auto block_index = WITH_LOCK(chainman_ref.GetMutex(),
+                                 CoreBlockIndexStore block_index_store{chainman_ref};
+                                 return block_index_store.LookupBlockIndex(btck_BlockHash::get(block_hash)));
     if (!block_index) {
         LogDebug(BCLog::KERNEL, "A block with the given hash is not indexed.");
         return nullptr;
@@ -1103,7 +1111,7 @@ int btck_chainstate_manager_import_blocks(btck_ChainstateManager* chainman, cons
             }
         }
         auto& chainman_ref{*btck_ChainstateManager::get(chainman).m_chainman};
-        node::ImportBlocks(chainman_ref, import_files);
+        kernel::ImportBlocks(chainman_ref, import_files);
         WITH_LOCK(::cs_main, chainman_ref.UpdateIBDStatus());
     } catch (const std::exception& e) {
         LogError("Failed to import blocks: %s", e.what());
@@ -1141,10 +1149,11 @@ int btck_block_check(const btck_Block* block, const btck_ConsensusParams* consen
     auto& state = btck_BlockValidationState::get(validation_state);
     state = BlockValidationState{};
 
-    const bool check_pow    = (flags & btck_BlockCheckFlags_POW) != 0;
-    const bool check_merkle = (flags & btck_BlockCheckFlags_MERKLE) != 0;
+    Consensus::BlockCheckOptions options;
+    options.check_pow = (flags & btck_BlockCheckFlags_POW) != 0;
+    options.check_merkle_root = (flags & btck_BlockCheckFlags_MERKLE) != 0;
 
-    const bool result = CheckBlock(*btck_Block::get(block), state, btck_ConsensusParams::get(consensus_params), /*fCheckPOW=*/check_pow, /*fCheckMerkleRoot=*/check_merkle);
+    const bool result = CheckBlock(*btck_Block::get(block), state, btck_ConsensusParams::get(consensus_params), options);
 
     return result ? 1 : 0;
 }
@@ -1189,8 +1198,9 @@ void btck_block_destroy(btck_Block* block)
 
 btck_Block* btck_block_read(const btck_ChainstateManager* chainman, const btck_BlockTreeEntry* entry)
 {
+    CoreBlockDataStore block_store{btck_ChainstateManager::get(chainman).m_chainman->m_blockman};
     auto block{std::make_shared<CBlock>()};
-    if (!btck_ChainstateManager::get(chainman).m_chainman->m_blockman.ReadBlock(*block, btck_BlockTreeEntry::get(entry))) {
+    if (!block_store.ReadBlock(*block, btck_BlockTreeEntry::get(entry))) {
         LogError("Failed to read block.");
         return nullptr;
     }
@@ -1244,12 +1254,13 @@ void btck_block_hash_destroy(btck_BlockHash* hash)
 
 btck_BlockSpentOutputs* btck_block_spent_outputs_read(const btck_ChainstateManager* chainman, const btck_BlockTreeEntry* entry)
 {
+    CoreBlockDataStore block_store{btck_ChainstateManager::get(chainman).m_chainman->m_blockman};
     auto block_undo{std::make_shared<CBlockUndo>()};
     if (btck_BlockTreeEntry::get(entry).nHeight < 1) {
         LogDebug(BCLog::KERNEL, "The genesis block does not have any spent outputs.");
         return btck_BlockSpentOutputs::create(block_undo);
     }
-    if (!btck_ChainstateManager::get(chainman).m_chainman->m_blockman.ReadBlockUndo(*block_undo, btck_BlockTreeEntry::get(entry))) {
+    if (!block_store.ReadBlockUndo(*block_undo, btck_BlockTreeEntry::get(entry))) {
         LogError("Failed to read block spent outputs data.");
         return nullptr;
     }
@@ -1330,12 +1341,14 @@ int btck_chainstate_manager_process_block(
     const btck_Block* block,
     int* _new_block)
 {
-    bool new_block;
-    auto result = btck_ChainstateManager::get(chainman).m_chainman->ProcessNewBlock(btck_Block::get(block), /*force_processing=*/true, /*min_pow_checked=*/true, /*new_block=*/&new_block);
+    const NewBlockProcessingResult result{ChainValidationService{*btck_ChainstateManager::get(chainman).m_chainman}.ProcessNewBlock(
+        btck_Block::get(block),
+        {.block_data_storage = BlockDataStorageMode::ForceStore, .header = {.min_pow_checked = true}},
+        CurrentBlockValidationTime())};
     if (_new_block) {
-        *_new_block = new_block ? 1 : 0;
+        *_new_block = result.new_block() ? 1 : 0;
     }
-    return result ? 0 : -1;
+    return result.processed() ? 0 : -1;
 }
 
 btck_BlockValidationState* btck_chainstate_manager_process_block_header(
@@ -1346,8 +1359,13 @@ btck_BlockValidationState* btck_chainstate_manager_process_block_header(
         auto& chainman = btck_ChainstateManager::get(chainstate_manager).m_chainman;
 
         auto state = btck_BlockValidationState::create();
-        bool result{chainman->ProcessNewBlockHeaders({&btck_BlockHeader::get(header), 1}, /*min_pow_checked=*/true, btck_BlockValidationState::get(state))};
-        assert(result == btck_BlockValidationState::get(state).IsValid());
+        ChainValidationService chain_validation{*chainman};
+        const NewBlockHeadersResult result{chain_validation.ProcessNewBlockHeaders(
+            {&btck_BlockHeader::get(header), 1},
+            {.min_pow_checked = true},
+            CurrentBlockValidationTime(),
+            btck_BlockValidationState::get(state))};
+        assert(result.accepted == btck_BlockValidationState::get(state).IsValid());
         return state;
     } catch (const std::exception& e) {
         LogError("Failed to process block header: %s", e.what());
@@ -1462,21 +1480,13 @@ btck_TxValidationState* btck_tx_validation_state_create()
 btck_TxValidationResult btck_tx_validation_state_get_tx_validation_result(const btck_TxValidationState* state_)
 {
     switch (btck_TxValidationState::get(state_).GetResult()) {
-    case TxValidationResult::TX_RESULT_UNSET:        return btck_TxValidationResult_UNSET;
-    case TxValidationResult::TX_CONSENSUS:           return btck_TxValidationResult_CONSENSUS;
-    case TxValidationResult::TX_INPUTS_NOT_STANDARD: return btck_TxValidationResult_INPUTS_NOT_STANDARD;
-    case TxValidationResult::TX_NOT_STANDARD:        return btck_TxValidationResult_NOT_STANDARD;
-    case TxValidationResult::TX_MISSING_INPUTS:      return btck_TxValidationResult_MISSING_INPUTS;
-    case TxValidationResult::TX_PREMATURE_SPEND:     return btck_TxValidationResult_PREMATURE_SPEND;
-    case TxValidationResult::TX_WITNESS_MUTATED:     return btck_TxValidationResult_WITNESS_MUTATED;
-    case TxValidationResult::TX_WITNESS_STRIPPED:    return btck_TxValidationResult_WITNESS_STRIPPED;
-    case TxValidationResult::TX_CONFLICT:            return btck_TxValidationResult_CONFLICT;
-    case TxValidationResult::TX_MEMPOOL_POLICY:      return btck_TxValidationResult_MEMPOOL_POLICY;
-    case TxValidationResult::TX_NO_MEMPOOL:          return btck_TxValidationResult_NO_MEMPOOL;
-    case TxValidationResult::TX_RECONSIDERABLE:      return btck_TxValidationResult_RECONSIDERABLE;
-    case TxValidationResult::TX_UNKNOWN:             return btck_TxValidationResult_UNKNOWN;
-    } // no default case, so the compiler can warn about missing cases
-    assert(false);
+    case TxValidationResult::TX_RESULT_UNSET:
+        return btck_TxValidationResult_UNSET;
+    case TxValidationResult::TX_CONSENSUS:
+        return btck_TxValidationResult_CONSENSUS;
+    default:
+        return btck_TxValidationResult_UNKNOWN;
+    }
 }
 
 void btck_tx_validation_state_destroy(btck_TxValidationState* state)

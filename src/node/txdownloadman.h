@@ -6,6 +6,7 @@
 #define BITCOIN_NODE_TXDOWNLOADMAN_H
 
 #include <net.h>
+#include <node/mempool_validation_result.h>
 #include <node/txorphanage.h>
 #include <policy/packages.h>
 
@@ -147,7 +148,7 @@ public:
     void MempoolAcceptedTx(const CTransactionRef& tx);
 
     /** Respond to transaction rejected from mempool */
-    RejectedTxTodo MempoolRejectedTx(const CTransactionRef& ptx, const TxValidationState& state, NodeId nodeid, bool first_time_failure);
+    RejectedTxTodo MempoolRejectedTx(const CTransactionRef& ptx, const MempoolValidationState& state, NodeId nodeid, bool first_time_failure);
 
     /** Respond to package rejected from mempool */
     void MempoolRejectedPackage(const Package& package);

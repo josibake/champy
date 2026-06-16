@@ -5,14 +5,14 @@
 #include <bench/bench.h>
 #include <bench/data/block413567.raw.h>
 #include <flatfile.h>
-#include <node/blockstorage.h>
+#include <kernel/blockstorage.h>
 #include <primitives/block.h>
 #include <primitives/transaction.h>
 #include <serialize.h>
 #include <span.h>
 #include <streams.h>
 #include <test/util/setup_common.h>
-#include <validation.h>
+#include <chainstate.h>
 
 #include <cassert>
 #include <cstdint>

@@ -220,8 +220,30 @@ def set_host(args) -> int:
             return 1
         args.host = 'win64'
         return 0
-    host = os.environ.get('HOST', subprocess.check_output(
-        './depends/config.guess').decode())
+    host = os.environ.get('HOST')
+    if not host:
+        machine = platform.machine().lower()
+        system = platform.system().lower()
+        if system == 'darwin' and machine in ['arm64', 'aarch64']:
+            args.host = 'arm64-apple-darwin'
+            return 0
+        if system == 'darwin' and machine in ['x86_64', 'amd64']:
+            args.host = 'x86_64-apple-darwin'
+            return 0
+        if system == 'linux' and machine in ['aarch64', 'arm64']:
+            args.host = 'aarch64-linux-gnu'
+            return 0
+        if system == 'linux' and machine in ['powerpc64le', 'ppc64le']:
+            args.host = 'powerpc64le-linux-gnu'
+            return 0
+        if system == 'linux' and machine == 'riscv64':
+            args.host = 'riscv64-linux-gnu'
+            return 0
+        if system == 'linux' and machine in ['x86_64', 'amd64']:
+            args.host = 'x86_64-linux-gnu'
+            return 0
+        print('Not sure which binary to download for {} {}'.format(system, machine), file=sys.stderr)
+        return 1
     platforms = {
         'aarch64-*-linux*': 'aarch64-linux-gnu',
         'powerpc64le-*-linux-*': 'powerpc64le-linux-gnu',
@@ -258,8 +280,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
         epilog='''
-        HOST can be set to any of the `host-platform-triplet`s from
-        depends/README.md for which a release exists.
+        HOST can be set to a supported host-platform triplet for which a release exists.
         ''',
     )
     parser.add_argument('-r', '--remove-dir', action='store_true',

@@ -12,7 +12,7 @@
 #include <sync.h>
 #include <test/util/setup_common.h>
 #include <test/util/txmempool.h>
-#include <txmempool.h>
+#include <node/txmempool.h>
 #include <util/check.h>
 
 #include <memory>
@@ -38,7 +38,6 @@ private:
         block.nTime = 1231006505;
         block.nBits = 0x1d00ffff;
         block.nNonce = 2083236893;
-        block.fChecked = false;
         CMutableTransaction tx;
         tx.vin.resize(1);
         tx.vout.resize(1);

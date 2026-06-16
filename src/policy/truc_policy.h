@@ -9,7 +9,7 @@
 #include <policy/packages.h>
 #include <policy/policy.h>
 #include <primitives/transaction.h>
-#include <txmempool.h>
+#include <node/txmempool.h>
 #include <util/result.h>
 
 #include <set>

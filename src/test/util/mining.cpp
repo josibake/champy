@@ -4,21 +4,25 @@
 
 #include <test/util/mining.h>
 
+#include <validation/block_validation.h>
+#include <validation/chain_validation.h>
 #include <chainparams.h>
 #include <consensus/merkle.h>
-#include <consensus/validation.h>
+#include <validation_state.h>
 #include <key_io.h>
 #include <node/context.h>
+#include <node/mempool_chain_sync.h>
 #include <pow.h>
 #include <primitives/transaction.h>
 #include <test/util/script.h>
 #include <util/check.h>
-#include <validation.h>
+#include <chainstate.h>
 #include <validationinterface.h>
 #include <versionbits.h>
 
 #include <algorithm>
 #include <memory>
+#include <optional>
 
 using node::BlockAssembler;
 using node::NodeContext;
@@ -106,11 +110,16 @@ COutPoint ProcessBlock(const NodeContext& node, const std::shared_ptr<CBlock>& b
 {
     auto& chainman{*Assert(node.chainman)};
     const auto old_height = WITH_LOCK(chainman.GetMutex(), return chainman.ActiveHeight());
-    bool new_block;
     BlockValidationStateCatcher bvsc{block->GetHash()};
     node.validation_signals->RegisterValidationInterface(&bvsc);
-    const bool processed{chainman.ProcessNewBlock(block, true, true, &new_block)};
-    const bool duplicate{!new_block && processed};
+    std::optional<node::MempoolChainSync> chain_events;
+    if (node.mempool) chain_events.emplace(chainman.ActiveChainstate(), *node.mempool);
+    const NewBlockProcessingResult result{ChainValidationService{chainman}.ProcessNewBlock(
+        chain_events ? &*chain_events : nullptr,
+        block,
+        {.block_data_storage = BlockDataStorageMode::ForceStore, .header = {.min_pow_checked = true}},
+        CurrentBlockValidationTime())};
+    const bool duplicate{!result.new_block() && result.processed()};
     assert(!duplicate);
     node.validation_signals->UnregisterValidationInterface(&bvsc);
     node.validation_signals->SyncWithValidationInterfaceQueue();

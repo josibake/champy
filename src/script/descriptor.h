@@ -91,9 +91,6 @@ public:
  * but in cases where private keys need to be conveyed along with a descriptor,
  * they can be included inside by changing public keys to private keys (WIF
  * format), and changing xpubs by xprvs.
- *
- * Reference documentation about the descriptor language can be found in
- * doc/descriptors.md.
  */
 struct Descriptor {
     virtual ~Descriptor() = default;

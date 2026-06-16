@@ -8,25 +8,47 @@
 #include <vector>
 
 #include <primitives/block.h>
+#include <primitives/transaction.h>
 #include <uint256.h>
 
-uint256 ComputeMerkleRoot(std::vector<uint256> hashes, bool* mutated = nullptr);
+#include <span>
+
+struct MerkleRootResult {
+    uint256 root;
+    bool mutated{false};
+};
+
+[[nodiscard]] uint256 ComputeMerkleRoot(std::vector<uint256> hashes);
+[[nodiscard]] MerkleRootResult ComputeMerkleRootWithMutation(std::vector<uint256> hashes);
 
 /*
  * Compute the Merkle root of the transactions in a block.
- * *mutated is set to true if a duplicated subtree was found.
  */
-uint256 BlockMerkleRoot(const CBlock& block, bool* mutated = nullptr);
+[[nodiscard]] uint256 BlockMerkleRoot(std::span<const CTransactionRef> transactions);
+[[nodiscard]] uint256 BlockMerkleRoot(const CBlock& block);
+[[nodiscard]] MerkleRootResult BlockMerkleRootWithMutation(std::span<const CTransactionRef> transactions);
+[[nodiscard]] MerkleRootResult BlockMerkleRootWithMutation(const CBlock& block);
 
 /*
  * Compute the Merkle root of the witness transactions in a block.
  */
-uint256 BlockWitnessMerkleRoot(const CBlock& block);
+[[nodiscard]] uint256 BlockWitnessMerkleRoot(std::span<const CTransactionRef> transactions);
+[[nodiscard]] uint256 BlockWitnessMerkleRoot(const CBlock& block);
 
 /**
- * Compute merkle path to the specified transaction
+ * Compute merkle path to the specified transaction.
  *
- * @param[in] block the block
+ * @param[in] transactions block transactions
+ * @param[in] position transaction for which to calculate the merkle path (0 is the coinbase)
+ *
+ * @return merkle path ordered from the deepest
+ */
+std::vector<uint256> TransactionMerklePath(std::span<const CTransactionRef> transactions, uint32_t position);
+
+/**
+ * Compute merkle path to the specified transaction.
+ *
+ * @param[in] block block containing the transaction
  * @param[in] position transaction for which to calculate the merkle path (0 is the coinbase)
  *
  * @return merkle path ordered from the deepest

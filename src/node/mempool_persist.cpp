@@ -4,6 +4,7 @@
 
 #include <node/mempool_persist.h>
 
+#include <node/mempool_validation.h>
 #include <clientversion.h>
 #include <consensus/amount.h>
 #include <logging.h>
@@ -12,7 +13,7 @@
 #include <serialize.h>
 #include <streams.h>
 #include <sync.h>
-#include <txmempool.h>
+#include <node/txmempool.h>
 #include <uint256.h>
 #include <util/fs.h>
 #include <util/fs_helpers.h>
@@ -20,7 +21,7 @@
 #include <util/signalinterrupt.h>
 #include <util/syserror.h>
 #include <util/time.h>
-#include <validation.h>
+#include <chainstate.h>
 
 #include <cstdint>
 #include <cstdio>
@@ -101,7 +102,7 @@ bool LoadMempool(CTxMemPool& pool, const fs::path& load_path, Chainstate& active
             }
             {
                 LOCK(cs_main);
-                const auto& accepted = AcceptToMemoryPool(active_chainstate, tx, nTime, /*bypass_limits=*/false, /*test_accept=*/false);
+                const auto& accepted = AcceptToMemoryPool(active_chainstate, pool, tx, nTime, /*bypass_limits=*/false, /*test_accept=*/false);
                 if (accepted.m_result_type == MempoolAcceptResult::ResultType::VALID) {
                     ++count;
                 } else {

@@ -5,14 +5,14 @@
 #ifndef BITCOIN_TEST_UTIL_VALIDATION_H
 #define BITCOIN_TEST_UTIL_VALIDATION_H
 
-#include <validation.h>
+#include <chainstate.h>
 
-namespace node {
+namespace kernel {
 class BlockManager;
-}
+} // namespace kernel
 class CValidationInterface;
 
-struct TestBlockManager : public node::BlockManager {
+struct TestBlockManager : public kernel::BlockManager {
     /** Test-only method to clear internal state for fuzzing */
     void CleanupForFuzzing();
 };

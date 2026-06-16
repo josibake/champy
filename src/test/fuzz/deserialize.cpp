@@ -16,7 +16,7 @@
 #include <net.h>
 #include <netbase.h>
 #include <netgroup.h>
-#include <node/blockstorage.h>
+#include <kernel/blockstorage.h>
 #include <primitives/block.h>
 #include <protocol.h>
 #include <pubkey.h>
@@ -203,8 +203,7 @@ FUZZ_TARGET_DESERIALIZE(blocklocator_deserialize, {
 FUZZ_TARGET_DESERIALIZE(blockmerkleroot, {
     CBlock block;
     DeserializeFromFuzzingInput(buffer, TX_WITH_WITNESS(block));
-    bool mutated;
-    BlockMerkleRoot(block, &mutated);
+    (void)BlockMerkleRootWithMutation(block);
 })
 FUZZ_TARGET_DESERIALIZE(blockheader_deserialize, {
     CBlockHeader bh;

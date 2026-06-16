@@ -7,14 +7,29 @@
 
 /**
  * Context-independent transaction checking code that can be called outside the
- * bitcoin server and doesn't depend on chain or mempool state. Transaction
- * verification code that does call server functions or depend on server state
- * belongs in tx_verify.h/cpp instead.
+ * bitcoin server and doesn't depend on chain state or local transaction-pool
+ * state. Transaction verification code that does call server functions or
+ * depend on server state belongs in validation/tx_verify.h/cpp instead.
  */
 
-class CTransaction;
-class TxValidationState;
+#include <consensus/expected.h>
 
-bool CheckTransaction(const CTransaction& tx, TxValidationState& state);
+#include <string>
+
+class CTransaction;
+
+namespace Consensus {
+
+struct TransactionCheckError {
+    std::string reject_reason;
+    std::string debug_message;
+};
+
+template <typename T>
+using TransactionCheckResult = Consensus::Expected<T, TransactionCheckError>;
+
+[[nodiscard]] TransactionCheckResult<void> CheckTransaction(const CTransaction& tx);
+
+} // namespace Consensus
 
 #endif // BITCOIN_CONSENSUS_TX_CHECK_H

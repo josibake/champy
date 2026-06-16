@@ -4,11 +4,11 @@
 
 #include <bench/bench.h>
 #include <bench/data/block413567.raw.h>
-#include <consensus/validation.h>
+#include <validation_state.h>
 #include <primitives/block.h>
 #include <primitives/transaction.h>
 #include <streams.h>
-#include <validation.h>
+#include <chainstate.h>
 
 #include <cassert>
 #include <cstddef>

@@ -17,7 +17,7 @@
 #include <node/types.h>
 #include <primitives/transaction.h>
 #include <random.h>
-#include <txmempool.h>
+#include <node/txmempool.h>
 #include <util/check.h>
 #include <util/time.h>
 #include <util/translation.h>
