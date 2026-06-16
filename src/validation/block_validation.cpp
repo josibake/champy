@@ -486,7 +486,7 @@ BlockAcceptanceResult AcceptBlock(CoreBlockDataAdmissionRuntime& runtime, const 
     const ChainWorkBlockSnapshot accepted_block{MakeChainWorkBlockSnapshot(block_index_entry)};
 
     // Core adapter note: node code still decides when to force block-data
-    // storage for downloaded blocks; see doc/legacy-compatibility.md.
+    // storage for downloaded blocks.
     // Keep ForceStore until node can ask validation whether a block is in a
     // chain leading to a candidate tip without breaking getblockfrompeer.
 
@@ -531,7 +531,7 @@ BlockAcceptanceResult AcceptBlock(CoreBlockDataAdmissionRuntime& runtime, const 
     }
 
     // Core adapter note: Core's runtime still handles mixed block and
-    // chainstate flush decisions; see doc/legacy-compatibility.md.
+    // chainstate flush decisions.
     // For now, since FlushStateMode::NONE is used, all that can happen is that
     // the block files may be pruned, so we can just call this on one
     // chainstate (particularly if we haven't implemented pruning with

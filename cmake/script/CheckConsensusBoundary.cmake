@@ -102,7 +102,6 @@ set(required_consensus_target_properties
   "BITCOIN_CONSENSUS_PUBLIC_TRANSITIVE_HEADERS"
   "BITCOIN_CONSENSUS_SUPPORT_HEADERS"
   "BITCOIN_CONSENSUS_INTERNAL_PROTOCOL_HEADERS"
-  "BITCOIN_CONSENSUS_INSTALL_HEADERS"
 )
 foreach(property IN LISTS required_consensus_target_properties)
   string(FIND "${consensus_target_properties_block}" "${property}" property_index)
@@ -116,26 +115,16 @@ foreach(needle IN ITEMS
     "install(TARGETS bitcoin_consensus"
     "configure_file(\${PROJECT_SOURCE_DIR}/libbitcoinconsensus.pc.in \${PROJECT_BINARY_DIR}/libbitcoinconsensus.pc @ONLY)"
     "install(FILES \${PROJECT_BINARY_DIR}/libbitcoinconsensus.pc"
-    "foreach(header IN LISTS BITCOIN_CONSENSUS_INSTALL_HEADERS)"
-    "install(FILES \"\${CMAKE_CURRENT_SOURCE_DIR}/\${header}\"")
+    "foreach(header IN LISTS BITCOIN_CONSENSUS_INSTALL_HEADERS)")
   string(FIND "${src_cmake_contents}" "${needle}" install_rule_index)
-  if(install_rule_index EQUAL -1)
-    message(FATAL_ERROR "bitcoin_consensus install rule is missing expected text: ${needle}")
+  if(NOT install_rule_index EQUAL -1)
+    message(FATAL_ERROR "bitcoin_consensus must remain internal-only; forbidden install/pkg-config rule found: ${needle}")
   endif()
 endforeach()
 
-foreach(needle IN ITEMS
-    "Name: @CLIENT_NAME@ consensus library"
-    "Description: Experimental library for the @CLIENT_NAME@ consensus engine."
-    "Version: @CLIENT_VERSION_STRING@"
-    "Libs: -L\${libdir} -lbitcoin_consensus"
-    "Cflags: -I\${includedir}")
-  file(READ "${SOURCE_DIR}/libbitcoinconsensus.pc.in" consensus_pkgconfig_contents)
-  string(FIND "${consensus_pkgconfig_contents}" "${needle}" pkgconfig_index)
-  if(pkgconfig_index EQUAL -1)
-    message(FATAL_ERROR "libbitcoinconsensus.pc.in is missing expected text: ${needle}")
-  endif()
-endforeach()
+if(EXISTS "${SOURCE_DIR}/libbitcoinconsensus.pc.in")
+  message(FATAL_ERROR "libbitcoinconsensus.pc.in must not exist for the internal-only consensus target")
+endif()
 
 extract_cmake_call(consensus_target_links_block "target_link_libraries" "bitcoin_consensus")
 string(REGEX MATCHALL "[A-Za-z0-9_:.-]+" consensus_target_link_tokens "${consensus_target_links_block}")
@@ -155,34 +144,34 @@ foreach(token IN LISTS consensus_target_link_tokens)
 endforeach()
 
 extract_cmake_call_from_file(test_bitcoin_sources_block "${SOURCE_DIR}/src/test/CMakeLists.txt" "add_executable" "test_bitcoin")
-if(test_bitcoin_sources_block MATCHES "consensus_api_consumer_tests\\.cpp")
-  message(FATAL_ERROR "consensus_api_consumer_tests.cpp must build only in test_consensus_api_consumer")
+if(test_bitcoin_sources_block MATCHES "consensus_internal_consumer_tests\\.cpp")
+  message(FATAL_ERROR "consensus_internal_consumer_tests.cpp must build only in test_consensus_internal_consumer")
 endif()
 
-extract_cmake_call_from_file(consensus_api_consumer_target_sources_block "${SOURCE_DIR}/src/test/CMakeLists.txt" "add_executable" "test_consensus_api_consumer")
-if(NOT consensus_api_consumer_target_sources_block MATCHES "consensus_api_consumer_tests\\.cpp")
-  message(FATAL_ERROR "test_consensus_api_consumer must build consensus_api_consumer_tests.cpp")
+extract_cmake_call_from_file(consensus_internal_consumer_target_sources_block "${SOURCE_DIR}/src/test/CMakeLists.txt" "add_executable" "test_consensus_internal_consumer")
+if(NOT consensus_internal_consumer_target_sources_block MATCHES "consensus_internal_consumer_tests\\.cpp")
+  message(FATAL_ERROR "test_consensus_internal_consumer must build consensus_internal_consumer_tests.cpp")
 endif()
 
-set(allowed_consensus_api_consumer_target_links
+set(allowed_consensus_internal_consumer_target_links
   "bitcoin_consensus"
   "Boost::headers"
 )
 
-extract_cmake_call_from_file(consensus_api_consumer_target_links_block "${SOURCE_DIR}/src/test/CMakeLists.txt" "target_link_libraries" "test_consensus_api_consumer")
-string(REGEX MATCHALL "[A-Za-z0-9_:.-]+" consensus_api_consumer_target_link_tokens "${consensus_api_consumer_target_links_block}")
-foreach(token IN LISTS consensus_api_consumer_target_link_tokens)
+extract_cmake_call_from_file(consensus_internal_consumer_target_links_block "${SOURCE_DIR}/src/test/CMakeLists.txt" "target_link_libraries" "test_consensus_internal_consumer")
+string(REGEX MATCHALL "[A-Za-z0-9_:.-]+" consensus_internal_consumer_target_link_tokens "${consensus_internal_consumer_target_links_block}")
+foreach(token IN LISTS consensus_internal_consumer_target_link_tokens)
   if(token STREQUAL "target_link_libraries"
-      OR token STREQUAL "test_consensus_api_consumer"
+      OR token STREQUAL "test_consensus_internal_consumer"
       OR token STREQUAL "PRIVATE"
       OR token STREQUAL "PUBLIC"
       OR token STREQUAL "INTERFACE")
     continue()
   endif()
 
-  list(FIND allowed_consensus_api_consumer_target_links "${token}" allowed_link_index)
+  list(FIND allowed_consensus_internal_consumer_target_links "${token}" allowed_link_index)
   if(allowed_link_index EQUAL -1)
-    message(FATAL_ERROR "test_consensus_api_consumer links non-consensus dependency ${token}")
+    message(FATAL_ERROR "test_consensus_internal_consumer links non-consensus dependency ${token}")
   endif()
 endforeach()
 
@@ -270,6 +259,7 @@ set(allowed_source_std_headers
   "algorithm"
   "cstdio"
   "cstring"
+  "ios"
   "set"
 )
 
@@ -304,25 +294,6 @@ function(collect_local_header_closure out_var)
 
   set(${out_var} "${visited_headers}" PARENT_SCOPE)
 endfunction()
-
-collect_local_header_closure(actual_install_headers ${BITCOIN_CONSENSUS_PUBLIC_API_HEADERS})
-list(SORT actual_install_headers)
-set(expected_install_headers ${BITCOIN_CONSENSUS_INSTALL_HEADERS})
-list(SORT expected_install_headers)
-if(NOT "${actual_install_headers}" STREQUAL "${expected_install_headers}")
-  message(FATAL_ERROR "BITCOIN_CONSENSUS_INSTALL_HEADERS must exactly match the public API header closure")
-endif()
-
-foreach(header IN LISTS BITCOIN_CONSENSUS_INSTALL_HEADERS)
-  list(FIND BITCOIN_CONSENSUS_SUPPORT_HEADERS "${header}" support_install_index)
-  if(NOT support_install_index EQUAL -1)
-    message(FATAL_ERROR "Install header manifest exposes support-only header ${header}")
-  endif()
-  list(FIND BITCOIN_CONSENSUS_INTERNAL_PROTOCOL_HEADERS "${header}" internal_install_index)
-  if(NOT internal_install_index EQUAL -1)
-    message(FATAL_ERROR "Install header manifest exposes internal protocol header ${header}")
-  endif()
-endforeach()
 
 set(consensus_known_headers
   ${consensus_public_api_headers}
@@ -397,14 +368,14 @@ if(NOT "${actual_public_protocol_headers}" STREQUAL "${expected_public_protocol_
   message(FATAL_ERROR "Public consensus protocol headers do not match the API manifest")
 endif()
 
-set(consensus_api_consumer_test "${SOURCE_DIR}/src/test/consensus_api_consumer_tests.cpp")
-if(EXISTS "${consensus_api_consumer_test}")
-  file(READ "${consensus_api_consumer_test}" consensus_api_consumer_contents)
-  string(REGEX MATCHALL "#[ \t]*include[ \t]*<consensus/[^>]+>" consensus_api_consumer_include_lines "${consensus_api_consumer_contents}")
-  foreach(include_line IN LISTS consensus_api_consumer_include_lines)
+set(consensus_internal_consumer_test "${SOURCE_DIR}/src/test/consensus_internal_consumer_tests.cpp")
+if(EXISTS "${consensus_internal_consumer_test}")
+  file(READ "${consensus_internal_consumer_test}" consensus_internal_consumer_contents)
+  string(REGEX MATCHALL "#[ \t]*include[ \t]*<consensus/[^>]+>" consensus_internal_consumer_include_lines "${consensus_internal_consumer_contents}")
+  foreach(include_line IN LISTS consensus_internal_consumer_include_lines)
     string(REGEX REPLACE ".*<([^>]+)>.*" "\\1" include_header "${include_line}")
     if(NOT include_header STREQUAL "consensus/api.h")
-      message(FATAL_ERROR "consensus_api_consumer_tests.cpp may include only <consensus/api.h> from the consensus directory")
+      message(FATAL_ERROR "consensus_internal_consumer_tests.cpp may include only <consensus/api.h> from the consensus directory")
     endif()
   endforeach()
 endif()

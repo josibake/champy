@@ -39,13 +39,13 @@ uint64_t Log2Factorial(uint32_t x) {
     //       117504694/88632748 is less than log2(2*pi)/2
     // A correction term is only needed for x < 3.
     //
-    // See doc/log2_factorial.sage for how these constants were obtained.
+    // See the upstream minisketch generator for how these constants were obtained.
     return (418079 * (2 * uint64_t{x} + 1) * l2_106 - 127870026 * uint64_t{x} + 117504694 + 88632748 * (x < 3)) / 88632748;
 }
 
 /** Compute floor(log2(2^(bits * capacity) / sum((2^bits - 1) choose k, k=0..capacity))), for bits>1
  *
- * See doc/gen_basefpbits.sage for how the tables were obtained. */
+ * See the upstream minisketch generator for how the tables were obtained. */
 uint64_t BaseFPBits(uint32_t bits, uint32_t capacity) {
     // Correction table for low bits/capacities
     static constexpr uint8_t ADD5[] = {1, 1, 1, 1, 2, 2, 2, 3, 4, 4, 5, 5, 6, 7, 8, 8, 9, 10, 10, 10, 11, 11, 11, 12, 12, 12, 12};

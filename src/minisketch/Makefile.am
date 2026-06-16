@@ -79,14 +79,4 @@ test_verify_LDFLAGS = $(AM_LDFLAGS) $(LIBTOOL_APP_LDFLAGS)
 
 EXTRA_DIST=
 EXTRA_DIST += LICENSE
-EXTRA_DIST += README.md
-EXTRA_DIST += doc/example.c
-EXTRA_DIST += doc/gen_params.sage
-EXTRA_DIST += doc/math.md
-EXTRA_DIST += doc/moduli.md
-EXTRA_DIST += doc/plot_bits.png
-EXTRA_DIST += doc/plot_capacity.png
-EXTRA_DIST += doc/plot_diff.png
-EXTRA_DIST += doc/plot_size.png
-EXTRA_DIST += doc/protocoltips.md
 EXTRA_DIST += tests/pyminisketch.py
